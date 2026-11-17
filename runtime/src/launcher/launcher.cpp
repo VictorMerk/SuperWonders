@@ -609,7 +609,7 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
                   int(secs) % 60);
     const ImVec2 ls = bf->CalcTextSizeA(sfs, FLT_MAX, 0, line);
     dl->AddText(bf, sfs, {(p0.x + p1.x - ls.x) * 0.5f, bb.y + 26 * k}, th.text_dim, line);
-    const char* note = "Preparation is saved for later launches. The time depends on your PC and the files that changed.";
+    const char* note = "Overall setup progress. A single stage can take several minutes; elapsed time continues above.";
     const ImVec2 ns = bf->CalcTextSizeA(sfs * 0.9f, FLT_MAX, 0, note);
     dl->AddText(bf, sfs * 0.9f, {(p0.x + p1.x - ns.x) * 0.5f, bb.y + 26 * k + ls.y + 16 * k},
                 ui::mix(th.text_off, th.text_dim, 0.4f), note);

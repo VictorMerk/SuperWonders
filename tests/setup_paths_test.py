@@ -86,4 +86,39 @@ class SetupPaths(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "one resource size table expected"):
             wonder_menu_mod.resource_size_table(str(self.romfs))
 
+    def test_recompiler_reports_real_phases_and_function_counts(self):
+        events = []
+        worker = SimpleNamespace(stdout=iter([]), wait=lambda: 0)
+        def child(*args, **kwargs):
+            worker.stdout = iter(["phase read\n", "phase analyze\n", "phase emit\n", "  emitted 5/10 functions\n"])
+            return worker
+        kit = SimpleNamespace(root=str(self.root))
+        with mock.patch.object(gamebuild.subprocess, "Popen", side_effect=child), \
+             mock.patch.object(gamebuild, "progress", side_effect=lambda f, text: events.append((f, text))):
+            gamebuild.recompile(kit, str(self.exefs), str(self.root / "gen"), .1, .6)
+        labels = [text for _, text in events]
+        self.assertIn("Reading main executable", labels)
+        self.assertIn("Analyzing main functions", labels)
+        self.assertIn("Generating main code", labels)
+        self.assertIn("Generating main: 5/10 functions", labels)
+        self.assertIn("Generating sdk: 5/10 functions", labels)
+        self.assertEqual([f for f, _ in events], sorted(f for f, _ in events))
+        self.assertAlmostEqual(events[-1][0], .7)
+
+    def test_overall_progress_does_not_finish_before_layout_preparation(self):
+        events = []
+        setup = setup_game.Setup(SimpleNamespace(exefs=str(self.exefs), romfs=str(self.romfs),
+            data_root=str(self.root / "data"), romfs_mode="copy", jobs=1))
+        def run(args, at, share, what):
+            setup_game.say(at, what)
+            setup_game.say(at + share, what)
+        with mock.patch.object(setup, "check_inputs"), mock.patch.object(setup, "needed", return_value=[]), \
+             mock.patch.object(setup, "run", side_effect=run), \
+             mock.patch.object(setup_game, "say", side_effect=lambda f, text: events.append((f, text))):
+            self.assertEqual(setup.setup(), 0)
+        self.assertEqual([f for f, _ in events], sorted(f for f, _ in events))
+        layout = next(i for i, (_, text) in enumerate(events) if text == "Preparing ultrawide layouts")
+        self.assertTrue(all(f < 1 for f, _ in events[:layout]))
+        self.assertEqual(events[-1][0], 1)
+
 if __name__ == "__main__": unittest.main()

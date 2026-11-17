@@ -299,13 +299,14 @@ class Setup:
         say(0.0, "Checking your game files")
         todo = dict(self.needed())
         t0, at = time.time(), 0.0
-        for step, share in STEPS:
+        for step, weight in STEPS:
+            share = weight * 0.99  # reserve the last percent for upstream's layout preparation
             if step in todo:
                 print(f"{step}: {todo[step]}", flush=True)
                 ok = getattr(self, "step_" + step)(at, share)
                 if step != "code" and ok is not False:
                     self.done(step, self.ids()[step])
-            at += share
+            at = min(0.99, at + share)
             say(at, "Set up" if at >= 1 else "Setting up")
         # Generate both profiles once from the installed RomFS and menu mod. Existing
         # installations are also repaired by the lightweight startup check.

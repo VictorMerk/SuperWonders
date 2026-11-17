@@ -11,8 +11,10 @@ The diff has 45 source/documentation/licence files, with no added host binaries,
 CI workflows or submodules. Review covered the new layout-generation scripts and their local file publication,
 game/camera hooks, renderer/pipeline changes, startup configuration and setup integration. No added download,
 remote-code execution, credential collection, startup persistence or antivirus-disabling behavior was found.
-This is a scoped source review, not a malware-free guarantee or a full vulnerability audit. No new full-package
-antivirus scan was started; the prior r8 scan results do not certify a future changed binary.
+This is a scoped source review, not a malware-free guarantee or a full vulnerability audit. After the user's
+recompilation finished, Microsoft Defender custom-scanned copies of 55 changed source files and the newly built
+runtime EXE (10,987,911 bytes total) with remediation disabled: no threats, exit 0. The old full kit was not rescanned.
+The prior r8 scan results are separate evidence and do not certify this changed binary.
 
 Notable incoming behavior: experimental 21:9/32:9 camera/render-target/HUD support, generated wide layouts,
 first-house high-FPS dialogue protection, launcher recipe-cache preservation, reduced periodic draw logging,
@@ -41,8 +43,16 @@ again by blindly inheriting the guest target flag.
 
 ## Validation status
 
-Conflict markers and whitespace checks are clear. A restart-aspect regression has been added to the settings tests.
-Build, CPU suite and native checks are deferred until the user's active r8 recompilation finishes. The installed
-r8 launcher, its build workers, the immutable ZIPs and the brother's current test installation are untouched.
+Conflict markers and whitespace checks are clear. After the user's first build completed, the merged Windows
+runtime built and all 30 non-GPU CTest targets passed (12.14 seconds). Coverage includes the existing LAN, input,
+cache, shader and file-I/O units; aspect-resource restart tracking; seven literal-path/progress regressions; and
+five synthetic camera/frame-step patch cases. The latter independently decode the ADRP target page and check
+expected instructions, out-of-text rejection, unsupported instruction rejection and untouched SDK modules.
+
+The [setup progress follow-up](SETUP-PROGRESS.md) now identifies reading, analysis and generation, shows actual
+function counts when known, and reserves 99–100% for the final layout preparation rather than jumping backward.
+
+GPU probes and native gameplay/UW/LAN integration checks on this merged build remain deferred while the user's
+game is active. The installed r8 runtime, immutable ZIPs and the brother's current test installation are untouched.
 No merged runtime has been deployed or handed to either LAN PC. A future complete kit must regenerate its kit ID
 and game code because upstream changed the recompiler/camera patch; old r8 results do not validate that new kit.

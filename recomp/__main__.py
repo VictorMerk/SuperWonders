@@ -55,15 +55,18 @@ def main():
     name = args.name
 
     t = time.time()
+    print("phase read", flush=True)
     m = nso.load(args.nso, name)
     if args.wonder_realtime:
         if name != "main":
             ap.error("--wonder-realtime applies only to the main module")
         patch_wonder_realtime(m)
+    print("phase analyze", flush=True)
     an = analysis.analyze(m)
     print(f"analysis: {len(an.functions)} functions, {len(an.jump_tables)} jump tables ({time.time() - t:.1f}s)")
 
     os.makedirs(args.out, exist_ok=True)
+    print("phase emit", flush=True)
     e = emit.Emitter(an, prefix=name)
     funcs = an.functions
     if args.only:

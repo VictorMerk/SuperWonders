@@ -175,13 +175,20 @@ def recompile(kit, exefs, gen, done_before, share):
                "--name", name, "--base", base]
         if GAME == "wonder" and name == "main":
             cmd.append("--wonder-realtime")
+        progress(start, f"Reading {name} executable")
         p = subprocess.Popen(cmd, cwd=kit.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         log = []
+        descriptions = {"phase read": f"Reading {name} executable", "phase analyze": f"Analyzing {name} functions",
+                        "phase emit": f"Generating {name} code"}
         for line in p.stdout:
-            log.append(line)
+            log = (log + [line])[-40:]
+            phase = line.strip()
+            if phase in descriptions:
+                progress(start, descriptions[phase])
             m = re.search(r"emitted (\d+)/(\d+)", line)
             if m:
-                progress(start + part * int(m.group(1)) / max(1, int(m.group(2))), f"Recompiling {name}")
+                count, total = int(m.group(1)), max(1, int(m.group(2)))
+                progress(start + part * min(count, total) / total, f"Generating {name}: {count:,}/{total:,} functions")
         if p.wait():
             sys.stderr.write("".join(log[-40:]))
             raise SystemExit(f"error: recompiling {name} failed (exit {p.returncode})")

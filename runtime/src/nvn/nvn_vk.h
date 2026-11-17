@@ -66,6 +66,13 @@ void fsr_release();      // the swapchain goes away
 void set_fxaa(bool on);
 GpuImage* fxaa_record(VkCommandBuffer cb, GpuImage& src);  // the anti-aliased image, or null (off, or not RGBA8)
 void fxaa_release();
+// Optional 2x picture-based interpolation. Called under the GPU lock.
+void set_framegen(bool on);
+bool framegen_enabled();
+bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, GpuImage*& current, GpuImage*& middle);
+void framegen_release(bool destroy_pipelines = false);
+bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant);
+bool framegen_probe_check();
 // nvn_sampler.cpp: the player's anisotropic filtering (0 the game's, 2..16); read at the first sampler (a restart).
 void set_anisotropy(int level);
 // The player's VSync (0 On: FIFO, 1 Fast: MAILBOX else IMMEDIATE, 2 Adaptive: FIFO_RELAXED, 3 Off: IMMEDIATE);

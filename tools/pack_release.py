@@ -55,6 +55,18 @@ def copytree(src, dst, ignore=None):
     shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True, symlinks=True)
 
 
+def pack_runtime_notices(folder):
+    # These components are embedded/static in the runtime; their notices must
+    # travel with the executable even when the builder kit is packaged separately.
+    files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/imgui/LICENSE.txt",
+             "third_party/fsr1/LICENSE.txt", "third_party/mkw-framegen/LICENSE",
+             "third_party/mkw-framegen/README.md", "third_party/fonts/Nunito/OFL.txt",
+             "third_party/fonts/PCButtons/README.md", "third_party/sdl/LICENSE.txt"]
+    files += [os.path.relpath(p, REPO) for p in glob.glob(os.path.join(REPO, "third_party/fonts/NotoFallback/OFL*.txt"))]
+    for relative in files:
+        copy(os.path.join(REPO, relative), os.path.join(folder, relative))
+
+
 def sanitize_embedded_pdb_paths(folder):
     """Replace local source paths in .NET CodeView records with a neutral PDB name.
 
@@ -205,7 +217,7 @@ def pack_kit(kit, a):
     return kit_id
 
 
-def recomplauncher_json(version):
+def recomplauncher_json(version, repo="VictorMerk/SuperWonders"):
     """RecompLauncher's setup profile (docs/DEVELOPERS.md there): it starts our setup headless with the player's
     folder, then starts the program to play. The program's own launcher stays out of the way (--play)."""
     exe = f"{GAME}.exe" if WIN else GAME
@@ -226,7 +238,7 @@ def recomplauncher_json(version):
         "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
         "format": 1,
         "name": "SuperWonders",
-        "repo": "vfjoo888/SuperWonders",
+        "repo": repo,
         "game": {
             "kind": "folder",
             "label": "Your Super Mario Bros. Wonder game files, extracted, version 1.0.0: a folder holding exefs and romfs.",
@@ -320,7 +332,7 @@ TLDS = (b"com|org|net|edu|gov|mil|int|io|me|dev|app|co|info|biz|xyz|tech|online|
         b"ch|at|se|no|fi|dk|pl|cz|pt|ie|ru|ua|jp|cn|kr|tw|hk|in|au|nz|ca|us|br|mx|ar|cl|eu|is|gg|tv|me|ai|so|to|ly|im")
 EMAIL = re.compile(rb"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.(?:" + TLDS +
                    rb")(?![A-Za-z0-9])", re.I)
-THIRD_PARTY = ("game-build/python/", "game-build/toolchain/", "game-build/translator/")
+THIRD_PARTY = ("game-build/python/", "game-build/toolchain/", "game-build/translator/", "third_party/", "licenses/")
 # Personal strings to refuse anywhere in a release, one per line ('#' comments): the packer's own names, mail,
 # folders. Local and untracked (.gitignore), so nothing personal is ever written in the code.
 EXTRA = os.path.join(REPO, "tools", "privacy-extra.txt")
@@ -436,7 +448,7 @@ def main():
     ap.add_argument("--build", required=True, help="a build folder with NX_GAME_LIBRARY=ON")
     ap.add_argument("--out", required=True)
     ap.add_argument("--version", default=open(os.path.join(REPO, "VERSION")).read().strip())
-    ap.add_argument("--repo", default="vfjoo888/SuperWonders", help="the GitHub repository SuperWonders Update checks (owner/name)")
+    ap.add_argument("--repo", default="VictorMerk/SuperWonders", help="the GitHub repository SuperWonders Update checks (owner/name)")
     ap.add_argument("--sign", help="the repository owner's release key (PEM): writes <archive>.sig (docs/RELEASES.md)")
     ap.add_argument("--pubkey", default="", help="the release key's public half (tools/sign_update.py --public), for "
                                                   "update.ini: then only releases signed with it are installed")
@@ -465,6 +477,7 @@ def main():
     if WIN:
         # The runtime selects launcher or direct game boot from its executable name.
         copy(os.path.join(a.build, exe), os.path.join(folder, "wonder-launcher.exe"))
+    pack_runtime_notices(folder)
     if os.path.isfile(os.path.join(a.build, f"{GAME}_game.dll")) or os.path.isfile(os.path.join(a.build, f"lib{GAME}_game.so")):
         print("note: the build's game code library is not packed (it holds the game)")
     with open(os.path.join(folder, "VERSION"), "w", newline="\n") as f:
@@ -476,7 +489,7 @@ def main():
                 "# it are installed. Empty: GitHub's SHA-256 of the file alone is checked.\n"
                 f"pubkey={a.pubkey}\n")
     with open(os.path.join(folder, "recomplauncher.json"), "w", newline="\n") as f:
-        json.dump(recomplauncher_json(a.version), f, indent=2)
+        json.dump(recomplauncher_json(a.version, a.repo), f, indent=2)
     kit_id = pack_kit(os.path.join(folder, "game-build"), a)
     drop_caches(folder)
     privacy_check(folder)

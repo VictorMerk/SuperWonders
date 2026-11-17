@@ -18,9 +18,11 @@
 #include <vector>
 
 #include "nvn.h"
+#include "framegen_timing.h"
 #include "platform.h"
 #include "frametrace.h"
 #include "play.h"
+#include "netplay_game.h"
 #include <nx/game.h>
 
 namespace nx {
@@ -305,6 +307,7 @@ int frame_cap_setting() {
     return forced ? forced : g_frame_cap.load(std::memory_order_relaxed);
 }
 int frame_cap() {
+    if (lan::active()) return 60;
     const int cap = frame_cap_setting(), hold = g_cap_hold.load(std::memory_order_relaxed);
     return hold && hold < cap ? hold : cap;
 }
@@ -320,7 +323,7 @@ void frame_time_probe(CPU& c) {
     static const char* max_env = std::getenv("NX_MAX_INTERVAL");
     static uint32_t game_max = 0;  // the game's own maximum (fw[0x24c]), restored when the governor lets go
     if (!game_max) game_max = ld<uint32_t>(c.x[19] + 0x24c);
-    uint32_t max = max_env && std::atoi(max_env) >= 1 ? uint32_t(std::atoi(max_env)) : governor_max(plat::monotonic_ns());
+    uint32_t max = lan::active() ? 1 : max_env && std::atoi(max_env) >= 1 ? uint32_t(std::atoi(max_env)) : governor_max(plat::monotonic_ns());
     if (!max && !max_env && game_max) st<uint32_t>(c.x[19] + 0x24c, game_max);
     if (max >= 1) {
         st<uint32_t>(c.x[19] + 0x24c, max);
@@ -453,7 +456,8 @@ void QueuePresentTexture(CPU& c) {
         if (int(c.x[2]) >= 0 && size_t(c.x[2]) < w->textures.size()) {
             uint64_t texture = w->textures[size_t(c.x[2])];
             std::array<int32_t, 4> crop{w->crop[0], w->crop[1], w->crop[2], w->crop[3]};
-            queued[next_slot] = worker_run([texture, crop] { gpu_present(texture, crop.data()); });
+            const int interval = w->interval;
+            queued[next_slot] = worker_run([texture, crop, interval] { gpu_present(texture, crop.data(), interval); });
             next_slot ^= 1;
         }
         const uint64_t t_pace = plat::monotonic_ns();
@@ -468,7 +472,7 @@ void QueuePresentTexture(CPU& c) {
         return 1;
     }());
     g_frame++;
-    play::frame();  // probe, anchors, scanner steps (play.cpp)
+    if (!lan::active()) play::frame();  // LAN samples after the whole framework frame, including post-present work.
 }
 
 // (NVNwindow*, int x, int y, int width, int height): the part of the window textures shown. In handheld mode
@@ -509,6 +513,8 @@ NX_HLE("nvnWindowSetPresentInterval", WindowSetPresentInterval);
 
 // A game asks for its own rate for a moment (games/wonder/seed_guard.cpp): the cap drops to fps until released
 // (0), the setting is untouched. held_frame_cap() is the hold in force (0: none).
+uint64_t game_present_period_ns(int interval) { return framegen_present_period(frame_cap(), interval); }
+
 void hold_frame_cap(int fps) {
     g_cap_hold.store(fps, std::memory_order_relaxed);
 }

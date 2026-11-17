@@ -46,6 +46,8 @@
 #include "pc_menu_win.h"
 #include "svc_am.h"
 #include "platform.h"
+#include "shader_bundle.h"
+#include "controllers.h"
 
 namespace nx {
 HWND g_window = nullptr;
@@ -88,8 +90,10 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
+    nx::nvn::flush_shader_bundle();
+    close_controllers();
     nx::nvn::flush_pipeline_cache();
-    std::fflush(stderr);  // log_line buffers redirected stderr to avoid periodic render-thread stalls.
+    std::fflush(nullptr);  // includes replay/probe logs; ExitProcess does not run C stdio shutdown.
     ExitProcess(UINT(code));
 }
 void sleep_ns(int64_t ns) {
@@ -247,6 +251,8 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     overlay::Settings o;
     o.width = s.width, o.height = s.height, o.internal_resolution = s.internal_resolution, o.volume = s.volume;
     o.language = s.language, o.game_language = s.game_language, o.memory_limit_gb = s.memory_limit_gb;
+    o.keyboard_separate_player = s.keyboard_separate_player;
+    o.button_icons = s.button_icons;
     o.controller_preset = s.controller_preset, o.muted = s.muted, o.fullscreen = s.fullscreen;
     o.always_on_top = s.always_on_top, o.metrics_enabled = s.metrics_enabled, o.low_vram_profile = s.low_vram_profile;
     o.metric_fps = s.metric_fps, o.metric_one_percent_low = s.metric_one_percent_low;
@@ -254,6 +260,9 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.overlay_position = s.overlay_position, o.controller_custom_mask = s.controller_custom_mask;
     o.upscaler = s.upscaler, o.fsr_sharpness = s.fsr_sharpness, o.antialiasing = s.antialiasing;
     o.anisotropy = s.anisotropy, o.rumble = s.rumble, o.vsync = s.vsync, o.frame_cap = s.frame_cap;
+    o.shader_bundle = s.shader_bundle;
+    o.framegen = s.framegen;
+    o.pipeline_skip_draws = s.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         o.keyboard_bindings[i] = s.keyboard_bindings[i], o.controller_bindings[i] = s.controller_bindings[i];
     return o;
@@ -263,6 +272,8 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     PcMenuState s = g_pc_settings;
     s.width = o.width, s.height = o.height, s.internal_resolution = o.internal_resolution, s.volume = o.volume;
     s.language = o.language, s.game_language = o.game_language, s.memory_limit_gb = o.memory_limit_gb;
+    s.keyboard_separate_player = o.keyboard_separate_player;
+    s.button_icons = o.button_icons;
     s.controller_preset = o.controller_preset, s.muted = o.muted, s.fullscreen = o.fullscreen;
     s.always_on_top = o.always_on_top, s.metrics_enabled = o.metrics_enabled, s.low_vram_profile = o.low_vram_profile;
     s.metric_fps = o.metric_fps, s.metric_one_percent_low = o.metric_one_percent_low;
@@ -270,6 +281,9 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.overlay_position = o.overlay_position, s.controller_custom_mask = o.controller_custom_mask;
     s.upscaler = o.upscaler, s.fsr_sharpness = o.fsr_sharpness, s.antialiasing = o.antialiasing;
     s.anisotropy = o.anisotropy, s.rumble = o.rumble, s.vsync = o.vsync, s.frame_cap = o.frame_cap;
+    s.shader_bundle = o.shader_bundle;
+    s.framegen = o.framegen;
+    s.pipeline_skip_draws = o.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         s.keyboard_bindings[i] = o.keyboard_bindings[i], s.controller_bindings[i] = o.controller_bindings[i];
     return s;
@@ -346,6 +360,7 @@ static void apply_input_bindings(const PcMenuState& state) {
                                    : pc_default_controller_binding(i, state.controller_preset);
         g_controller_bindings[i].store(std::clamp(controller, 0, int(kPcControlCount) - 1),
                                        std::memory_order_relaxed);
+        controller_binding(i, controller);
     }
 }
 
@@ -359,6 +374,8 @@ static void save_pc_settings() {
          << "\ngame_language_version=2"
          << "\nmemory_limit_gb=" << g_pc_settings.memory_limit_gb
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
+         << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
+         << "\nbutton_icons=" << g_pc_settings.button_icons
          << "\ncontroller_preset=" << g_pc_settings.controller_preset
          << "\nmetrics_enabled=" << g_pc_settings.metrics_enabled << "\nmetric_fps=" << g_pc_settings.metric_fps
          << "\nmetric_one_percent_low=" << g_pc_settings.metric_one_percent_low
@@ -369,7 +386,10 @@ static void save_pc_settings() {
          << "\nupscaler=" << g_pc_settings.upscaler << "\nfsr_sharpness=" << g_pc_settings.fsr_sharpness
          << "\nantialiasing=" << g_pc_settings.antialiasing << "\nanisotropy=" << g_pc_settings.anisotropy
          << "\nrumble=" << g_pc_settings.rumble << "\nvsync=" << g_pc_settings.vsync
-         << "\nframe_cap=" << g_pc_settings.frame_cap << '\n';
+         << "\nframe_cap=" << g_pc_settings.frame_cap
+         << "\nshader_bundle=" << g_pc_settings.shader_bundle
+         << "\nframegen=" << g_pc_settings.framegen
+         << "\npipeline_skip_draws=" << g_pc_settings.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kPcControlCount; ++i)
         file << "keyboard_" << i << '=' << g_pc_settings.keyboard_bindings[i] << '\n'
              << "controller_" << i << '=' << g_pc_settings.controller_bindings[i] << '\n';
@@ -395,6 +415,10 @@ static void load_pc_settings() {
             game_language_version = value;
         else if (std::sscanf(line.c_str(), "memory_limit_gb=%d", &value) == 1) g_pc_settings.memory_limit_gb = std::clamp(value, 2, 32);
         else if (std::sscanf(line.c_str(), "low_vram_profile=%d", &value) == 1) g_pc_settings.low_vram_profile = value != 0;
+        else if (std::sscanf(line.c_str(), "keyboard_separate_player=%d", &value) == 1)
+            g_pc_settings.keyboard_separate_player = value != 0;
+        else if (std::sscanf(line.c_str(), "button_icons=%d", &value) == 1)
+            g_pc_settings.button_icons = std::clamp(value, 0, 4);
         else if (std::sscanf(line.c_str(), "controller_preset=%d", &value) == 1)
             g_pc_settings.controller_preset = std::clamp(value, 0, 1);
         else if (std::sscanf(line.c_str(), "metrics_enabled=%d", &value) == 1) g_pc_settings.metrics_enabled = value != 0;
@@ -417,6 +441,12 @@ static void load_pc_settings() {
             g_pc_settings.anisotropy = std::clamp(value, 0, 16);
         else if (std::sscanf(line.c_str(), "rumble=%d", &value) == 1) g_pc_settings.rumble = std::clamp(value, 0, 100);
         else if (std::sscanf(line.c_str(), "vsync=%d", &value) == 1) g_pc_settings.vsync = std::clamp(value, 0, 3);
+        else if (std::sscanf(line.c_str(), "shader_bundle=%d", &value) == 1)
+            g_pc_settings.shader_bundle = value != 0;
+        else if (std::sscanf(line.c_str(), "framegen=%d", &value) == 1)
+            g_pc_settings.framegen = value != 0;
+        else if (std::sscanf(line.c_str(), "pipeline_skip_draws=%d", &value) == 1)
+            g_pc_settings.pipeline_skip_draws = value != 0;
         else if (std::sscanf(line.c_str(), "frame_cap=%d", &value) == 1)
             g_pc_settings.frame_cap = value == 30 || value == 60 || value == 90 || value == 120 || value == 144
                                           ? value
@@ -443,6 +473,10 @@ static void load_pc_settings() {
     nx::nvn::set_anisotropy(g_pc_settings.anisotropy);
     nx::nvn::set_vsync(g_pc_settings.vsync);
     nx::nvn::set_frame_cap(g_pc_settings.frame_cap);
+    nx::nvn::set_pipeline_skip_draws(g_pc_settings.pipeline_skip_draws);
+    nx::nvn::set_framegen(g_pc_settings.framegen);
+    controller_rumble_strength(g_pc_settings.rumble);
+    controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     nx::set_native_render_width(g_pc_settings.fullscreen ? uint32_t(GetSystemMetrics(SM_CXSCREEN))
                                                           : uint32_t(g_pc_settings.width));
 }
@@ -667,6 +701,10 @@ static void apply_pc_menu(const PcMenuState& state, bool persist) {
     nx::nvn::set_anisotropy(g_pc_settings.anisotropy);
     nx::nvn::set_vsync(g_pc_settings.vsync);
     nx::nvn::set_frame_cap(g_pc_settings.frame_cap);
+    nx::nvn::set_pipeline_skip_draws(g_pc_settings.pipeline_skip_draws);
+    nx::nvn::set_framegen(g_pc_settings.framegen);
+    controller_rumble_strength(g_pc_settings.rumble);
+    controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     if (g_fullscreen != g_pc_settings.fullscreen) toggle_fullscreen(g_window);
     else if (size_changed && !g_fullscreen) resize_window_client(g_window, g_pc_settings.width, g_pc_settings.height);
     if (topmost_changed && g_window)
@@ -940,105 +978,15 @@ bool headless() {  // NX_HEADLESS (platform.h)
     return on;
 }
 
-// Player 1's pad for rumble: XInput's first controller, else the SDL gamepad read_pad opened.
-static std::mutex g_gamepad_lock;
-static SDL_Gamepad* g_gamepad = nullptr;
-static std::atomic<bool> g_have_xinput{false};
-
-void rumble(float low, float high) {
-    const float k = float(std::clamp(g_pc_settings.rumble, 0, 100)) / 100.0f;
-    const WORD lo = WORD(std::clamp(low * k, 0.0f, 1.0f) * 65535.0f), hi = WORD(std::clamp(high * k, 0.0f, 1.0f) * 65535.0f);
-    if (g_have_xinput) {
-        XINPUT_VIBRATION v{lo, hi};
-        XInputSetState(0, &v);
-        return;
-    }
-    std::lock_guard lk(g_gamepad_lock);
-    if (g_gamepad) SDL_RumbleGamepad(g_gamepad, lo, hi, 250);
-}
+// SDL provides stable, independent slots for Xbox, PlayStation and Nintendo controllers.
+void rumble(float low, float high) { rumble_player(0, low, high); }
 
 void read_pad(PadState& p) {
     std::array<bool, kPcControlCount> physical{};
-    XINPUT_STATE xs{};
-    bool have_xinput = XInputGetState(0, &xs) == ERROR_SUCCESS;
-    if (have_xinput) {
-        const auto& g = xs.Gamepad;
-        physical[PcSouth] = (g.wButtons & XINPUT_GAMEPAD_A) != 0;
-        physical[PcEast] = (g.wButtons & XINPUT_GAMEPAD_B) != 0;
-        physical[PcWest] = (g.wButtons & XINPUT_GAMEPAD_X) != 0;
-        physical[PcNorth] = (g.wButtons & XINPUT_GAMEPAD_Y) != 0;
-        physical[PcShoulderL] = (g.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-        physical[PcShoulderR] = (g.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-        physical[PcTriggerL] = g.bLeftTrigger > 100;
-        physical[PcTriggerR] = g.bRightTrigger > 100;
-        physical[PcStart] = (g.wButtons & XINPUT_GAMEPAD_START) != 0;
-        physical[PcBack] = (g.wButtons & XINPUT_GAMEPAD_BACK) != 0;
-        physical[PcStickL] = (g.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
-        physical[PcStickR] = (g.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
-        physical[PcLeft] = (g.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-        physical[PcUp] = (g.wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
-        physical[PcRight] = (g.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
-        physical[PcDown] = (g.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-        auto dz = [](int v) { return (v > -7849 && v < 7849) ? 0 : std::max(-kStickMax, std::min(kStickMax, v)); };
-        p.lx = dz(g.sThumbLX);
-        p.ly = dz(g.sThumbLY);
-        p.rx = dz(g.sThumbRX);
-        p.ry = dz(g.sThumbRY);
-    }
-    // SDL's HIDAPI backend reads DualSense directly; keep XInput as the first-choice path for Xbox pads.
-    g_have_xinput = have_xinput;
-    if (!have_xinput) {
-        SDL_UpdateGamepads();
-        std::lock_guard gamepad_lock(g_gamepad_lock);
-        SDL_Gamepad*& gamepad = g_gamepad;
-        if (gamepad && !SDL_GamepadConnected(gamepad)) {
-            SDL_CloseGamepad(gamepad);
-            gamepad = nullptr;
-        }
-        if (!gamepad) {
-            int count = 0;
-            SDL_JoystickID* ids = SDL_GetGamepads(&count);
-            SDL_Gamepad* fallback = nullptr;
-            for (int i = 0; ids && i < count; ++i) {
-                SDL_Gamepad* candidate = SDL_OpenGamepad(ids[i]);
-                if (!candidate) continue;
-                if (SDL_GetGamepadType(candidate) == SDL_GAMEPAD_TYPE_PS5) {
-                    if (fallback) SDL_CloseGamepad(fallback);
-                    gamepad = candidate;
-                    break;
-                }
-                if (!fallback) fallback = candidate;
-                else SDL_CloseGamepad(candidate);
-            }
-            SDL_free(ids);
-            if (!gamepad) gamepad = fallback;
-        }
-        if (gamepad) {
-            auto down = [](SDL_Gamepad* pad, SDL_GamepadButton b) { return SDL_GetGamepadButton(pad, b); };
-            physical[PcSouth] = down(gamepad, SDL_GAMEPAD_BUTTON_SOUTH);
-            physical[PcEast] = down(gamepad, SDL_GAMEPAD_BUTTON_EAST);
-            physical[PcWest] = down(gamepad, SDL_GAMEPAD_BUTTON_WEST);
-            physical[PcNorth] = down(gamepad, SDL_GAMEPAD_BUTTON_NORTH);
-            physical[PcShoulderL] = down(gamepad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-            physical[PcShoulderR] = down(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-            physical[PcTriggerL] = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 10000;
-            physical[PcTriggerR] = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 10000;
-            physical[PcStart] = down(gamepad, SDL_GAMEPAD_BUTTON_START);
-            physical[PcBack] = down(gamepad, SDL_GAMEPAD_BUTTON_BACK);
-            physical[PcStickL] = down(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK);
-            physical[PcStickR] = down(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
-            physical[PcLeft] = down(gamepad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-            physical[PcUp] = down(gamepad, SDL_GAMEPAD_BUTTON_DPAD_UP);
-            physical[PcRight] = down(gamepad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-            physical[PcDown] = down(gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-            auto dz = [](int v) { return (v > -7849 && v < 7849) ? 0 : std::max(-kStickMax, std::min(kStickMax, v)); };
-            p.lx = dz(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX));
-            p.ly = dz(-SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY));
-            p.rx = dz(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX));
-            p.ry = dz(-SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY));
-        }
-    }
-
+    PadState controller;
+    read_controller(0, controller, &physical);
+    p.buttons |= controller.buttons;
+    p.lx = controller.lx; p.ly = controller.ly; p.rx = controller.rx; p.ry = controller.ry;
     PadState nav{};  // the controller through its bindings, for the overlay's navigation
     nav.lx = p.lx, nav.ly = p.ly, nav.rx = p.rx, nav.ry = p.ry;
     for (size_t action = 0; action < kPcControlCount; ++action) {
@@ -1279,9 +1227,9 @@ LONG WINAPI throw_tracer(EXCEPTION_POINTERS* e) {
 
 int main() {
     nx::plat::make_dirs(nx::plat::data_root());
+    if (!SDL_Init(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "SDL gamepad input unavailable: %s\n", SDL_GetError());
     nx::plat::load_pc_settings();
     nx::plat::start_memory_guard();  // before anything can grow: a leak must never freeze the machine (memguard_win.cpp)
-    if (!SDL_Init(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "SDL gamepad input unavailable: %s\n", SDL_GetError());
     SetUnhandledExceptionFilter(crash_handler);
     if (const char* t = std::getenv("NX_THROW_TRACE"); t && *t == '1') AddVectoredExceptionHandler(1, throw_tracer);
     if (const char* w = std::getenv("NX_WATCH")) {

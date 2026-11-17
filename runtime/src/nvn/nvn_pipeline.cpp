@@ -20,6 +20,8 @@
 #include <unordered_map>
 
 #include "nvn_pipeline.h"
+#include "cache_file.h"
+#include "shader_bundle.h"
 #include "nvn_pipeline_async.h"
 #include "platform.h"
 #include "shadow_coord_debug_spv.h"
@@ -55,7 +57,8 @@ std::set<std::string> g_pipeline_key_ids;
 std::map<std::string, std::unique_ptr<ShaderInfo>> g_pipeline_warm_shaders;
 std::string g_pipeline_keys_path;
 uint32_t g_pipeline_vendor = 0, g_pipeline_device = 0;
-bool g_pipeline_keys_loaded = false, g_pipeline_keys_dirty = false;
+bool g_pipeline_keys_loaded = false;
+std::atomic<bool> g_pipeline_keys_dirty{false};
 
 std::string pipeline_record_id(const PipelineKeysRecord& rec) {
     std::string id(rec.vs_hash, sizeof rec.vs_hash);
@@ -125,19 +128,14 @@ ShaderInfo* load_pipeline_shader(const char hash[16], uint32_t shared, const uin
     identity.append(reinterpret_cast<const char*>(&shared), sizeof shared);
     identity.append(reinterpret_cast<const char*>(local), sizeof(uint32_t) * 3);
     if (auto it = g_pipeline_warm_shaders.find(identity); it != g_pipeline_warm_shaders.end()) return it->second.get();
-    const std::string path = plat::data_root() + "/spirv/" + h + ".spv";
-    FILE* f = plat::fopen_utf8(path, "rb");
-    if (!f) return nullptr;
-    plat::fseek64(f, 0, SEEK_END);
-    const int64_t bytes = plat::ftell64(f);
-    plat::fseek64(f, 0, SEEK_SET);
-    if (bytes < 20 || bytes > (64ll << 20) || (bytes & 3)) { std::fclose(f); return nullptr; }
+    const auto code = shader_bundle().load(h);
+    const auto bytes = code.size();
+    if (bytes < 20 || bytes > (64ull << 20) || (bytes & 3)) return nullptr;
     auto info = std::make_unique<ShaderInfo>();
     info->hash = h;
     info->spirv.resize(size_t(bytes) / 4);
-    const bool read = std::fread(info->spirv.data(), 1, size_t(bytes), f) == size_t(bytes);
-    std::fclose(f);
-    if (!read || !reflect_spirv(info->spirv.data(), info->spirv.size(), info->refl)) return nullptr;
+    std::memcpy(info->spirv.data(),code.data(),bytes);
+    if (!reflect_spirv(info->spirv.data(), info->spirv.size(), info->refl)) return nullptr;
     info->stage = info->refl.stage;
     info->control.valid = true;
     info->control.shared_size = shared;
@@ -392,23 +390,25 @@ namespace {
 // The file write of save_pipeline_keys: on the background writer, or on the caller at shutdown.
 void write_pipeline_keys(const std::string& path, const PipelineKeysHeader& h,
                          const std::vector<PipelineKeysRecord>& records, bool force) {
-    const std::string tmp = path + ".tmp";
-    FILE* f = plat::fopen_utf8(tmp, "wb");
-    if (!f) return;
+    CacheFile pending(path);
+    FILE* f = plat::fopen_utf8(pending.path(), "wb");
+    if (!f) { g_pipeline_keys_dirty=true; return; }
     bool ok = std::fwrite(&h, 1, sizeof h, f) == sizeof h;
     if (ok && !records.empty())
         ok = std::fwrite(records.data(), sizeof(PipelineKeysRecord), records.size(), f) == records.size();
     ok = std::fclose(f) == 0 && ok;
-    std::remove(path.c_str());
-    if (ok && std::rename(tmp.c_str(), path.c_str()) == 0)
+    if (ok && pending.commit())
         log("nvn/vk: saved %llu pipeline recipes%s", (unsigned long long)records.size(), force ? " at shutdown" : "");
-    else
+    else {
+        g_pipeline_keys_dirty=true;
         log("nvn/vk: saving pipeline recipes to %s failed", path.c_str());
+    }
 }
 
 }  // namespace
 
 void save_pipeline_keys(bool force) {
+    if (!g_pipeline_keys_loaded) return;  // launcher/probe-only sessions must preserve the existing recipe file
     if (!g_pipeline_keys_dirty && !force) return;
     open_pipeline_keys_path();
     PipelineKeysHeader h{};
@@ -1018,6 +1018,9 @@ void gpl_log() {
 }
 
 VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& layout, bool may_skip) {
+    // A recurring render target does not prove an individual draw is safe to lose. Keep the
+    // complete image by default; background startup preparation and GPL optimization stay enabled.
+    may_skip = may_skip && pipeline_skip_draws();
     if (!draw_key.vs || draw_key.vs->hash.size() != 16 || (draw_key.fs && draw_key.fs->hash.size() != 16))
         return VK_NULL_HANDLE;
     // GPL dynamic mode: the state the draw sets on the command buffer is not part of the pipeline.

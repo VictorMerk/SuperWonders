@@ -1,5 +1,13 @@
 # SuperWonders — Super Mario Bros. Wonder PC Recompilation
 
+This fork's PC stability work and remaining multiplayer/rendering milestones are tracked in
+[the fork roadmap](docs/FORK-ROADMAP.md). The initial changes preserve draws during shader compilation,
+correct logical 32-lane shader operations on wider GPU subgroups, and return a valid offline friends-service interface.
+The fork adds four local controller slots, keyboard and device-specific button fonts,
+launcher shortcuts and save backups, a local shader-loading cache, and optional optical-flow
+frame generation. Native LAN with separate game instances is under active synchronization
+testing; Nintendo online services remain offline.
+
 I'm working on SuperWonders, an experimental Windows and Linux x86-64 static recompilation of *Super Mario Bros. Wonder* (Nintendo Switch, base version 1.0.0) for native execution on PC. I started from the DKB/TOTK recompilation framework and have been adapting its runtime and graphics support for Wonder. The graphics backend uses Vulkan.
 
 This repository contains source code and project documentation. It does not contain the builder package, the game, game assets, a game dump, firmware, or a compiled game. The separate Windows GUI Builder is distributed through [GitHub Releases](https://github.com/vfjoo888/SuperWonders/releases).

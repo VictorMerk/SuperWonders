@@ -6,6 +6,19 @@
 
 namespace nx::overlay {
 
+void apply_graphics_profile(Settings& s, GraphicsProfile profile) {
+    s.frame_cap = 60;
+    s.vsync = 1;
+    s.pipeline_skip_draws = false;
+    s.framegen = false;
+    s.upscaler = 1;
+    s.internal_resolution = profile == GraphicsProfile::Performance ? 1 : profile == GraphicsProfile::Balanced ? 2 : 3;
+    s.low_vram_profile = profile == GraphicsProfile::Performance;
+    s.antialiasing = profile == GraphicsProfile::Performance ? 0 : 1;
+    s.anisotropy = profile == GraphicsProfile::Performance ? 0 : profile == GraphicsProfile::Balanced ? 4 : 8;
+    s.fsr_sharpness = profile == GraphicsProfile::Quality ? 50 : 100;
+}
+
 int default_controller_binding(size_t action, int preset) {
     constexpr int standard[kControlCount] = {
         PhySouth, PhyEast, PhyWest, PhyNorth, PhyShoulderL, PhyShoulderR, PhyTriggerL, PhyTriggerR,
@@ -45,6 +58,8 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "game_language_version=%d", &v) == 1) game_language_version = v;
         else if (std::sscanf(l, "memory_limit_gb=%d", &v) == 1) s.memory_limit_gb = std::clamp(v, 2, 32);
         else if (std::sscanf(l, "low_vram_profile=%d", &v) == 1) s.low_vram_profile = v != 0;
+        else if (std::sscanf(l, "keyboard_separate_player=%d", &v) == 1) s.keyboard_separate_player = v != 0;
+        else if (std::sscanf(l, "button_icons=%d", &v) == 1) s.button_icons = std::clamp(v, 0, 4);
         else if (std::sscanf(l, "controller_preset=%d", &v) == 1) s.controller_preset = std::clamp(v, 0, 1);
         else if (std::sscanf(l, "metrics_enabled=%d", &v) == 1) s.metrics_enabled = v != 0;
         else if (std::sscanf(l, "metric_fps=%d", &v) == 1) s.metric_fps = v != 0;
@@ -58,6 +73,9 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "anisotropy=%d", &v) == 1) s.anisotropy = std::clamp(v, 0, 16);
         else if (std::sscanf(l, "rumble=%d", &v) == 1) s.rumble = std::clamp(v, 0, 100);
         else if (std::sscanf(l, "vsync=%d", &v) == 1) s.vsync = std::clamp(v, 0, 3);
+        else if (std::sscanf(l, "shader_bundle=%d", &v) == 1) s.shader_bundle = v != 0;
+        else if (std::sscanf(l, "framegen=%d", &v) == 1) s.framegen = v != 0;
+        else if (std::sscanf(l, "pipeline_skip_draws=%d", &v) == 1) s.pipeline_skip_draws = v != 0;
         else if (std::sscanf(l, "frame_cap=%d", &v) == 1)
             s.frame_cap = v == 30 || v == 60 || v == 90 || v == 120 || v == 144 ? v : 60;
         else if (std::sscanf(l, "controller_custom_mask=%u", &u) == 1) s.controller_custom_mask = u;
@@ -85,13 +103,13 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nalways_on_top=" << s.always_on_top << "\nlanguage=" << s.language << "\ngame_language=" << s.game_language
       << "\ngame_language_version=2"
       << "\nmemory_limit_gb=" << s.memory_limit_gb << "\nlow_vram_profile=" << s.low_vram_profile
-      << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
+      << "\nkeyboard_separate_player=" << s.keyboard_separate_player << "\nbutton_icons=" << s.button_icons << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
       << "\nmetric_fps=" << s.metric_fps << "\nmetric_one_percent_low=" << s.metric_one_percent_low
       << "\nmetric_game_speed=" << s.metric_game_speed << "\nmetric_frametime_graph=" << s.metric_frametime_graph
       << "\noverlay_position=" << s.overlay_position << "\ncontroller_custom_mask=" << s.controller_custom_mask
       << "\nupscaler=" << s.upscaler << "\nfsr_sharpness=" << s.fsr_sharpness << "\nantialiasing=" << s.antialiasing
       << "\nanisotropy=" << s.anisotropy << "\nrumble=" << s.rumble << "\nvsync=" << s.vsync
-      << "\nframe_cap=" << s.frame_cap << '\n';
+      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kControlCount; ++i)
         f << "keyboard_" << i << '=' << s.keyboard_bindings[i] << '\n'
           << "controller_" << i << '=' << s.controller_bindings[i] << '\n';

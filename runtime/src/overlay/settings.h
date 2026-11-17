@@ -31,6 +31,8 @@ struct Settings {
     int language = 0;       // menu language: English, Italian, German, French, Spanish, Korean, Japanese, Arabic, Russian, Turkish, Dutch, Simplified Chinese, Traditional Chinese
     int game_language = 0;  // en-US, it, de, fr, pt-BR, es, ko, ja, nl, ru, zh-CN, zh-TW
     int memory_limit_gb = 8;
+    bool keyboard_separate_player = false;
+    int button_icons = 0;  // Auto, Keyboard, Nintendo, Xbox, PlayStation; applies at startup
     int controller_preset = 1;  // 1 Nintendo positions (the default, as on the Switch: A on the right), 0 Xbox / DualSense
     bool muted = false, fullscreen = false, always_on_top = false;
     bool metrics_enabled = false, low_vram_profile = false;
@@ -43,6 +45,9 @@ struct Settings {
     int rumble = 100;          // controller rumble strength, percent (0: off)
     int vsync = 1;             // 0 On (FIFO), 1 Fast (MAILBOX, else IMMEDIATE: the default), 2 Adaptive (FIFO_RELAXED), 3 Off
     int frame_cap = 60;        // 30, 60, 90, 120, or 144 FPS
+    bool shader_bundle = true;  // sequential shader cache, applies at startup
+    bool framegen = false;  // experimental optical-flow 2x presentation
+    bool pipeline_skip_draws = false;  // opt-in: hide draws while new pipelines compile (can cause flicker)
     std::array<int, kControlCount> keyboard_bindings{};
     std::array<int, kControlCount> controller_bindings{};
     uint32_t controller_custom_mask = 0;  // bit per action: controller_bindings[action] instead of the preset
@@ -52,6 +57,10 @@ struct Settings {
 int default_controller_binding(size_t action, int preset);
 // The physical button an action is bound to now.
 int controller_binding(const Settings& s, size_t action);
+
+enum class GraphicsProfile { Performance, Balanced, Quality };
+// Change graphics options together, preserving display size, controls, audio, language and user data.
+void apply_graphics_profile(Settings& s, GraphicsProfile profile);
 
 // Reads `path` over `s` (missing or invalid keys keep their value). False when there is no file.
 bool load_settings(const std::string& path, Settings& s);

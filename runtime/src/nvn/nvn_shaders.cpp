@@ -15,11 +15,15 @@
 
 #ifndef NX_SHADERS_STANDALONE
 #include <memory>
+#include <atomic>
 #include <mutex>
 
 #include <nx/runtime.h>
 
 #include "platform.h"
+#include "shader_bundle.h"
+#include "overlay/overlay.h"
+#include <filesystem>
 #include "vk_bridge.h"
 #endif
 
@@ -235,6 +239,24 @@ Cache& cache() {
 
 }  // namespace
 
+namespace { std::atomic<ShaderBundle*> runtime_bundle{nullptr}; }
+void flush_shader_bundle() {
+    if(auto* bundle=runtime_bundle.load()) bundle->flush();
+}
+ShaderBundle& shader_bundle() {
+    static auto* bundle = [] {
+        auto* result = new ShaderBundle(std::filesystem::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str())),
+            overlay::current_settings().shader_bundle && !(std::getenv("NX_SHADER_BUNDLE") && !std::strcmp(std::getenv("NX_SHADER_BUNDLE"),"0")));
+        runtime_bundle.store(result); return result;
+    }();
+    static const bool reported = [&] {
+        std::atexit(flush_shader_bundle);
+        log("nvn: shader bundle: %zu entries, %.1f MiB (missing or changed entries use individual files)",
+            bundle->size(), double(bundle->memory_bytes())/(1024*1024)); return true;
+    }();
+    return *bundle;
+}
+
 const ShaderInfo* shader_by_hash(const std::string& hash) {
     Cache& k = cache();
     std::lock_guard lk(k.lock);
@@ -267,8 +289,9 @@ const ShaderInfo* shader_for(uint64_t code_host, uint64_t control) {
             log("nvn: no %sresults.tsv: storage buffers of translated shaders cannot be bound", dir.c_str());
     }
     std::unique_ptr<ShaderInfo>& slot = k.by_hash[hash];
-    std::string bytes;
-    if (!read_whole(dir + hash + ".spv", bytes) || bytes.size() % 4 || bytes.empty()) {
+    const auto bytes = shader_bundle().load(hash);
+    const bool loaded = !bytes.empty();
+    if (!loaded || bytes.size() % 4 || bytes.empty()) {
         log("nvn: shader %s (code %#x bytes, control %llx): no %s%s.spv", hash.c_str(), c.code_size,
             (unsigned long long)control, dir.c_str(), hash.c_str());
         if (std::getenv("NX_DUMP_SHADER_MISSES")) {  // for translating shaders the offline inventory missed

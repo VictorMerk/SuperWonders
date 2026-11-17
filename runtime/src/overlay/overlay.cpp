@@ -48,6 +48,8 @@ std::atomic<bool> g_fading{false};   // the menu is still fading out
 std::atomic<uint64_t> g_pad_buttons{0};
 std::atomic<int32_t> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<int> g_tab_request{-1};
+std::atomic<double> g_render_fps{0};
+std::atomic<bool> g_interpolated{false};
 uint64_t g_previous_buttons = 0;
 
 int g_capture = -1;  // keyboard binding being captured
@@ -115,8 +117,10 @@ void draw_metrics(float height) {
     }
     const int interval = std::max(1, g_game_interval.load());
     const double speed = g_game_speed.load(std::memory_order_relaxed);
-    const double target = 60.0 / double(interval);
     const Settings& st = g_settings;
+    const bool interpolated = g_interpolated.load();
+    const double game_target = st.frame_cap > 60 ? double(st.frame_cap) : std::min(double(st.frame_cap),60.0/double(interval));
+    const double target = game_target * (interpolated ? 2.0 : 1.0);
     const float k = std::clamp(height / 1080.0f, 0.5f, 3.0f);
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float m = 16 * k;
@@ -157,7 +161,11 @@ void draw_metrics(float height) {
             }
         };
         if (ImGui::BeginTable("##m", 2, ImGuiTableFlags_SizingFixedFit)) {
-            if (st.metric_fps) line("FPS", rate(fps), "%.0f", fps, "");
+            if (st.metric_fps) line(interpolated ? "Display FPS" : "FPS", rate(fps), "%.0f", fps, "");
+            if (st.metric_fps && interpolated) {
+                const double game_fps = g_render_fps.load();
+                line("Game FPS", rate(game_fps*2.0), "%.0f", game_fps, "");
+            }
             if (st.metric_fps && fps > 0) line("Frame", plain, "%.1f", 1000.0 / fps, "ms");
             if (st.metric_one_percent_low) line("1% low", rate(low), "%.0f", low, "FPS");
             if (st.metric_game_speed) line("Speed", speed >= 97 ? plain : ImGui::ColorConvertU32ToFloat4(th.warn), "%.0f", speed, "%");
@@ -253,6 +261,22 @@ void settings_changed(bool persist) {
     if (h.apply) h.apply(g_settings, persist);
 }
 
+Settings current_settings() {
+    std::lock_guard lk(g_lock);
+    return g_has_pending ? g_pending : g_settings;
+}
+
+std::string key_binding_name(int key) {
+    std::lock_guard lock(g_lock);
+    return g_host.key_name ? g_host.key_name(key) : "";
+}
+
+void apply_settings(const Settings& s, bool persist) {
+    sync(s);
+    g_settings = s;
+    settings_changed(persist);
+}
+
 void key_event(int raw, Key key, bool down) {
     if (key == KeyF1 && down) {
         toggle();
@@ -280,6 +304,10 @@ void set_open(bool open, const char* why) {
 }
 
 void toggle() { set_open(!g_open.load(), "toggle"); }
+void open_settings(int tab) {
+    g_tab_request = std::clamp(tab, 0, menu_tab_count() - 1);
+    set_open(true, "launcher shortcut");
+}
 bool is_open() { return g_open; }
 bool wants_mouse() { return taking_input(); }
 bool wants_keyboard() { return taking_input(); }
@@ -303,6 +331,20 @@ void filter_pad(plat::PadState& p) {
     }
     g_previous_buttons = p.buttons;
     if (taking_input() || combo_now) p = plat::PadState{};
+}
+
+void rendered(uint64_t now_ns, bool interpolated) {
+    static uint64_t previous = 0;
+    static std::array<uint64_t, 60> intervals{};
+    static size_t next = 0, count = 0;
+    if (previous && now_ns > previous) {
+        intervals[next++ % intervals.size()] = now_ns-previous;
+        count = std::min(count+1,intervals.size());
+        uint64_t total = 0;
+        for (size_t i = 0; i < count; ++i) total += intervals[i];
+        if (total) g_render_fps = double(count)*1e9/double(total);
+    }
+    previous = now_ns; g_interpolated = interpolated;
 }
 
 void presented(uint64_t now_ns) {
@@ -364,6 +406,10 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
                 if (g_capture >= 0 && e.down) {  // the next key becomes the binding; Esc cancels
                     if (e.key != KeyEscape) g_settings.keyboard_bindings[size_t(g_capture)] = e.raw, changed = true;
                     g_capture = -1;
+                    break;
+                }
+                if (g_open && e.down && (e.key == KeyPageUp || e.key == KeyPageDown)) {
+                    g_tab_request = (g_tab + (e.key == KeyPageDown ? 1 : menu_tab_count()-1)) % menu_tab_count();
                     break;
                 }
                 if (e.key == KeyEscape && e.down && g_open && g_capture < 0 &&

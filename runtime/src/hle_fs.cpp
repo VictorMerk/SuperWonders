@@ -25,6 +25,7 @@
 #include "platform.h"
 #include "frametrace.h"
 #include "play.h"
+#include "netplay_game.h"
 
 namespace fs = std::filesystem;
 
@@ -185,7 +186,7 @@ void EnsureSaveData(CPU& c) { c.x[0] = kOk; }
 void MountSaveData(CPU& c) {
     std::lock_guard lk(g_fs);
     std::string name = cstr(c.x[0]);
-    mount(name, data_root() / "user" / "save");
+    mount(name, lan::user_root(data_root()) / "save");
     c.x[0] = kOk;
 }
 
@@ -472,7 +473,7 @@ void CreateCacheStorage(CPU& c) { c.x[0] = kOk; }
 void DeleteCacheStorage(CPU& c) { c.x[0] = kOk; }
 void MountCacheStorage(CPU& c) {  // (name, int index)
     std::lock_guard lk(g_fs);
-    mount(cstr(c.x[0]), data_root() / "user" / ("cache" + std::to_string(int(c.x[1]))));
+    mount(cstr(c.x[0]), lan::user_root(data_root()) / ("cache" + std::to_string(int(c.x[1]))));
     c.x[0] = kOk;
 }
 

@@ -13,6 +13,9 @@
 #include <nx/runtime.h>
 
 #include "overlay/option_rows.h"
+#include "controllers.h"
+#include "netplay_game.h"
+#include "button_font.h"
 #include "overlay/overlay_internal.h"
 #include "overlay/overlay_ui.h"
 
@@ -171,10 +174,6 @@ constexpr const char* kCommon[13][12] = {
 constexpr const char* kActions[kControlCount] = {
     "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus", "L Stick", "R Stick",
     "D-pad Left", "D-pad Up", "D-pad Right", "D-pad Down",
-};
-constexpr const char* kPhysical[kControlCount] = {
-    "A / Cross", "B / Circle", "X / Square", "Y / Triangle", "LB / L1", "RB / R1", "LT / L2", "RT / R2",
-    "Start / +", "Back / -", "L3 / LS", "R3 / RS", "D-pad Left", "D-pad Up", "D-pad Right", "D-pad Down",
 };
 constexpr int kTabs = 5;
 
@@ -627,6 +626,12 @@ void video(MenuContext& c, const Labels& l) {
         if (cap_values[i] == s.frame_cap) cap = i;
     if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1, translated_desc(desc::frame_cap, lang)))
         s.frame_cap = cap_values[cap], settings_changed(true);
+    if (rows::toggle("Frame generation (2x)", &s.framegen, false,
+        "Experimental optical-flow interpolation between game frames. Adds GPU work and display latency; it does not increase simulation speed. Best with a 120 Hz or faster screen at 60 game FPS. May show artifacts around moving objects. Works without DLSS hardware. Leave off when the GPU is already overloaded.")) settings_changed(true);
+    if (rows::toggle("Skip draws while compiling", &s.pipeline_skip_draws, kDefaults.pipeline_skip_draws,
+                     "Off keeps objects visible while new shaders compile, but may pause on first use. "
+                     "On reduces those pauses by temporarily omitting objects and can cause flickering."))
+        settings_changed(true);
     rows::page_note(l.restart_note);
     rows::end();
 }
@@ -650,17 +655,39 @@ void controls(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     const int lang = std::clamp(s.language, 0, 12);
     rows::begin("##controls", c.height);
+    rows::section("Players & devices");
+    if(lan::active()) rows::disable_next();
+    if (rows::toggle("Keyboard as player 1", &s.keyboard_separate_player, false,
+        lan::active() ? "LAN uses this PC's primary gamepad or keyboard for your assigned player. The local-co-op keyboard preference applies after leaving LAN." : "Reserve player 1 for the keyboard and assign gamepads to players 2-4. Turn this off to use up to four gamepads, with keyboard input shared by player 1. Changing this reassigns controllers."))
+        settings_changed(true);
+    for (uint32_t player = 0; player < plat::kPlayerCount; ++player) {
+        char label[32]; std::snprintf(label, sizeof label, "Player %u", player + 1);
+        const bool network=lan::active(), local=!network || player==lan::local_player();
+        const auto name = network ? (local ? "This PC: "+plat::controller_name(0) : lan::connected(player) ? std::string("LAN peer") : std::string("Not connected")) : plat::controller_name(player);
+        const bool connected = network ? lan::connected(player) : plat::player_connected(player);
+        if (!connected || !local) rows::disable_next();
+        if (rows::action(label, name.c_str(), network ? "Every PC contributes its primary gamepad or keyboard. Choose the matching number of players in Wonder. Select this PC's row to test local rumble." : "Connect up to four gamepads for local co-op. Player 1 also uses the keyboard. Select a connected controller to test its rumble. Unplugging one pad preserves the other player slots."))
+            plat::rumble_player(network?0:player, 0.3f, 0.3f);
+    }
+    const char* icon_names[] = {"Automatic at startup", "Keyboard", "Nintendo", "Xbox", "PlayStation"};
+    if (rows::choice("Button prompts", &s.button_icons, icon_names, 5, 0,
+        "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
+        settings_changed(true); ui::notify("Restart the game to update its button prompts.");
+    }
     rows::section(kHeaders[lang][1]);
     const char* presets[] = {"Xbox / DualSense", "Nintendo"};
     if (rows::choice(l.control_preset, &s.controller_preset, presets, 2, kDefaults.controller_preset, translated_desc(desc::preset, lang)))
         settings_changed(true);
     if (rows::integer(kCommon[lang][8], &s.rumble, 0, 100, 10, kDefaults.rumble, "%d%%", translated_desc(desc::rumble, lang))) settings_changed(true);
+    const auto device = plat::controller_kind(0);
+    const char* physical[kControlCount];
+    for (size_t i = 0; i < kControlCount; ++i) physical[i] = physical_button_name(device, int(i));
     for (size_t a = 0; a < kControlCount; ++a) {
         int phys = controller_binding(s, a);
         const int def = default_controller_binding(a, s.controller_preset);
         char id[48];
         std::snprintf(id, sizeof id, "%s###pad%zu", kActions[a], a);
-        if (rows::choice(id, &phys, kPhysical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
+        if (rows::choice(id, &phys, physical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
             s.controller_bindings[a] = phys;
             s.controller_custom_mask |= 1u << a;
             if (phys == def) s.controller_custom_mask &= ~(1u << a);
@@ -716,6 +743,10 @@ void system_tab(MenuContext& c, const Labels& l) {
         settings_changed(true);
     if (rows::toggle(l.low_vram, &s.low_vram_profile, kDefaults.low_vram_profile, translated_desc(desc::low_vram, lang)))
         settings_changed(true), ui::notify(l.restart_low_vram);
+    if (rows::toggle("Fast shader loading", &s.shader_bundle, true,
+        "Cache translated shaders as you play to speed later launches. Needs extra disk space and up to 512 MiB of memory. Modified or damaged entries fall back to the original shader files. Restart to apply.")) {
+        settings_changed(true); ui::notify("Restart the game to change shader loading.");
+    }
     // Quit: A once arms it (the row pulses, "Press again to quit"), A again within 4 s quits as closing the window does
     // (the pipeline cache is saved); progress since the game's last save is lost
     static double armed_at = -10;
@@ -863,8 +894,7 @@ void draw_menu(MenuContext& c) {
     const float fy = wp.y + ImGui::GetWindowHeight() - footer * 0.5f - 4 * k;
     wdl->AddLine(ImVec2(wp.x + 28 * k, fy - footer * 0.5f + 4 * k),
                  ImVec2(wp.x + ImGui::GetWindowWidth() - 28 * k, fy - footer * 0.5f + 4 * k), ui::fade(IM_COL32(255, 255, 255, 26)));
-    const ui::Hint list[] = {{"A", "Select"}, {"B", "Back"}, {"L", ""}, {"R", "Tab"}, {"\xe2\x80\x93 +", "Close"},
-                             {nullptr, "F1 / Esc"}};
+    const ui::Hint list[] = {{"A", "Select"}, {"B", "Back"}, {"L", ""}, {"R", "Tab"}, {"Menu", "Close"}};
     ui::hints(wdl, wp.x + ImGui::GetWindowWidth() * 0.5f, fy, 30 * k, list, int(sizeof list / sizeof list[0]));
     ImGui::End();
 }

@@ -53,6 +53,8 @@
 #include "nvn/nvn_vk.h"
 #include "overlay/overlay.h"
 #include "platform.h"
+#include "shader_bundle.h"
+#include "controllers.h"
 #include "platform_linux.h"
 
 #ifndef MAP_FIXED_NOREPLACE
@@ -171,7 +173,10 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { pthread_exit(nullptr); }
 void exit_process(int code) {
+    nx::nvn::flush_shader_bundle();
+    close_controllers();
     nx::nvn::flush_pipeline_cache();
+    std::fflush(nullptr);
     _exit(code);
 }
 

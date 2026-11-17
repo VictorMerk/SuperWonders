@@ -374,6 +374,7 @@ bool make_swapchain() {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
     }
@@ -707,7 +708,22 @@ void present_headless(uint64_t texture) {
     if (std::getenv("NX_DRAW_STATS") && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
     if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
     if (std::getenv("NX_DRAW_STATS") && presents % 300 == 0) zero_draws_log();
-    if (!frame_dump_due(presents)) return;
+    const bool due = frame_dump_due(presents);
+    if (framegen_enabled() && src && src->layout != VK_IMAGE_LAYOUT_UNDEFINED && begin()) {
+        GpuImage *current = nullptr, *middle = nullptr;
+        const bool made = framegen_record(g_cb,*src,nullptr,current,middle);
+        GpuImage* shown = made ? (middle && std::getenv("NX_DUMP_FRAMEGEN") ? middle : current) : src;
+        bool dump = false;
+        if (due) {
+            transition(g_cb,*shown,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            dump = frame_dump_record(g_cb,*shown);
+        }
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},dump);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        if (dump) frame_dump_write(*shown,presents);
+        return;
+    }
+    if (!due) return;
     if (src && src->layout != VK_IMAGE_LAYOUT_UNDEFINED && begin()) {
         GpuImage* shown = src;  // NX_PRESENT_TEST: what the present pass would put on a display (nvn_present.cpp)
         if (GpuImage* test = present_pass_test_target(); test && present_pass_record(g_cb, *src, nullptr, 0))
@@ -794,6 +810,21 @@ void prep_progress(uint64_t done, uint64_t total, bool visible, int kind) {
     present_overlay_frame();
 }
 
+bool framegen_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    bool ok = true;
+    for (uint32_t variant = 0; variant < 5; ++variant) {
+        if (!begin()) return false;
+        const bool recorded = framegen_probe_record(g_cb, variant);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        ok = framegen_probe_check() && recorded && ok;
+    }
+    framegen_release(true);
+    return ok;
+}
+
 bool present_ui_frame() {
     std::lock_guard lk(g_gpu);
     drain_objects();
@@ -802,7 +833,7 @@ bool present_ui_frame() {
     return true;
 }
 
-void gpu_present(uint64_t texture, const int32_t* crop) {
+void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     plat::perf_hint_thread();  // the thread that presents takes part in the frame (perf_hint.cpp)
     std::lock_guard lk(g_gpu);
     PresentTimer timer;
@@ -814,7 +845,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         prepare_recorded_pipelines();
     }
     if (!async_gpu() || pipelined()) free_retired_images(async_gpu() ? frame_completed() : UINT64_MAX);
-    if (plat::headless()) return present_headless(texture);
+    if (plat::headless() && !std::getenv("NX_HEADLESS_PRESENT")) return present_headless(texture);
     if (plat::window_minimized()) return;
     if (plat::window_generation() != g_window_gen) {  // Android: a new window after home or the lock screen
         if (async_gpu()) frame_wait_all();
@@ -823,6 +854,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         if (g_swapchain) p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
         log("nvn/vk: new window: surface and swapchain re-made");
@@ -835,6 +867,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
         log("nvn/vk: VSync changed: swapchain re-made");
@@ -860,6 +893,29 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
             p_vkCmdClearColorImage(g_cb, src->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &v, 1, &rr);
         }
     }
+    const uint64_t started = plat::monotonic_ns();
+    const uint64_t interval_ns = game_present_period_ns(present_interval);
+    static uint64_t last_original_ns = 0;
+    // Include replay/flow work in the display period. Starting a new half-period
+    // sleep after that work makes its cost accumulate on top of the game cadence.
+    const uint64_t base_ns = last_original_ns && started-last_original_ns < interval_ns*3
+        ? last_original_ns : started;
+    GpuImage *current = nullptr, *middle = nullptr;
+    if (src && framegen_record(g_cb, *src, crop, current, middle)) {
+        src = middle ? middle : current;
+        crop = nullptr;  // the history snapshot already includes the scaled crop
+    }
+    const int display_count = middle ? 2 : 1;
+    for (int display = 0; display < display_count; ++display) {
+        if (display) {
+            acquired = async_gpu() ? frame_acquire_semaphore() : g_acquired;
+            r = p_vkAcquireNextImageKHR(g_device,g_swapchain,UINT64_MAX,acquired,VK_NULL_HANDLE,&index);
+            if (r == VK_ERROR_OUT_OF_DATE_KHR) { make_swapchain(); break; }
+            if (!check(r,"vkAcquireNextImageKHR (generated frame)") || !begin()) break;
+            src = current;
+            dst = {};
+            dst.image = g_sc_images[index]; dst.format = g_sc_format;
+        }
     bool drawn = src && present_pass_record(g_cb, *src, crop, index);  // nvn_present.cpp: leaves dst PRESENT_SRC
     // FSR 1 when the image is smaller than the window (nvn_fsr.cpp): leaves dst TRANSFER_DST, as the blit does.
     // FXAA first when on (nvn_fxaa.cpp): its output stands in for the game's image from here.
@@ -929,7 +985,13 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
+    if (middle) {
+        const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/2;
+        const uint64_t now = plat::monotonic_ns();
+        if (target > now) plat::sleep_ns(target-now);
+    }
     r = p_vkQueuePresentKHR(g_queue, &pi);
+    if (!middle || display == 1) last_original_ns = plat::monotonic_ns();
     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
@@ -940,7 +1002,9 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         remake = caps.currentExtent.width != g_sc_current.width || caps.currentExtent.height != g_sc_current.height ||
                  (present_pass_wanted() && !present_pass_failed() && caps.currentTransform != g_sc_transform);
     }
-    if (remake) make_swapchain();
+    if (remake) { make_swapchain(); break; }
+    }  // original and optional generated presentation
+    overlay::rendered(plat::monotonic_ns(), framegen_enabled());
 }
 
 }  // namespace nx::nvn

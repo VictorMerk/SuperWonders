@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "platform.h"
+#include "netplay_game.h"
 
 namespace nx {
 
@@ -93,6 +94,7 @@ int held_frame_cap();
 }
 
 namespace wonder {
+void lan_init();
 void menu_init();
 void seed_guard_init();
 void seed_guard_tick(uint64_t now_ns);
@@ -102,12 +104,23 @@ void game::after_init() {
     init_frame_step();
     trace_screen_globals();
     wonder::menu_init();
-    wonder::seed_guard_init();
+    wonder::lan_init();
+    if (!lan::active()) wonder::seed_guard_init();
 }
 void game::renderer_start() {}
 void game::first_frame() {}
 
 void game::frame_presented(uint64_t now_ns, int present_interval) {
+    if (lan::active()) {
+        store_frame_step(1.0f/60.0f);
+        static uint64_t from = 0, frames = 0;
+        if (!from) from = now_ns;
+        if (++frames >= 60 && now_ns > from) {
+            plat::overlay_game_speed(double(frames)*1e9/60.0/double(now_ns-from)*100.0);
+            from = now_ns; frames = 0;
+        }
+        return;
+    }
     // recomp/wonder_realtime.py reserves one aligned page at the end of main's BSS.
     // Two adjacent floats are consumed by the patched game code: seconds * 60 and seconds.
     static const bool realtime = [] {

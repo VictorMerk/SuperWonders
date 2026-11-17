@@ -81,8 +81,8 @@ void draw_progress(float height) {
 
     ImFont* tf = ui::title();
     ImFont* bf = ui::body();
-    const char* title = g_kind == 0 ? "Compiling shaders" : "Preparing pipelines";
-    const char* const notes[] = {"This happens once, after an update or a new graphics driver.",
+    const char* title = g_kind == 2 ? "Optimizing shader loading" : g_kind == 0 ? "Compiling shaders" : "Preparing pipelines";
+    const char* const notes[] = {g_kind == 2 ? "This local cache is prepared once for your translated shaders." : "This happens once, after an update or a new graphics driver.",
                                  "The game starts by itself when it is done."};
     const float tfs = 52 * k, sfs = 26 * k, line_h = bf->CalcTextSizeA(sfs, FLT_MAX, 0, "A").y;
     const ImVec2 ts = tf->CalcTextSizeA(tfs, FLT_MAX, 0, title);

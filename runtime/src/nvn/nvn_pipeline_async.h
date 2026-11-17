@@ -68,6 +68,7 @@ struct AsyncPipeline {
 // NX_ASYNC_PIPELINES=0: every pipeline compiled where it is needed, and the startup preparation one program at a
 // time on its own thread, as before (bisecting).
 bool async_pipelines();
+bool pipeline_skip_draws();  // independent of background compilation; defaults to preserving all draws
 extern uint64_t g_pipelines_skipped;  // draws skipped while their pipeline compiled (replay thread; logged per window)
 std::shared_ptr<AsyncPipeline> compile_pipeline_async(std::shared_ptr<PipelineBuild> build);
 // A job on the same worker pool (the GPL libraries a skipped draw's program needs, nvn_pipeline.cpp).

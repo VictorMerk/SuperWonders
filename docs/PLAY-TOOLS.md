@@ -36,6 +36,12 @@ DRIGHT DUP DDOWN` the D-pad only; join with `+`. Sticks: integers are raw (-3276
 fractions. Added on top of the real pad. The old `NX_INPUT_SCRIPT` (wall-clock seconds) still works.
 In a course, **B** jumps (A does not), Y dashes.
 
+For live diagnosis without a desktop-control helper, `NX_INPUT_SCRIPT=@<file>` reads the older seconds-based format
+from a small UTF-8 file. The runtime checks it four times a second. Changing its contents restarts that script's
+clock; an empty file releases scripted input. For example, write `0:PLUS:0.25` to open the pause/menu screen, or
+`0:RIGHT:3;0:Y:3;0.4:B:0.5` to move and jump. The file is read only when explicitly selected through this environment
+variable; it is limited to 64 KiB. Keep frame-keyed replays for repeatable timing measurements.
+
 ## Record and replay
 
 - `NX_INPUT_RECORD=<path>` writes what the game got from the pad, per game frame, in the script format above: one item

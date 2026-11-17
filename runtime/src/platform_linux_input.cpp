@@ -19,6 +19,7 @@
 #include "overlay/overlay.h"
 #include "overlay/settings.h"
 #include "platform.h"
+#include "controllers.h"
 #include "platform_linux.h"
 #include "svc_am.h"
 
@@ -64,8 +65,12 @@ void apply_settings(const overlay::Settings& s, bool persist) {
         before = g_settings;
         g_settings = s;
     }
-    for (size_t a = 0; a < overlay::kControlCount; ++a)
+    for (size_t a = 0; a < overlay::kControlCount; ++a) {
         g_key_binding[a] = s.keyboard_bindings[a], g_pad_binding[a] = overlay::controller_binding(s, a);
+        controller_binding(a, overlay::controller_binding(s, a));
+    }
+    controller_rumble_strength(s.rumble);
+    controller_keyboard_separate(s.keyboard_separate_player);
     if (g_stream) {
         const int percent = std::clamp(s.volume, 0, 200);
         const float gain = percent <= 100 ? (float(percent) / 100.0f) * (float(percent) / 100.0f)
@@ -81,6 +86,8 @@ void apply_settings(const overlay::Settings& s, bool persist) {
     nvn::set_anisotropy(s.anisotropy);
     nvn::set_vsync(s.vsync);
     nvn::set_frame_cap(s.frame_cap);
+    nvn::set_pipeline_skip_draws(s.pipeline_skip_draws);
+    nvn::set_framegen(s.framegen);
     g_rumble_strength = std::clamp(s.rumble, 0, 100);
     if (s.fullscreen != before.fullscreen || s.width != before.width || s.height != before.height ||
         s.always_on_top != before.always_on_top)
@@ -127,12 +134,7 @@ overlay::Key menu_key(SDL_Keycode k) {
 bool fast_forward() { return g_fast_forward.load(std::memory_order_relaxed); }
 
 void rumble(float low, float high) {
-    float k = float(g_rumble_strength.load()) / 100.0f;
-    std::lock_guard lk(g_gamepad_lock);
-    if (!g_gamepad) return;
-    // 250 ms at most: the game sends a value every few milliseconds while it vibrates, and zero to stop.
-    SDL_RumbleGamepad(g_gamepad, Uint16(std::clamp(low * k, 0.0f, 1.0f) * 65535.0f),
-                      Uint16(std::clamp(high * k, 0.0f, 1.0f) * 65535.0f), 250);
+    rumble_player(0, low, high);
 }
 
 void read_pad(PadState& p) {
@@ -224,48 +226,7 @@ bool handle_event(const SDL_Event& e) {
 
 void sample_input() {
     PadState p;
-    std::unique_lock gamepad_lock(g_gamepad_lock);
-    SDL_Gamepad*& pad = g_gamepad;
-    if (!pad) {
-        int n = 0;
-        SDL_JoystickID* ids = SDL_GetGamepads(&n);
-        if (ids && n > 0) pad = SDL_OpenGamepad(ids[0]);
-        SDL_free(ids);
-    }
-    if (pad && !SDL_GamepadConnected(pad)) {
-        SDL_CloseGamepad(pad);
-        pad = nullptr;
-    }
-    if (pad) {
-        // Physical buttons by position (overlay::Physical order), then each action takes its bound button
-        // (the menu's preset or remapping; the default preset puts A at the bottom, as on Windows).
-        static const SDL_GamepadButton physical[] = {
-            SDL_GAMEPAD_BUTTON_SOUTH,       SDL_GAMEPAD_BUTTON_EAST,          SDL_GAMEPAD_BUTTON_WEST,
-            SDL_GAMEPAD_BUTTON_NORTH,       SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,
-            SDL_GAMEPAD_BUTTON_INVALID,     SDL_GAMEPAD_BUTTON_INVALID,  // the triggers are axes
-            SDL_GAMEPAD_BUTTON_START,       SDL_GAMEPAD_BUTTON_BACK,          SDL_GAMEPAD_BUTTON_LEFT_STICK,
-            SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_BUTTON_DPAD_LEFT,     SDL_GAMEPAD_BUTTON_DPAD_UP,
-            SDL_GAMEPAD_BUTTON_DPAD_RIGHT,  SDL_GAMEPAD_BUTTON_DPAD_DOWN,
-        };
-        bool down[overlay::kControlCount] = {};
-        for (size_t k = 0; k < overlay::kControlCount; ++k)
-            down[k] = physical[k] != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(pad, physical[k]);
-        down[overlay::PhyTriggerL] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 12000;
-        down[overlay::PhyTriggerR] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 12000;
-        for (size_t a = 0; a < overlay::kControlCount; ++a)
-            if (down[std::clamp(g_pad_binding[a].load(), 0, int(overlay::kControlCount) - 1)]) p.buttons |= kActionBits[a];
-        auto axis = [&](SDL_GamepadAxis a, bool invert) {
-            int v = SDL_GetGamepadAxis(pad, a);
-            if (v > -7849 && v < 7849) return 0;
-            v = std::clamp(v, -kStickMax, kStickMax);
-            return invert ? -v : v;
-        };
-        p.lx = axis(SDL_GAMEPAD_AXIS_LEFTX, false);
-        p.ly = axis(SDL_GAMEPAD_AXIS_LEFTY, true);  // SDL: down is positive; Horizon: up is positive
-        p.rx = axis(SDL_GAMEPAD_AXIS_RIGHTX, false);
-        p.ry = axis(SDL_GAMEPAD_AXIS_RIGHTY, true);
-    }
-    gamepad_lock.unlock();
+    read_controller(0, p);
     // Keyboard: WASD / arrows move the stick; the 16 actions follow their bindings (defaults: Space A, Shift B, J X,
     // K Y, Q/E L/R, Z/C ZL/ZR, Enter +, Esc -, M/N stick clicks, arrows D-pad). Not while the menu has the keys.
     bool tab = false;

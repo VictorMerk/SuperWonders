@@ -39,6 +39,8 @@ struct PcMenuState {
     int language = 0;  // English, Italian, German, French
     int game_language = 0;  // Language returned to the game at startup: en-US, it, de, fr, pt-BR
     int memory_limit_gb = 8;  // Process private-commit guard; not a dedicated VRAM budget
+    bool keyboard_separate_player = false;
+    int button_icons = 0;
     int controller_preset = 0;  // Xbox / DualSense, Nintendo
     bool muted = false;
     bool fullscreen = false;
@@ -55,6 +57,9 @@ struct PcMenuState {
     int antialiasing = 0;      // overlay menu: 0 off, 1 FXAA
     int vsync = 1;             // overlay menu: 0 On, 1 Fast, 2 Adaptive, 3 Off
     int frame_cap = 60;        // 30, 60, 90, 120, or 144 FPS
+    bool shader_bundle = true;  // sequential shader cache, applies at startup
+    bool framegen = false;  // experimental optical-flow 2x presentation
+    bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16
     int rumble = 100;          // overlay menu: rumble strength, percent
     std::array<int, kPcControlCount> keyboard_bindings = {

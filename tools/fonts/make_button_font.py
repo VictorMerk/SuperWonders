@@ -165,7 +165,7 @@ class Builder:
 
     def build(self, kind, arg):
         """Returns (TTGlyph, advance)."""
-        tt = TTGlyphPen(None)
+        tt = TTGlyphPen(self.gs)
         pen = Cu2QuPen(tt, max_err=1.0, reverse_direction=False)
         S, cy, side = self.size, self.cy, self.side
         if kind == "circle_letter":

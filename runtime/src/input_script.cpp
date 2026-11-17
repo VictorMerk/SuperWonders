@@ -6,11 +6,14 @@
 // (a path instead is the frame recorder's, play.cpp): every press of a button, and the stick past half way as a direction, from the first
 // pad read. Played back through NX_INPUT_SCRIPT, a test run follows a real player's run instead of a blind script.
 #include <cstdio>
+#include <array>
+#include <mutex>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+#include <nx/runtime.h>
 
 #include "platform.h"
 
@@ -50,8 +53,17 @@ std::vector<Press> parse(const char* s) {
         p.at = std::atof(item.substr(0, a).c_str());
         p.hold = std::atof(item.substr(b + 1).c_str());
         std::string button = item.substr(a + 1, b - a - 1);
-        for (const Name& n : names)
-            if (button == n.name) p.bits = n.bits, p.lx = n.lx, p.ly = n.ly;
+        for (size_t from = 0; from < button.size();) {
+            const auto to = button.find('+',from);
+            const auto part = button.substr(from,to == std::string::npos ? to : to-from);
+            for (const Name& n : names) if (part == n.name) {
+                p.bits |= n.bits;
+                if (n.lx) p.lx = n.lx;
+                if (n.ly) p.ly = n.ly;
+            }
+            if (to == std::string::npos) break;
+            from = to+1;
+        }
         if (p.bits) v.push_back(p);
     }
     return v;
@@ -90,19 +102,64 @@ void record(const PadState& p, double t) {
 
 }  // namespace
 
-void input_script(PadState& p) {
-    static const char* env = std::getenv("NX_INPUT_SCRIPT");
+void input_script(PadState& p, uint32_t player) {
+    if (player >= 4) return;
+    struct State {
+        bool initialized = false, have_file = false;
+        const char* env = nullptr;
+        uint64_t start = 0, script_start = 0, next_poll = 0;
+        std::vector<Press> script;
+        std::string previous;
+    };
+    static std::array<State, 4> states;
+    static std::mutex lock;
+    std::lock_guard guard(lock);
+    auto& state = states[player];
+    if (!state.initialized) {
+        char name[32];
+        std::snprintf(name, sizeof name, "NX_INPUT_SCRIPT_P%u", player + 1);
+        state.env = std::getenv(player == 0 ? "NX_INPUT_SCRIPT" : name);
+        state.start = state.script_start = monotonic_ns();
+        state.initialized = true;
+        if (state.env) state.script = parse(state.env[0] == '@' ? "" : state.env);
+    }
+    const char* env = state.env;
     // Only NX_INPUT_RECORD=1: a path is the frame recorder's (play.cpp), which must not share its file.
     static const bool recording = [] {
         const char* e = std::getenv("NX_INPUT_RECORD");
         return e && std::strcmp(e, "1") == 0;
     }();
-    if (!env && !recording) return;
-    static const uint64_t start = monotonic_ns();
+    if (!env && !(player == 0 && recording)) return;
+    const uint64_t start = state.start;
     double t = double(monotonic_ns() - start) / 1e9;
-    if (recording) record(p, t);  // what the player did, before the script adds to it
+    if (player == 0 && recording) record(p, t);  // what the player did, before the script adds to it
     if (!env) return;
-    static const std::vector<Press> script = parse(env);
+    // @file: a developer can replace the short script while a GPU repro is running. Each
+    // changed file starts its own relative clock; recording keeps the session's original clock.
+    auto& script = state.script; auto& previous = state.previous;
+    auto& have_file = state.have_file;
+    auto& script_start = state.script_start; auto& next_poll = state.next_poll;
+    if (env[0] == '@') {
+        const uint64_t now = monotonic_ns();
+        if (now >= next_poll) {
+            next_poll = now + 250'000'000;
+            if (FILE* f = fopen_utf8(env + 1, "rb")) {
+                char bytes[65537];
+                const size_t n = std::fread(bytes, 1, sizeof bytes, f);
+                const bool ok = !std::ferror(f) && n < sizeof bytes;
+                std::fclose(f);
+                if (ok) {
+                    std::string text(bytes, n);
+                    if (!have_file || text != previous) {
+                        script = parse(text.c_str());
+                        previous = std::move(text), have_file = true, script_start = now;
+                        log("input: live script replaced (%zu presses)", script.size());
+                    }
+                }
+            }
+        }
+        t = double(now - script_start) / 1e9;
+    }
     for (const Press& s : script)
         if (t >= s.at && t < s.at + s.hold) {
             p.buttons |= s.bits;

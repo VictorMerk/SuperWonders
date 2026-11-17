@@ -43,6 +43,7 @@
 
 #include "kernel.h"
 #include "platform.h"
+#include "shader_bundle.h"
 #include "platform_android.h"
 
 #ifndef MAP_FIXED_NOREPLACE
@@ -111,7 +112,7 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 }
 
 void exit_thread() { pthread_exit(nullptr); }
-void exit_process(int code) { _exit(code); }
+void exit_process(int code) { nx::nvn::flush_shader_bundle(); std::fflush(nullptr); _exit(code); }
 
 void sleep_ns(int64_t ns) {
     timespec ts{time_t(ns / 1000000000), long(ns % 1000000000)};

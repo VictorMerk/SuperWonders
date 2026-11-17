@@ -9,6 +9,7 @@
 // run, so a script is cut into segments by anchors ("@course": the frame the player appears in a course): the frames
 // of a segment count from its anchor, and a segment only starts when its anchor happens.
 #include "play.h"
+#include "netplay_game.h"
 
 #include <algorithm>
 #include <atomic>
@@ -37,6 +38,8 @@ namespace nx::play {
 namespace {
 
 using namespace plat;
+std::atomic<uint64_t> g_netplay_hash{0};
+lan::PlayerState g_netplay_state;
 
 // ---- reading guest memory without faulting ------------------------------------------------------------------
 // The scanner and the probe read memory the game may decommit at any time: ReadProcessMemory / process_vm_readv on
@@ -328,6 +331,7 @@ Recorder g_rec;
 // Anything to do at all (otherwise the hooks return at once).
 bool active() {
     static const bool on = [] {
+        if (lan::active()) return true;
         for (const char* k : {"NX_INPUT_FRAMES", "NX_INPUT_REPLAY", "NX_PROBE", "NX_PROBE_SCAN", "NX_PLAY_SHOTS"})
             if (const char* e = std::getenv(k); e && *e) return true;
         const char* r = std::getenv("NX_INPUT_RECORD");
@@ -653,6 +657,9 @@ void fire(Event e) {
 
 }  // namespace
 
+uint64_t netplay_state_hash() { return g_netplay_hash.load(std::memory_order_acquire); }
+lan::PlayerState netplay_player_state() { std::lock_guard lock(g_lock); return g_netplay_state; }
+
 const char* take_shot() {
     return g_shot_pending.exchange(nullptr);
 }
@@ -773,6 +780,24 @@ void frame() {
         if (g_layout.vel) safe_read(player + g_layout.vel, vel, sizeof vel);
     }
     g_player_valid = valid;
+    uint64_t state_hash = 0;
+    if (valid && course_scene) {
+        state_hash = 0xcbf29ce484222325ull;
+        const auto add = [&](const void* source, size_t size) {
+            const auto* bytes = static_cast<const uint8_t*>(source);
+            for (size_t i=0;i<size;++i) state_hash=(state_hash^bytes[i])*0x100000001b3ull;
+        };
+        add(g_course.data(),g_course.size()); add(pos,sizeof pos); add(vel,sizeof vel);
+        if (!state_hash) state_hash = 1;
+    }
+    g_netplay_hash.store(state_hash,std::memory_order_release);
+    g_netplay_state={};
+    if(valid && course_scene) {
+        g_netplay_state.valid=true;
+        g_netplay_state.scene=0xcbf29ce484222325ull;
+        for(unsigned char byte:g_course) g_netplay_state.scene=(g_netplay_state.scene^byte)*0x100000001b3ull;
+        std::copy(pos,pos+3,g_netplay_state.position.begin());
+    }
     // NX_PROBE_OBJ=<file>: the player object's bytes around the probe's object, every frame (to find more fields:
     // docs/PLAY-TOOLS.md, "Finding the player"). Binary: u64 frame, then 0x3000 bytes from object - 0x1000.
     static FILE* obj = [] {
@@ -840,7 +865,7 @@ void frame() {
         const std::string ev = g_pending_events;
         std::string open = g_open;
         std::replace(open.begin(), open.end(), ',', ';');
-        std::fprintf(g_csv, "%lld,%.3f,%zu,%lld,%u,%llx,%d,%d,%s,%s,%llx,%.3f,%.3f,%.3f,%.4f,%.4f,%s,%u,%s,%s\n", (long long)fr,
+        std::fprintf(g_csv, "%lld,%.3f,%zu,%lld,%u,%llx,%d,%d,%s,%s,%llx,%.9g,%.9g,%.9g,%.9g,%.9g,%s,%u,%s,%s\n", (long long)fr,
                      double(monotonic_ns() - g_t0) / 1e6, g_seg, (long long)(fr - g_seg_start), g_pad_reads,
                      (unsigned long long)g_last_pad.buttons, g_last_pad.lx, g_last_pad.ly, g_scene.c_str(), g_course.c_str(),
                      (unsigned long long)(valid ? player : 0), pos[0], pos[1], pos[2], vel[0], vel[1], ev.c_str(), g_opens,

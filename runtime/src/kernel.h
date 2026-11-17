@@ -62,6 +62,7 @@ uint32_t handle_add(std::shared_ptr<KObject> o);
 std::shared_ptr<KObject> handle_get(uint32_t h);
 void handle_close(uint32_t h);
 void notify_all();
+void signal_event(const std::shared_ptr<EventState>& state);
 KThread* self_thread();
 void backtrace(CPU& c);
 uint64_t heap_size();  // svcSetHeapSize's current size

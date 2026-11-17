@@ -1,7 +1,6 @@
 // The overlay's look, shared by the menu, the metrics panel, notices and the shader-compile screen: colours, fonts,
 // style sizes and small animation helpers. Modelled on Savage Wind's menu (github.com/Revivedx/SavageWindRecomp,
-// MIT: runtime/ui/menu.mm style_init and load_fonts, runtime/ui/launcher.mm's progress card), with Wonder's purple in
-// place of its green. Everything here runs on the presenting thread, inside an ImGui frame, unless it says otherwise.
+// MIT: runtime/ui/menu.mm style_init and load_fonts, runtime/ui/launcher.mm's progress card), with a sunflower and mint palette. Everything here runs on the presenting thread, inside an ImGui frame, unless it says otherwise.
 #pragma once
 
 #include <cstdint>
@@ -10,7 +9,7 @@
 
 namespace nx::overlay::ui {
 
-// ---- palette: SuperWonders' own colours, bright like Wonder's menus (not Savage Wind's green and gold) ----
+// ---- palette ----
 struct Theme {
     const char* name;
     ImU32 accent;   // focus borders, the title, bars, the tab underline
@@ -21,7 +20,7 @@ struct Theme {
     ImU32 back_top, back_mid;  // the compile screen's backdrop
     ImU32 good, warn, bad;     // the metrics panel's numbers
 };
-const Theme& theme();  // "Wonder Night" (overlay_ui.cpp)
+const Theme& theme();  // "Flower Garden" (overlay_ui.cpp)
 
 // A colour with its alpha times `a` (0..1) and the style's Alpha (the menu's fade), for hand-drawn shapes.
 ImU32 fade(ImU32 c, float a = 1.0f);

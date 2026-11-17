@@ -1,7 +1,10 @@
 // The overlay's look (see overlay_ui.h). Style sizes follow Savage Wind's menu (runtime/ui/menu.mm style_init, MIT);
 // the colours are SuperWonders' own and the font is Nunito (SIL OFL 1.1, third_party/fonts/Nunito).
 #include "overlay/overlay_ui.h"
-
+#include "overlay/overlay.h"
+#include "button_font.h"
+#include <cstring>
+#include <vector>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -124,12 +127,11 @@ ImU32 mix(ImU32 a, ImU32 b, float t) {
 
 namespace {
 
-// "Wonder Night": hot pink and sky cyan on deep indigo, after Wonder's colourful menus. The panels are dark and
-// saturated so the text reads over any scene.
+// "Flower Garden": sunflower gold and mint over ink-green panels, with warm high-contrast text.
 const Theme kTheme = {
-    "Wonder Night", IM_COL32(255, 94, 168, 255), IM_COL32(86, 214, 255, 255), IM_COL32(250, 248, 255, 255),
-    IM_COL32(208, 202, 230, 255), IM_COL32(116, 108, 142, 255), IM_COL32(22, 18, 54, 242), IM_COL32(28, 22, 66, 250),
-    IM_COL32(10, 8, 30, 255), IM_COL32(44, 24, 88, 255), IM_COL32(110, 232, 140, 255), IM_COL32(255, 206, 72, 255),
+    "Flower Garden", IM_COL32(255, 204, 72, 255), IM_COL32(105, 222, 182, 255), IM_COL32(251, 247, 230, 255),
+    IM_COL32(200, 216, 210, 255), IM_COL32(130, 155, 150, 255), IM_COL32(16, 35, 38, 246), IM_COL32(23, 46, 48, 250),
+    IM_COL32(9, 24, 29, 255), IM_COL32(23, 54, 53, 255), IM_COL32(110, 232, 140, 255), IM_COL32(255, 206, 72, 255),
     IM_COL32(255, 96, 112, 255)};
 
 }  // namespace
@@ -400,7 +402,34 @@ float badge(ImDrawList* dl, ImVec2 pos, float h, const char* label, float alpha)
     return w;
 }
 
-void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* list, int n, float alpha) {
+void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* input, int n, float alpha) {
+    std::vector<std::string> labels(size_t(n), std::string{});
+    std::vector<Hint> resolved(input, input + n);
+    const auto settings = overlay::current_settings();
+    const auto kind = plat::controller_kind(0);
+    for (int i = 0; i < n; ++i) {
+        if (!input[i].badge) continue;
+        const char* original = input[i].badge;
+        if (!std::strcmp(original,"Menu")) {
+            labels[i]=kind==plat::ControllerKind::Keyboard ? "F1" :
+                std::string(physical_button_name(kind,controller_binding(settings,CtlMinus)))+" + "+
+                physical_button_name(kind,controller_binding(settings,CtlPlus));
+            resolved[i].badge=labels[i].c_str();
+            continue;
+        }
+        int action = -1;
+        if (!std::strcmp(original, "A")) action = CtlA;
+        if (!std::strcmp(original, "B")) action = CtlB;
+        if (!std::strcmp(original, "L")) action = CtlL;
+        if (!std::strcmp(original, "R")) action = CtlR;
+        if (!std::strcmp(original, "+")) action = CtlPlus;
+        if (action < 0) continue;
+        if (kind == plat::ControllerKind::Keyboard)
+            labels[i] = action == CtlPlus ? "F5" : action == CtlA ? "Enter" : action == CtlB ? "Esc" : action == CtlL ? "PgUp" : "PgDn";
+        else labels[i] = physical_button_name(kind, controller_binding(settings, size_t(action)));
+        resolved[i].badge = labels[i].c_str();
+    }
+    const Hint* list = resolved.data();
     ImFont* f = body();
     const float fs = h * 0.78f, gap = h * 0.35f, spacing = h * 1.1f;
     float total = 0;

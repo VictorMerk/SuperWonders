@@ -1,5 +1,6 @@
 // SuperWonders Launcher (launcher.h): state, the setup job, and the screen.
 #include "launcher/launcher.h"
+#include "launcher/save_backup.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +35,7 @@
 #include "overlay/overlay.h"
 #include "overlay/overlay_ui.h"
 #include "platform.h"
+#include "netplay_game.h"
 
 namespace fs = std::filesystem;
 
@@ -441,6 +444,12 @@ struct State {
     std::atomic<int> page{PagePlay};
     std::atomic<bool> play{false}, quit{false};
     bool config_mode = false;
+    bool cache_job = false;
+    bool lan_open = false, lan_request_open = false;
+    int lan_mode = 0, lan_port = 27846, lan_players = 2;
+    char lan_address[64] = "", lan_code[65] = "";
+    std::vector<std::string> lan_addresses;
+    std::string lan_error;
     Job job;
     std::mutex pick_lock;
     std::string picked_exefs, picked_romfs;  // from the folder picker's thread
@@ -461,6 +470,22 @@ struct State {
     std::string browse_listed;
 };
 State* g = nullptr;
+
+void start_shader_optimization() {
+    std::string self;
+#if defined(_WIN32)
+    std::wstring path(32768,L'\0');
+    const auto n = GetModuleFileNameW(nullptr,path.data(),DWORD(path.size()));
+    if (n && n < path.size()) { path.resize(n); self = str(fs::path(path)); }
+#else
+    std::error_code ec;
+    const auto path = fs::read_symlink("/proc/self/exe",ec);
+    if (!ec) self = str(path);
+#endif
+    if (self.empty()) { ui::notify("Could not locate the program to prepare the cache."); return; }
+    g->cache_job = true;
+    g->job.start({self,"--pack-shaders"});
+}
 
 void refresh_status() {
     g->status = check_status(g->kit);
@@ -551,7 +576,7 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     const float tfs = 46 * k, sfs = 26 * k;
     dl->AddRectFilled(p0, p1, th.card, 14 * k);
     dl->AddRect(p0, p1, ui::fade(th.accent, 0.55f), 14 * k, 0, 1.5f * k);
-    const char* title = "Setting up your game";
+    const char* title = g->cache_job ? "Optimizing shader loading" : "Setting up your game";
     const ImVec2 ts = tf->CalcTextSizeA(tfs, FLT_MAX, 0, title);
     dl->AddText(tf, tfs, {(p0.x + p1.x - ts.x) * 0.5f, p0.y + 36 * k}, th.accent, title);
     const ImVec2 ba(p0.x + 48 * k, p0.y + 36 * k + ts.y + 30 * k), bb(p1.x - 48 * k, ba.y + 24 * k);
@@ -562,10 +587,78 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
                   int(secs) % 60);
     const ImVec2 ls = bf->CalcTextSizeA(sfs, FLT_MAX, 0, line);
     dl->AddText(bf, sfs, {(p0.x + p1.x - ls.x) * 0.5f, bb.y + 26 * k}, th.text_dim, line);
-    const char* note = "This happens once, and again only after an update that needs it. It takes about 15 minutes.";
+    const char* note = "Preparation is saved for later launches. The time depends on your PC and the files that changed.";
     const ImVec2 ns = bf->CalcTextSizeA(sfs * 0.9f, FLT_MAX, 0, note);
     dl->AddText(bf, sfs * 0.9f, {(p0.x + p1.x - ns.x) * 0.5f, bb.y + 26 * k + ls.y + 16 * k},
                 ui::mix(th.text_off, th.text_dim, 0.4f), note);
+}
+
+void open_lan() {
+    g->lan_open=true; g->lan_request_open=true; g->lan_error.clear();
+    try {
+        g->lan_addresses=lan::local_addresses();
+        if(!g->lan_code[0]) {
+            if(std::getenv("NX_LAN_LOBBY_TOUR")) std::snprintf(g->lan_code,sizeof g->lan_code,"LOCALPREVIEW");
+            else {
+                std::random_device random;
+                std::snprintf(g->lan_code,sizeof g->lan_code,"%08x%08x",unsigned(random()),unsigned(random()));
+            }
+        }
+    } catch(const std::exception& e) { g->lan_error=e.what(); }
+}
+
+void draw_lan(float w,float h,float k) {
+    if(g->lan_request_open) { ImGui::OpenPopup("LAN co-op"); g->lan_request_open=false; }
+    ImGui::SetNextWindowSize({800*k,0},ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos({w*0.5f,h*0.5f},ImGuiCond_Appearing,{0.5f,0.5f});
+    ImGui::SetNextWindowSizeConstraints({800*k,0},{800*k,h-64*k});
+    if(!ImGui::BeginPopupModal("LAN co-op",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) return;
+    const auto state=lan::lobby_status();
+    const bool waiting=state.phase==lan::LobbyPhase::Preparing || state.phase==lan::LobbyPhase::Waiting;
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"Native co-op  |  Experimental");
+    ImGui::TextWrapped("Each PC runs Wonder and controls its own co-op character. Use the same game build and mods on every PC.");
+    ImGui::TextWrapped("Synchronization is still being tested. A detected position mismatch stops the session.");
+    ImGui::Separator();
+    ImGui::BeginDisabled(waiting || state.phase==lan::LobbyPhase::Ready);
+    ImGui::RadioButton("Host a room",&g->lan_mode,0); ImGui::SameLine();
+    ImGui::RadioButton("Join a room",&g->lan_mode,1);
+    if(g->lan_mode==0) {
+        std::string addresses;
+        for(const auto& ip:g->lan_addresses) { if(!addresses.empty()) addresses+=", "; addresses+=ip; }
+        ImGui::TextWrapped("Your LAN address: %s",addresses.empty()?"No private IPv4 address found":addresses.c_str());
+        ImGui::SetNextItemWidth(180*k); ImGui::InputInt("Players",&g->lan_players);
+        g->lan_players=std::clamp(g->lan_players,2,4);
+    } else {
+        ImGui::SetNextItemWidth(420*k); ImGui::InputText("Host address",g->lan_address,sizeof g->lan_address);
+    }
+    ImGui::SetNextItemWidth(270*k); ImGui::InputInt("Port",&g->lan_port);
+    g->lan_port=std::clamp(g->lan_port,1,65535);
+    ImGui::SetNextItemWidth(420*k); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
+    if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
+    ImGui::TextWrapped("Share the address, port and exact pairing code with the other players privately.");
+    ImGui::Separator();
+    ImGui::TextWrapped("Host progress is saved normally. Joining uses a separate session copy of the host's save and preserves your own save.");
+    ImGui::TextWrapped("The game starts when all players connect. Each PC uses its primary gamepad or keyboard. Choose the matching player count in Wonder.");
+    const bool valid=std::strlen(g->lan_code)>=4 && (g->lan_mode==0 || g->lan_address[0]);
+    if(!valid) ImGui::BeginDisabled();
+    if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
+        g->lan_error.clear();
+        lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
+            uint16_t(g->lan_port),uint8_t(g->lan_players)});
+    }
+    if(!valid) ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if(!state.detail.empty()) ImGui::TextWrapped("%s",state.detail.c_str());
+    if(!g->lan_error.empty()) ImGui::TextWrapped("%s",g->lan_error.c_str());
+    if(waiting) {
+        ImGui::TextWrapped("Waiting for up to three minutes. You can cancel and create another room.");
+        if(ImGui::Button("Cancel connection")) lan::cancel_lobby();
+    } else if(state.phase==lan::LobbyPhase::Ready) {
+        g->play=true; g->lan_open=false; ImGui::CloseCurrentPopup();
+    } else if(ImGui::Button("Back to launcher")) {
+        g->lan_open=false; ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void page_play() {
@@ -579,6 +672,19 @@ void page_play() {
         g->play = true;
     if (!ready && rows::action(lt(LtSetUpGameFiles), "", "Pick your ExeFS and RomFS folders and set the game up."))
         g->page = PageFiles, rows::focus_first();
+    rows::section("Before you play");
+    if (rows::action("Graphics & performance", "Resolution & scaling", "Choose a graphics preset, resolution, scaling and frame pacing."))
+        overlay::open_settings(0);
+    if (rows::action("Controller setup", "Bindings & rumble", "Configure your controller before starting. Settings are shared with the in-game F1 menu."))
+        overlay::open_settings(2);
+    if (rows::action("Performance overlay", "FPS & frame times", "Show FPS, 1% lows, game speed and the frame-time graph."))
+        overlay::open_settings(3);
+    rows::section("Play together");
+    if (rows::action("Local co-op", "2-4 players", "Connect independent controllers, or reserve the keyboard for player 1 in Controls. Choose the player count in the game for real local co-op characters."))
+        overlay::open_settings(2);
+    if (!ready) rows::disable_next();
+    if (rows::action("LAN co-op", "Host or join | Experimental", "Run a native Wonder instance on each PC, with independent co-op characters. Pair on a private network. Joining preserves your normal save. Synchronization is still being tested."))
+        open_lan();
     rows::section(lt(LtAbout));
     rows::action(lt(LtVersion), NX_VERSION_STRING,
                  "SuperWonders, a static recompilation of Super Mario Bros. Wonder (1.0.0) for PC. Nothing of the game "
@@ -732,11 +838,45 @@ void page_files() {
 
 void page_settings() {
     rows::begin("##settings", ImGui::GetContentRegionAvail().y);
-    rows::section(lt(LtSettings));
-    if (rows::action(lt(LtOpenSettings), "", "Display, graphics, audio, controls and the overlay: the same settings as "
-                                          "the in-game menu (F1, or Minus + Plus held). Saved in pc-settings.ini.",
-                     true, true))
-        overlay::toggle();
+    rows::section("Quick graphics presets");
+    const char* names[] = {"Performance", "Balanced", "Quality"};
+    const char* values[] = {"720p / 60 FPS", "900p / 60 FPS", "1080p / 60 FPS"};
+    const char* descs[] = {
+        "Lower internal resolution and compressed textures for older GPUs. FSR 1 scales the picture to your display. Changes apply when you start the game.",
+        "900p rendering, FSR 1, FXAA and 4x texture filtering. Keeps all draws visible. A 60 FPS target is a cap, not a performance guarantee.",
+        "1080p rendering, FXAA and 8x texture filtering. Needs more GPU memory and processing power. Changes apply when you start the game."};
+    for (int i = 0; i < 3; ++i)
+        if (rows::action(names[i], values[i], descs[i])) {
+            auto s = overlay::current_settings();
+            overlay::apply_graphics_profile(s, static_cast<overlay::GraphicsProfile>(i));
+            overlay::apply_settings(s);
+            ui::notify("Graphics preset saved. Start or restart the game to apply all changes.");
+        }
+    rows::section("Make it yours");
+    const char* sections[] = {"Video & graphics", "Audio & language", "Controllers & keyboard", "FPS & performance", "System & memory"};
+    const char* descriptions[] = {
+        "Resolution, fullscreen, upscaling, image quality and frame pacing.",
+        "Adjust the volume and choose the game's language.",
+        "Button layouts, controller bindings, keyboard bindings and vibration.",
+        "Choose exactly which performance numbers you want on screen.",
+        "Menu language, memory settings and texture memory options."};
+    for (int i = 0; i < 5; ++i)
+        if (rows::action(sections[i], "Open", descriptions[i])) overlay::open_settings(i);
+    rows::section("Loading");
+    if (rows::action("Optimize shader loading", "Prepare local cache", "Prepare or rebuild the cache used by Fast shader loading. This can reduce file-opening delays on future launches and uses extra disk space and memory. Original shaders and saves are preserved."))
+        start_shader_optimization();
+    rows::section("Your saves");
+    if (rows::action("Back up saves", "Create a copy", "Copy your saves into a new folder under data/backups. Existing backups and active saves are preserved. The completed backup folder opens when the copy finishes.")) {
+        std::string error;
+        const auto backup = backup_saves(u8(plat::data_root()), error);
+        if (backup.empty()) ui::notify(error.c_str());
+        else { ui::notify("Save backup created."); plat::open_folder(str(backup)); }
+    }
+    std::error_code backup_error;
+    if (!fs::is_directory(u8(plat::data_root()) / "backups", backup_error)) rows::disable_next();
+    if (rows::action("Open save backups", "Folder", "Browse your saved copies. Close the game before manually restoring a backup."))
+        plat::open_folder(plat::data_root() + "/backups");
+    rows::page_note("These are the same settings used in-game. Open them any time with F1 or Minus + Plus.");
     rows::end();
 }
 
@@ -785,10 +925,16 @@ void screen(float w, float h) {
     if (was_running && !g->job.running) {  // a setup finished
         refresh_status();
         const int r = g->job.result;
-        g->note = r == 0 ? "Your game is set up." : g->job.was_cancelled() ? "Setup cancelled." : "Setup failed.";
-        log("launcher: setup %s (exit %d)", r == 0 ? "finished" : "failed", r);
-        if (r == 0 && !g->config_mode) g->play = true;  // (a first setup goes straight into the game)
-        if (r == 0) g->page = PagePlay, rows::focus_first();
+        if (g->cache_job) {
+            g->note = r == 0 ? "Shader loading cache is ready." : g->job.was_cancelled() ? "Cache preparation cancelled." : "Cache preparation failed; original shaders are preserved.";
+            log("launcher: shader cache preparation exit %d",r);
+            g->cache_job = false;
+        } else {
+            g->note = r == 0 ? "Your game is set up." : g->job.was_cancelled() ? "Setup cancelled." : "Setup failed.";
+            log("launcher: setup %s (exit %d)", r == 0 ? "finished" : "failed", r);
+            if (r == 0 && !g->config_mode) g->play = true;
+            if (r == 0) g->page = PagePlay, rows::focus_first();
+        }
     }
     was_running = g->job.running;
 
@@ -951,10 +1097,12 @@ void screen(float w, float h) {
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 
+    draw_lan(w,h,k);
+
     // The controller, by the player's own bindings (the pad as the overlay saw it: NpadButton bits), and the keys.
     const uint64_t pad = overlay::pad_buttons(), pressed = pad & ~g->pad_before;
     g->pad_before = pad;
-    if (menu_open) return;
+    if (menu_open || g->lan_open) return;
     const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, false) ||
                        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, false) || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false);
     const bool back = (pressed & plat::kB) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
@@ -964,8 +1112,8 @@ void screen(float w, float h) {
         if (g->browse) browse_close();
         else g->focus_list = true;
     }
-    if (!busy && (pressed & (plat::kL | plat::kR))) {  // L / R: the page before / after
-        const int step = (pressed & plat::kR) ? 1 : kPages - 1;
+    if (!busy && ((pressed & (plat::kL | plat::kR)) || ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))) {  // L / R: the page before / after
+        const int step = ((pressed & plat::kR) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)) ? 1 : kPages - 1;
         g->page = (g->page + step) % kPages, g->browse = 0, g->focus_list = true, g->follow_hold = 3;
         log("launcher: page %s", kPageNames[g->page.load()]);
     }
@@ -991,6 +1139,7 @@ bool wanted(const std::vector<std::string>& args, bool& config_mode) {
         const char* e = std::getenv(n);
         return e && *e && std::strcmp(e, "0") != 0;
     };
+    if ((env_on("NX_LAUNCHER_TOUR") || env_on("NX_LAN_LOBBY_TOUR") || env_on("NX_LAN_LOBBY_AUTOSTART")) && env_on("NX_HEADLESS_PRESENT")) return true;
     if (env_on("NX_NO_LAUNCHER") || env_on("NX_HEADLESS") || env_on("NX_INPUT_SCRIPT") || env_on("NX_INPUT_REPLAY"))
         return config_mode && !env_on("NX_HEADLESS");
     return true;
@@ -1028,6 +1177,12 @@ void run() {
     g->kit = find_kit();
     g->config = load_config();
     g->config_mode = config_mode;
+    const auto arguments=plat::program_args();
+    if(std::find(arguments.begin(),arguments.end(),"--lan-ended")!=arguments.end()) {
+        std::ifstream note(u8(plat::data_root())/"lan-last-session.txt",std::ios::binary);
+        char text[2048]{}; note.read(text,sizeof(text)-1);
+        g->note=note.gcount()>0?std::string(text,size_t(note.gcount())):"The LAN session ended. You can reconnect from a new room.";
+    }
     refresh_status();
     updates_init(config_mode);
     // A regular launch always opens the launcher; RecompLauncher uses --play to bypass it.
@@ -1052,6 +1207,19 @@ void run() {
     else if (g->status.ready == Ready::Rebuild && folder_has(g->config.exefs, "main") &&
              folder_has(g->config.romfs, "Shader"))
         g->page = PageFiles, start_setup();
+    const bool lobby_tour=std::getenv("NX_LAN_LOBBY_TOUR")!=nullptr;
+    if(lobby_tour) open_lan();
+    // Repro hook: exercise the real asynchronous launcher-to-game path without
+    // desktop input. Normal launches configure these fields in the native popup.
+    if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART")) {
+        open_lan(); g->lan_mode=std::strcmp(mode,"host")?1:0;
+        if(const auto* code=std::getenv("NX_LAN_CODE")) std::snprintf(g->lan_code,sizeof g->lan_code,"%s",code);
+        const auto* address=std::getenv("NX_LAN_ADDRESS");
+        if(!address) address=g->lan_mode?"127.0.0.1":"0.0.0.0";
+        if(const auto* port=std::getenv("NX_LAN_PORT")) g->lan_port=std::clamp(std::atoi(port),1,65535);
+        if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
+        lan::start_lobby({g->lan_mode==0,address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players)});
+    }
     uint64_t frames = 0;
     test_pad_start();  // (NX_TEST_PAD: a scripted controller, launcher/test_pad.h)
     for (;;) {
@@ -1060,20 +1228,23 @@ void run() {
         plat::PadState pad{};
         plat::read_pad(pad);  // (feeds the overlay's controller navigation: overlay::filter_pad)
         if (tour) {
+            g->follow_hold = 2;  // the tour owns the page even while a sidebar item has keyboard focus
             const int step = int(frames / uint64_t(tour));
             if (step < kPages - 1) g->page = step;  // (not Quit)
-            if (step == kPages - 1 && !overlay::is_open()) g->page = PageSettings, overlay::toggle();
-            if (step == kPages) {  // the setup card at 62%, its sheen sweeping
+            if (step >= kPages - 1 && step < kPages - 1 + 5)
+                g->page = PageSettings, overlay::open_settings(step - (kPages - 1));
+            if (step == kPages - 1 + 5) {  // the setup card at 62%, its sheen sweeping
                 if (overlay::is_open()) overlay::toggle();
                 g->page = PageFiles, g->demo_progress = true, g->job.progress = 0.62f;
                 if (!g->job.started_ns) g->job.started_ns = plat::monotonic_ns();
                 std::lock_guard lk(g->job.lock);
                 g->job.what = "Translating the shaders";
             }
-            if (step > kPages && !updates_busy()) plat::exit_process(0);  // (an update finishes first)
+            if (step > kPages - 1 + 5 && !updates_busy()) plat::exit_process(0);  // (an update finishes first)
         }
         if (!nvn::present_ui_frame()) plat::sleep_ns(16'000'000);
         frames++;
+        if(lobby_tour && frames>=120) plat::exit_process(0);
         if (g->quit) {
             log("launcher: quit");
             plat::exit_process(0);
@@ -1086,7 +1257,7 @@ void run() {
                 DWORD n = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
                 if (n && n < self.size()) {
                     self.resize(n);
-                    if (_wcsicmp(fs::path(self).filename().c_str(), L"wonder-launcher.exe") == 0) {
+                    if (!lan::active() && _wcsicmp(fs::path(self).filename().c_str(), L"wonder-launcher.exe") == 0) {
                         const std::wstring game = (fs::path(self).parent_path() / L"wonder.exe").wstring();
                         std::wstring command = L"\"" + game + L"\" --play";
                         STARTUPINFOW si{};

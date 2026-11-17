@@ -69,6 +69,12 @@ void notify_all() {
     for (KThread* t : g_sync_waiters) t->cv.notify_one();
 }
 
+void signal_event(const std::shared_ptr<EventState>& state) {
+    std::lock_guard lk(g_k);
+    state->signaled = true;
+    notify_all();
+}
+
 KThread* self_thread() { return t_self; }
 
 uint64_t heap_size() { return g_heap_size.load(std::memory_order_relaxed); }

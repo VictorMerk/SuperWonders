@@ -86,6 +86,7 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "upscaler=%d", &v) == 1) s.upscaler = std::clamp(v, 0, 1);
         else if (std::sscanf(l, "preserve_aspect=%d", &v) == 1) s.preserve_aspect = v != 0;
         else if (std::sscanf(l, "texture_cache=%d", &v) == 1) s.texture_cache = v != 0;
+        else if (std::sscanf(l, "preload_music=%d", &v) == 1) s.preload_music = v != 0;
         else if (std::sscanf(l, "fsr_sharpness=%d", &v) == 1) s.fsr_sharpness = std::clamp(v, 0, 200);
         else if (std::sscanf(l, "antialiasing=%d", &v) == 1) s.antialiasing = std::clamp(v, 0, 1);
         else if (std::sscanf(l, "anisotropy=%d", &v) == 1) s.anisotropy = std::clamp(v, 0, 16);
@@ -134,7 +135,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\noverlay_position=" << s.overlay_position << "\ncontroller_custom_mask=" << s.controller_custom_mask
       << "\nupscaler=" << s.upscaler << "\nfsr_sharpness=" << s.fsr_sharpness << "\nantialiasing=" << s.antialiasing
       << "\nanisotropy=" << s.anisotropy << "\nrumble=" << s.rumble << "\nvsync=" << s.vsync
-      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\nframegen_multiplier=" << s.framegen_multiplier << "\nrender_ahead=" << s.render_ahead << "\npreserve_aspect=" << s.preserve_aspect << "\ntexture_cache=" << s.texture_cache << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
+      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\nframegen_multiplier=" << s.framegen_multiplier << "\nrender_ahead=" << s.render_ahead << "\npreserve_aspect=" << s.preserve_aspect << "\ntexture_cache=" << s.texture_cache << "\npreload_music=" << s.preload_music << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kControlCount; ++i)
         f << "keyboard_" << i << '=' << s.keyboard_bindings[i] << '\n'
           << "controller_" << i << '=' << s.controller_bindings[i] << '\n';

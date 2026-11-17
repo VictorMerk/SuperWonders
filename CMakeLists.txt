@@ -132,6 +132,11 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(texture_cache_test tests/texture_cache_test.cpp runtime/src/nvn/texture_cache.cpp)
     target_include_directories(texture_cache_test PRIVATE runtime/src/nvn)
     add_test(NAME texture_cache COMMAND texture_cache_test)
+    find_package(Threads REQUIRED)
+    add_executable(stream_cache_test tests/stream_cache_test.cpp runtime/src/stream_cache.cpp)
+    target_include_directories(stream_cache_test PRIVATE runtime/src)
+    target_link_libraries(stream_cache_test PRIVATE Threads::Threads)
+    add_test(NAME stream_cache COMMAND stream_cache_test)
     if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
         add_executable(netplay_wire_test tests/netplay_wire_test.cpp runtime/src/netplay_wire.cpp runtime/src/launcher/update_crypto.c)
         target_include_directories(netplay_wire_test PRIVATE runtime/src)
@@ -312,6 +317,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/svc_time.cpp
     runtime/src/svc_process.cpp
     runtime/src/hle_fs.cpp
+    runtime/src/stream_cache.cpp
     runtime/src/svc_account.cpp
     runtime/src/svc_friends.cpp
     runtime/src/hle_ro.cpp

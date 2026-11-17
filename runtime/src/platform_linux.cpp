@@ -355,8 +355,9 @@ void SDLCALL audio_cb(void*, SDL_AudioStream* s, int additional, int) {
 
 bool audio_open(AudioDone done) {
     g_done = done;
-    // Headless test runs (and NX_MUTE=1) are silent: no device, the callers pace themselves with a timer.
-    if (headless() || std::getenv("NX_MUTE")) return false;
+    // Headless runs stay silent unless NX_HEADLESS_AUDIO=1 explicitly exercises the real device. NX_MUTE wins.
+    const char* headless_audio = std::getenv("NX_HEADLESS_AUDIO");
+    if ((headless() && (!headless_audio || headless_audio[0] != '1')) || std::getenv("NX_MUTE")) return false;
     SDL_AudioSpec spec{SDL_AUDIO_S16LE, 2, 48000};
     g_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_cb, nullptr);
     if (!g_stream) {

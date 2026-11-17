@@ -662,6 +662,9 @@ void audio(MenuContext& c, const Labels& l) {
     rows::section(l.audio);
     if (rows::integer(l.volume, &s.volume, 0, 200, 5, kDefaults.volume, "%d%%", translated_desc(desc::volume, lang))) settings_changed(true);
     if (rows::toggle(l.mute, &s.muted, kDefaults.muted, translated_desc(desc::mute, lang))) settings_changed(true);
+    if (rows::toggle(lang == 2 ? "Audio-Vorladung (experimentell)" : "Audio prefetch (experimental)", &s.preload_music, kDefaults.preload_music,
+        lang == 2 ? "Optional: kleinere Musik- und Umgebungsstreams im Hintergrund in bis zu 64 MiB RAM vorladen (8 MiB je Datei). Die Vergleichstests zeigten keine verlässliche Verbesserung der Bildzeiten; deshalb standardmäßig aus. Klang und Format bleiben erhalten, ohne Datenträger-Cache. Normales Streaming bleibt aktiv, bis die Daten bereit sind. Gilt für zukünftige Audio-Ladevorgänge." :
+        "Optionally prefetch smaller music and ambience streams using up to 64 MiB RAM (8 MiB per file). Comparison tests did not show a consistent frame-time improvement, so this defaults off. Audio bytes and format are preserved without a disk cache. Normal streaming remains active until ready. Applies to future audio loads.")) settings_changed(true);
     rows::section(l.game_language);
     if (rows::choice(l.game_language, &s.game_language, kGameLanguageNames, int(std::size(kGameLanguageNames)),
                      kDefaults.game_language, translated_desc(desc::game_language, lang)))

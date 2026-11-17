@@ -63,6 +63,7 @@ struct PcMenuState {
     int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
     bool preserve_aspect = true;
     bool texture_cache = true;
+    bool preload_music = false;
     int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
     bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16

@@ -19,6 +19,7 @@
 #include "overlay/overlay.h"
 #include "overlay/settings.h"
 #include "platform.h"
+#include "stream_cache.h"
 #include "controllers.h"
 #include "platform_linux.h"
 #include "svc_am.h"
@@ -91,6 +92,7 @@ void apply_settings(const overlay::Settings& s, bool persist) {
     nvn::set_render_ahead(s.render_ahead);
     nvn::set_preserve_aspect(s.preserve_aspect);
     nvn::set_texture_cache(s.texture_cache);
+    streaming::set_enabled(s.preload_music);
     g_rumble_strength = std::clamp(s.rumble, 0, 100);
     if (s.fullscreen != before.fullscreen || s.width != before.width || s.height != before.height ||
         s.always_on_top != before.always_on_top)

@@ -48,6 +48,7 @@
 #include "svc_am.h"
 #include "platform.h"
 #include "shader_bundle.h"
+#include "stream_cache.h"
 #include "controllers.h"
 
 namespace nx {
@@ -263,6 +264,7 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.render_ahead = s.render_ahead;
     o.preserve_aspect = s.preserve_aspect;
     o.texture_cache = s.texture_cache;
+    o.preload_music = s.preload_music;
     o.pipeline_skip_draws = s.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         o.keyboard_bindings[i] = s.keyboard_bindings[i], o.controller_bindings[i] = s.controller_bindings[i];
@@ -288,6 +290,7 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.render_ahead = o.render_ahead;
     s.preserve_aspect = o.preserve_aspect;
     s.texture_cache = o.texture_cache;
+    s.preload_music = o.preload_music;
     s.pipeline_skip_draws = o.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         s.keyboard_bindings[i] = o.keyboard_bindings[i], s.controller_bindings[i] = o.controller_bindings[i];
@@ -398,6 +401,7 @@ static void save_pc_settings() {
          << "\nrender_ahead=" << g_pc_settings.render_ahead
          << "\npreserve_aspect=" << g_pc_settings.preserve_aspect
          << "\ntexture_cache=" << g_pc_settings.texture_cache
+         << "\npreload_music=" << g_pc_settings.preload_music
          << "\npipeline_skip_draws=" << g_pc_settings.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kPcControlCount; ++i)
         file << "keyboard_" << i << '=' << g_pc_settings.keyboard_bindings[i] << '\n'
@@ -460,6 +464,8 @@ static void load_pc_settings() {
             g_pc_settings.preserve_aspect = value != 0;
         else if (std::sscanf(line.c_str(), "texture_cache=%d", &value) == 1)
             g_pc_settings.texture_cache = value != 0;
+        else if (std::sscanf(line.c_str(), "preload_music=%d", &value) == 1)
+            g_pc_settings.preload_music = value != 0;
         else if (std::sscanf(line.c_str(), "framegen_multiplier=%d", &value) == 1)
             g_pc_settings.framegen_multiplier = std::clamp(value, 2, 8);
         else if (std::sscanf(line.c_str(), "pipeline_skip_draws=%d", &value) == 1)
@@ -495,6 +501,7 @@ static void load_pc_settings() {
     nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     nx::nvn::set_preserve_aspect(g_pc_settings.preserve_aspect);
     nx::nvn::set_texture_cache(g_pc_settings.texture_cache);
+    nx::streaming::set_enabled(g_pc_settings.preload_music);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     nx::set_native_render_width(g_pc_settings.fullscreen ? uint32_t(GetSystemMetrics(SM_CXSCREEN))
@@ -726,6 +733,7 @@ static void apply_pc_menu(const PcMenuState& state, bool persist) {
     nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     nx::nvn::set_preserve_aspect(g_pc_settings.preserve_aspect);
     nx::nvn::set_texture_cache(g_pc_settings.texture_cache);
+    nx::streaming::set_enabled(g_pc_settings.preload_music);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     if (g_fullscreen != g_pc_settings.fullscreen) toggle_fullscreen(g_window);
@@ -1083,8 +1091,9 @@ Voice g_callback;
 
 bool audio_open(AudioDone done) {
     g_done = done;
-    // Headless test runs (and NX_MUTE=1) are silent: no device, the callers pace themselves with a timer.
-    if (headless() || std::getenv("NX_MUTE")) return false;
+    // Headless runs stay silent unless NX_HEADLESS_AUDIO=1 explicitly exercises the real device. NX_MUTE wins.
+    const char* headless_audio = std::getenv("NX_HEADLESS_AUDIO");
+    if ((headless() && (!headless_audio || headless_audio[0] != '1')) || std::getenv("NX_MUTE")) return false;
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(XAudio2Create(&g_xa, 0, XAUDIO2_DEFAULT_PROCESSOR))) return false;
     IXAudio2MasteringVoice* master = nullptr;
@@ -1100,6 +1109,7 @@ bool audio_open(AudioDone done) {
     wf.nAvgBytesPerSec = 48000 * 4;
     if (FAILED(g_xa->CreateSourceVoice(&g_voice, &wf, 0, 2.0f, &g_callback))) return false;
     g_voice->Start();
+    log("audio: XAudio2 output active (stereo 48 kHz)%s", headless() ? "; explicit headless audio test" : "");
     return true;
 }
 

@@ -2,6 +2,7 @@
 #include "launcher/launcher.h"
 #include "launcher/save_backup.h"
 #include "launcher/mod_catalog.h"
+#include "launcher/game_source.h"
 
 #include <algorithm>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <mutex>
 #include <random>
 #include <string>
@@ -124,6 +126,16 @@ Kit find_kit() {
         "python3";
 #endif
     return k;
+}
+
+const char* setup_tools_issue(const Kit& kit) {
+    if (kit.script.empty())
+        return "This is a runtime update, without the tools for a first build. Extract the complete setup package, "
+               "keeping game-build beside wonder-launcher.exe. An already prepared installation can still play.";
+    if (!file(u8(kit.script)) || kit.python.empty() || (u8(kit.python).is_absolute() && !file(u8(kit.python))))
+        return "The setup tools are incomplete. Extract the entire setup package again, keeping game-build, its "
+               "Python and both EXEs together.";
+    return nullptr;
 }
 
 // ---- is the game set up? ----
@@ -440,7 +452,11 @@ struct State {
     std::string lan_error;
     Job job;
     std::mutex pick_lock;
-    std::string picked_exefs, picked_romfs;  // from the folder picker's thread
+    std::string picked_source;
+    int picked_kind = 0, finding_kind = 0;
+    std::future<source::Found> finding;
+    source::Found found;
+    bool exefs_valid = false, romfs_valid = false;
     uint64_t shown_ns = 0;
     std::string note;  // a line under the status (an error of the folder picker, a finished setup...)
     bool demo_progress = false;  // NX_LAUNCHER_TOUR's last step: the setup card, not running anything
@@ -508,9 +524,27 @@ bool folder_has(const std::string& dir, const char* name) {
     return !dir.empty() && fs::exists(u8(dir) / name, ec);
 }
 
+void validate_sources() {
+    g->exefs_valid = !g->config.exefs.empty() && source::exefs_ok(u8(g->config.exefs));
+    g->romfs_valid = !g->config.romfs.empty() && source::romfs_ok(u8(g->config.romfs));
+}
+
+void find_sources(std::string folder, int kind) {
+    if (folder.empty() || g->finding.valid()) return;
+    g->finding_kind = kind;
+    g->note = "Looking for main + sdk and Shader/*.zs inside the selected folder...";
+    g->finding = std::async(std::launch::async, [folder] { return source::discover(u8(folder)); });
+}
+
 void start_setup() {
-    if (g->kit.script.empty()) {
-        g->note = "This build of SuperWonders has no game-build folder, so it can't set the game up.";
+    if (const auto* issue = setup_tools_issue(g->kit)) {
+        g->note = issue;
+        return;
+    }
+    validate_sources();
+    if (!g->exefs_valid || !g->romfs_valid) {
+        g->note = !g->exefs_valid ? "ExeFS needs the files main and sdk. Choose your extracted game folder."
+                                 : "RomFS needs .zs files directly inside Shader. Choose the extracted folder containing Shader; playing first is not required.";
         return;
     }
     save_config(g->config);
@@ -694,7 +728,7 @@ std::string home_folder() {
 }
 
 void browse_open(int which) {
-    const std::string& now = which == 1 ? g->config.exefs : g->config.romfs;
+    const std::string& now = which == 2 ? g->config.romfs : g->config.exefs;
     std::error_code ec;
     std::string start = !now.empty() && fs::is_directory(u8(now), ec) ? str(u8(now).parent_path()) : home_folder();
     g->browse = which, g->browse_dir = start, g->browse_listed = "\x01";
@@ -745,17 +779,14 @@ void page_browse() {
     const bool exefs = g->browse == 1;
     const std::string& dir = g->browse_dir;
     rows::begin("##browse", ImGui::GetContentRegionAvail().y);
-    rows::section(exefs ? lt(LtChooseExeFS) : lt(LtChooseRomFS));
-    const bool ok = exefs ? folder_has(dir, "main") && folder_has(dir, "sdk") : folder_has(dir, "Shader");
+    rows::section(g->browse == 3 ? "Choose your extracted game folder" : exefs ? lt(LtChooseExeFS) : lt(LtChooseRomFS));
+    const bool ok = !dir.empty();
     const std::string where = dir.empty() ? std::string("This PC") : fit_path(dir, lt(LtUseFolder));
-    const std::string use_desc = std::string(ok ? "Use this folder." : exefs ? "Not an ExeFS folder: it has no main and sdk."
-                                                                             : "Not a RomFS folder: it has no Shader folder.") +
+    const std::string use_desc = std::string("Search this folder and its subfolders for the extracted game files. You can select their parent folder.") +
                                  (dir.empty() ? std::string() : "\n\n" + dir);
     if (!ok) rows::disable_next();
     if (rows::action(lt(LtUseFolder), where.c_str(), use_desc.c_str(), true, ok)) {
-        (exefs ? g->config.exefs : g->config.romfs) = dir;
-        save_config(g->config);
-        log("launcher: %s folder %s", exefs ? "ExeFS" : "RomFS", dir.c_str());
+        find_sources(dir, g->browse);
         browse_close();
         rows::end();
         return;
@@ -779,9 +810,9 @@ void page_browse() {
     rows::section(lt(LtOtherWays));
     if (rows::action(lt(LtSystemPicker), "", "Choose the folder in the system's own window (a mouse helps).",
                      true))
-        plat::pick_folder(exefs ? "Your ExeFS folder (main, sdk)" : "Your RomFS folder", dir, [exefs](std::string p) {
+        plat::pick_folder("Your extracted game folder (ExeFS and RomFS inside)", dir, [kind=g->browse](std::string p) {
             std::lock_guard lk(g->pick_lock);
-            (exefs ? g->picked_exefs : g->picked_romfs) = p;
+            g->picked_source = p; g->picked_kind = kind;
         });
     if (rows::action(lt(LtCancel), "", "Back, without changing the folder (B).", true)) browse_close();
     rows::end();
@@ -790,16 +821,50 @@ void page_browse() {
 void page_files() {
     if (g->browse) return page_browse();
     rows::begin("##files", ImGui::GetContentRegionAvail().y);
+    const char* kit_issue = setup_tools_issue(g->kit);
+    if (kit_issue) rows::page_note(kit_issue);
+    rows::section("Easy setup");
+    const bool finding = g->finding.valid();
+    if (finding) rows::disable_next();
+    if (rows::action("Choose game folder", finding ? "Looking for files..." : "Find ExeFS + RomFS",
+                     "Choose the extracted folder containing ExeFS and RomFS. Nested folders are detected automatically. This reads your files without moving or changing them.", true, true))
+        plat::pick_folder("Choose your extracted Wonder folder", home_folder(), [](std::string p) {
+            std::lock_guard lk(g->pick_lock); g->picked_source = p; g->picked_kind = 3;
+        });
+    if (finding) rows::disable_next();
+    if (rows::action("Browse with controller", "", "Find the same folder using the controller-friendly folder list.")) browse_open(3);
+    for (int kind : {1, 2}) {
+        const auto& choices = kind == 1 ? g->found.exefs : g->found.romfs;
+        if (choices.empty() || (choices.size() < 2 && !g->found.limited)) continue;
+        rows::section(kind == 1 ? "Multiple ExeFS folders: choose one" : "Multiple RomFS folders: choose one");
+        for (const auto& path : choices) {
+            ImGui::PushID(path.c_str());
+            const std::string label = fit_path(path, "Select");
+            const std::string help = "Choose the matching base game 1.0.0 folders.\n\n" + path;
+            if (rows::action(label.c_str(), "Select", help.c_str())) {
+                (kind == 1 ? g->config.exefs : g->config.romfs) = path;
+                validate_sources(); save_config(g->config);
+            }
+            ImGui::PopID();
+        }
+    }
     rows::section(lt(LtYourGameFiles));
     const std::string exefs = g->config.exefs.empty() ? lt(LtChoose) : fit_path(g->config.exefs, lt(LtExeFS));
     const std::string exefs_desc =
         "The ExeFS folder of your own copy of the game (version 1.0.0). It holds main and sdk." +
         (g->config.exefs.empty() ? std::string() : "\n\nNow: " + g->config.exefs);
+    if (finding) rows::disable_next();
     if (rows::action(lt(LtExeFS), exefs.c_str(), exefs_desc.c_str(), true)) browse_open(1);
     const std::string romfs = g->config.romfs.empty() ? lt(LtChoose) : fit_path(g->config.romfs, lt(LtRomFSFolder));
     const std::string romfs_desc = "The RomFS folder of your own copy of the game." +
                                    (g->config.romfs.empty() ? std::string() : "\n\nNow: " + g->config.romfs);
+    if (finding) rows::disable_next();
     if (rows::action(lt(LtRomFSFolder), romfs.c_str(), romfs_desc.c_str(), true)) browse_open(2);
+    const std::string checked = std::string("ExeFS: ") + (g->exefs_valid ? "main + sdk found" : "main + sdk needed") +
+        "\nRomFS: " + (g->romfs_valid ? "Shader/*.zs found" : "Shader/*.zs needed") +
+        "\n\nThe build tools verify the game version during setup. Extracting requires no prior game launch.";
+    rows::action("File check", g->exefs_valid && g->romfs_valid ? "Ready to set up" : g->exefs_valid ? "RomFS needed" : g->romfs_valid ? "ExeFS needed" : "Files needed",
+        checked.c_str(), true);
     const char* const modes[] = {lt(LtUseInPlace), lt(LtCopyIt)};
     // Both RomFS rows share a translated label, so give the storage mode its own ID scope.
     ImGui::PushID("romfs-storage-mode");
@@ -808,16 +873,28 @@ void page_files() {
                  "yours. Use it in place: no copy, but SuperWonders needs your RomFS folder where it is.");
     ImGui::PopID();
     rows::section(lt(LtSetUp));
-    const bool exefs_ok = folder_has(g->config.exefs, "main") && folder_has(g->config.exefs, "sdk");
-    const bool romfs_ok = folder_has(g->config.romfs, "Shader");
-    const char* why = !exefs_ok ? "Choose your ExeFS folder first (it holds main and sdk)."
-                      : !romfs_ok ? "Choose your RomFS folder first (it holds Shader, Layout, Effect...)."
+    const bool exefs_ok = g->exefs_valid;
+    const bool romfs_ok = g->romfs_valid;
+    const char* why = kit_issue ? kit_issue : !exefs_ok ? "Choose your ExeFS folder first (it holds main and sdk)."
+                      : !romfs_ok ? "RomFS needs Shader/*.zs. Choose the folder containing Shader, or its parent extraction folder."
                                   : "Reads your game files and builds the game code and the shaders from them, in this "
                                     "PC's SuperWonders data folder. Steps that are already done are skipped.";
-    if (!exefs_ok || !romfs_ok) rows::disable_next();
+    if (finding || kit_issue || !exefs_ok || !romfs_ok) rows::disable_next();
     if (rows::action(g->status.ready == Ready::Yes ? lt(LtSetUpAgain) : lt(LtSetUpGameFiles), "", why, true,
-                     exefs_ok && romfs_ok && g->status.ready != Ready::Yes))
+                     !kit_issue && exefs_ok && romfs_ok && g->status.ready != Ready::Yes))
         start_setup();
+    if (kit_issue) {
+        if (rows::action("Get complete setup package", "Open release page",
+                         "Open the compatible v0.4.6 release page. Download and extract the complete package for your "
+                         "platform. Keep this fork's runtime update for the prepared installation afterward.", true))
+            plat::open_folder("https://github.com/vfjoo888/SuperWonders/releases/tag/v0.4.6");
+        if (rows::action("Recheck setup tools", "",
+                         "After restoring game-build beside the launcher, check again without restarting.", true)) {
+            g->kit = find_kit();
+            const char* remaining = setup_tools_issue(g->kit);
+            g->note = remaining ? remaining : "Setup tools found. Choose your ExeFS and RomFS folders to continue.";
+        }
+    }
     if (rows::action(lt(LtOpenDataFolder), "", "Where SuperWonders keeps your saves, settings and the game it built.",
                      true))
         plat::open_folder(plat::data_root());
@@ -924,9 +1001,22 @@ void screen(float w, float h) {
     const ui::Theme& th = ui::theme();
     {
         std::lock_guard lk(g->pick_lock);  // folders the picker returned
-        if (!g->picked_exefs.empty() || !g->picked_romfs.empty()) g->browse = 0;  // (the system's picker answered)
-        if (!g->picked_exefs.empty()) g->config.exefs = g->picked_exefs, g->picked_exefs.clear(), save_config(g->config);
-        if (!g->picked_romfs.empty()) g->config.romfs = g->picked_romfs, g->picked_romfs.clear(), save_config(g->config);
+        if (!g->picked_source.empty()) {
+            g->browse = 0;
+            find_sources(std::move(g->picked_source), g->picked_kind);
+            g->picked_source.clear();
+        }
+    }
+    if (g->finding.valid() && g->finding.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try {
+            g->found = g->finding.get();
+            if (g->finding_kind != 2) g->config.exefs = !g->found.limited && g->found.exefs.size() == 1 ? g->found.exefs[0] : "";
+            if (g->finding_kind != 1) g->config.romfs = !g->found.limited && g->found.romfs.size() == 1 ? g->found.romfs[0] : "";
+            validate_sources(); save_config(g->config);
+            g->note = g->exefs_valid && g->romfs_valid ? "Game folders found. Select Set up game files to continue."
+                : "Some files are missing, or several extractions were found. Choose the matching folders below. RomFS needs Shader/*.zs.";
+            if (g->found.limited) g->note += " Search limit reached; choose a folder closer to your extraction.";
+        } catch (...) { g->note = "Could not read that folder. Choose a local extracted game folder and try again."; }
     }
     static bool was_running = false;
     if (was_running && !g->job.running) {  // a setup finished
@@ -1183,6 +1273,18 @@ void run() {
     g = &state;
     g->kit = find_kit();
     g->config = load_config();
+    // A portable layout can keep its own extracted folders next to the launcher.
+    // Only the explicit layout is considered automatically; no background drive scan.
+    if (g->config.exefs.empty() && g->config.romfs.empty()) {
+        const auto here = u8(program_dir());
+        const auto exe = source::exefs_ok(here / "exefs") ? here / "exefs" : here;
+        if (source::exefs_ok(exe) && source::romfs_ok(here / "romfs")) {
+            g->config.exefs = str(exe); g->config.romfs = str(here / "romfs");
+            save_config(g->config);
+            g->note = "Found your extracted game folders beside the launcher. Select Set up game files to continue.";
+        }
+    }
+    validate_sources();
     g->config_mode = config_mode;
     const auto arguments=plat::program_args();
     if(std::find(arguments.begin(),arguments.end(),"--lan-ended")!=arguments.end()) {

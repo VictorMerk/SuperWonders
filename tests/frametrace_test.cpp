@@ -1,4 +1,5 @@
 #include "frametrace.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -31,6 +32,10 @@ int main() {
     check(input_sample_time(7)==100000000,"repeat HID reads retain the first sample");
     now = 103000000; input_sample(8);
     check(input_sample_time(7)==100000000 && input_sample_time(9)==0,"frame IDs remain distinct");
+    now = 104000000;
+    { CallTimer timer(TimedCall::Logging); now = 106000000; }
+    { CallTimer timer(TimedCall::Logging); now = 107000000; }
+    { CallTimer timer(TimedCall::InputPoll); now = 109000000; }
     now = 110000000;
     host_present(1000,2000,3000,4000,input_sample_time(7),true);
     now = 115000000;
@@ -43,10 +48,15 @@ int main() {
     check(header[header.size()-2]=="sample_to_present_ms","latency column is named as a proxy");
     check(std::fgets(line,sizeof line,captured)!=nullptr,"original picture row");
     auto row = columns(line);
+    auto value = [&](const char* name) { auto at=std::find(header.begin(),header.end(),name); check(at!=header.end(),"diagnostic column exists"); return std::stod(row[size_t(at-header.begin())]); };
+    check(value("log_ms")==3 && value("log_max_ms")==2 && value("input_poll_ms")==2 && value("input_poll_max_ms")==2,
+          "completed calls retain distinct summed and longest durations");
     check(row.size()==header.size() && std::stod(row[row.size()-2])==10.0 && std::stoi(row.back())==1,
           "original picture retains the matching 10 ms sample");
     check(std::fgets(line,sizeof line,captured)!=nullptr,"generated picture row");
     row = columns(line);
+    check(value("log_ms")==0 && value("log_max_ms")==0 && value("input_poll_ms")==0 && value("input_poll_max_ms")==0,
+          "new presentation intervals do not inherit old call maxima");
     check(row.size()==header.size() && std::stod(row[row.size()-2])==12.0 && std::stoi(row.back())==0,
           "generated picture is explicitly labelled");
     input_sample(7+128);

@@ -48,6 +48,7 @@ thread_local const char* t_missing_name = nullptr;
 // ---- logging --------------------------------------------------------------------------------------------------
 
 void log(const char* fmt, ...) {
+    ft::CallTimer timing(ft::TimedCall::Logging);
     char buf[2048];
     va_list ap;
     va_start(ap, fmt);

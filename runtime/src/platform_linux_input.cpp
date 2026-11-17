@@ -17,6 +17,7 @@
 
 #include "nvn/nvn_vk.h"
 #include "overlay/overlay.h"
+#include "frametrace.h"
 #include "overlay/settings.h"
 #include "platform.h"
 #include "stream_cache.h"
@@ -143,6 +144,7 @@ void rumble(float low, float high) {
 }
 
 void read_pad(PadState& p) {
+    ft::CallTimer timing(ft::TimedCall::InputPoll);
     {
         std::lock_guard lk(g_pad_lock);
         p.buttons |= g_pad.buttons;

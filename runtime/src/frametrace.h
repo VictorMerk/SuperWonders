@@ -28,12 +28,25 @@ enum Counter {
     kReplayNs,     // the presenting thread recording the game's command lists into Vulkan
     kUploadBytes,  // bytes through the upload buffer
     kLogLines,     // log() lines written (the report prints a hitch's lines from the NX_LOG file)
+    kLogNs, kInputPollNs,  // elapsed completed calls; totals can overlap across threads
     kCount
 };
 extern std::atomic<uint64_t> g_counter[kCount];
 inline void add(Counter k, uint64_t v = 1) { g_counter[k].fetch_add(v, std::memory_order_relaxed); }
 
 bool enabled();
+enum class TimedCall { Logging, InputPoll };
+// No clock reads when tracing is off. Records total and longest completed call
+// per host-present interval; these are diagnostic correlations, not scanout latency.
+class CallTimer {
+    TimedCall kind;
+    uint64_t started;
+public:
+    explicit CallTimer(TimedCall);
+    ~CallTimer();
+    CallTimer(const CallTimer&) = delete;
+    CallTimer& operator=(const CallTimer&) = delete;
+};
 // Diagnostic proxy only: first HID sample for a game frame -> host present.
 // Excludes device polling and the display's scanout/pixel response.
 void input_sample(uint64_t game_frame);

@@ -59,6 +59,7 @@ struct Guest {  // the latest game-side present, written by the game's thread, r
 FILE* g_file = nullptr;
 std::mutex g_lock;
 uint64_t g_t0 = 0;
+std::atomic<uint64_t> g_call_max[2]{};
 
 FILE* open_file() {
     static bool tried = false;
@@ -74,7 +75,7 @@ FILE* open_file() {
                  "frame,t_ms,frame_ms,acquire_ms,queue_present_ms,replay_ms,encode_ms,fence_ms,upload_mb,"
                  "present_cpu_ms,guest_presents,guest_gap_ms,guest_cpu_ms,guest_replay_wait_ms,guest_pace_ms,"
                  "guest_interval,pipelines,pipeline_ms,skipped,astc,astc_ms,file_reads,file_mb,file_ms,minflt,majflt,"
-                 "log_line,sample_to_present_ms,original_picture\n");
+                 "log_line,log_ms,log_max_ms,input_poll_ms,input_poll_max_ms,sample_to_present_ms,original_picture\n");
     std::atexit([] {
         std::lock_guard lk(g_lock);
         if (g_file) std::fflush(g_file);
@@ -91,6 +92,18 @@ bool enabled() {
         return p && *p;
     }();
     return on;
+}
+
+CallTimer::CallTimer(TimedCall call) : kind(call), started(enabled() ? plat::monotonic_ns() : 0) {}
+CallTimer::~CallTimer() {
+    if (!started) return;
+    const auto now = plat::monotonic_ns();
+    if (now < started) return;
+    const auto elapsed = now - started;
+    add(kind == TimedCall::Logging ? kLogNs : kInputPollNs, elapsed);
+    auto& maximum = g_call_max[kind == TimedCall::Logging ? 0 : 1];
+    auto old = maximum.load(std::memory_order_relaxed);
+    while (elapsed > old && !maximum.compare_exchange_weak(old, elapsed, std::memory_order_relaxed)) {}
 }
 
 void guest_present(uint64_t replay_wait_ns, uint64_t pace_ns, int interval) {
@@ -145,7 +158,7 @@ uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t e
     auto ms = [](uint64_t ns) { return double(ns) / 1e6; };
     std::fprintf(f,
                  "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llu,%.3f,%.3f,%.3f,%.3f,%d,%llu,%.3f,%llu,%llu,%.3f,"
-                 "%llu,%.3f,%.3f,%llu,%llu,%llu,%.3f,%u\n",
+                 "%llu,%.3f,%.3f,%llu,%llu,%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%u\n",
                  (unsigned long long)frame, ms(t - g_t0), last_t ? ms(t - last_t) : 0.0, ms(acquire_ns),
                  ms(queue_present_ns), ms(d[kReplayNs]), ms(encode_total_ns - last_encode),
                  ms(fence_total_ns - last_fence), double(d[kUploadBytes]) / 1e6, last_cpu ? ms(cpu - last_cpu) : 0.0,
@@ -154,7 +167,9 @@ uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t e
                  ms(d[kPipelineNs]), (unsigned long long)d[kSkipped], (unsigned long long)d[kAstc], ms(d[kAstcNs]),
                  (unsigned long long)d[kFileReads], double(d[kFileBytes]) / 1e6, ms(d[kFileNs]),
                  (unsigned long long)(last_t ? minor - last_minor : 0), (unsigned long long)(last_t ? major - last_major : 0),
-                 (unsigned long long)now[kLogLines],input_sample_ns && t >= input_sample_ns ? ms(t-input_sample_ns) : -1.0,
+                 (unsigned long long)now[kLogLines], ms(d[kLogNs]), ms(g_call_max[0].exchange(0, std::memory_order_relaxed)),
+                 ms(d[kInputPollNs]), ms(g_call_max[1].exchange(0, std::memory_order_relaxed)),
+                 input_sample_ns && t >= input_sample_ns ? ms(t-input_sample_ns) : -1.0,
                  unsigned(original_picture));
     const uint64_t row = frame;
     if (++frame % 600 == 0) std::fflush(f);

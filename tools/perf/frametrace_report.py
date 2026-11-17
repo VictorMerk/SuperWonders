@@ -52,7 +52,9 @@ def picture_rows(rows, pictures):
     additive = ("acquire_ms", "queue_present_ms", "replay_ms", "encode_ms", "fence_ms", "upload_mb",
                 "present_cpu_ms", "guest_presents", "guest_cpu_ms", "guest_replay_wait_ms", "guest_pace_ms",
                 "pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads", "file_mb", "file_ms",
-                "minflt", "majflt")
+                "minflt", "majflt", "log_ms", "input_poll_ms")
+    available = set().union(*(r.keys() for r in rows))
+    additive = tuple(k for k in additive if k in available)
     out, pending, previous = [], [], None
     for row in rows:
         pending.append(row)
@@ -65,6 +67,8 @@ def picture_rows(rows, pictures):
             for key in additive:
                 merged[key] = sum(r.get(key, 0) for r in pending)
             merged["guest_gap_ms"] = max(r.get("guest_gap_ms", 0) for r in pending)
+            for key in ("log_max_ms", "input_poll_max_ms"):
+                if key in available: merged[key] = max(r.get(key, 0) for r in pending)
             out.append(merged)
         previous, pending = row, []
     return out
@@ -222,6 +226,8 @@ def main():
     tot = lambda k: sum(r[k] for r in rows)
     st["totals"] = {k: round(tot(k), 1) for k in ("pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads",
                                                    "file_mb", "file_ms", "majflt")}
+    for key in ("log_ms", "input_poll_ms"):
+        if any(key in r for r in rows): st["totals"][key] = round(sum(r.get(key, 0) for r in rows), 1)
 
     print("## %s\n" % st["label"])
     print("Timing domain: %s pictures at host presentation; not physical display scanout.\n" % a.pictures)
@@ -279,6 +285,9 @@ def main():
                       h["fence_ms"], h["replay_ms"], h["pipelines"], h["pipeline_ms"], h["skipped"], h["astc_ms"],
                       h["file_reads"], h["file_ms"], h["upload_mb"], h["present_cpu_ms"], h["guest_gap_ms"], h["guest_cpu_ms"], h["guest_replay_wait_ms"],
                       h["minflt"], h["majflt"]))
+            if "log_ms" in h:
+                print("    completed calls, total / longest: logging %.3f / %.3f ms; input poll %.3f / %.3f ms (totals may overlap across threads)" %
+                      (h.get("log_ms",0),h.get("log_max_ms",0),h.get("input_poll_ms",0),h.get("input_poll_max_ms",0)))
             if lines:
                 hi = int(h["log_line"])
                 lo = int(h.get("previous_log_line", prev_line.get(int(h["frame"]) - 1, hi)))

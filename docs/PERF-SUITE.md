@@ -127,6 +127,17 @@ game fullscreen on the desktop. **The default is `--display screen`** (2026-11-1
 visible window with real presents, so compositor and display timing count. `--display offscreen` is the old hidden
 mode (Windows: `NX_HEADLESS_PRESENT=1`; Linux: SDL's offscreen driver). Take the GPU lock as for any game run.
 
+## Optional call timing in frame traces
+
+With `NX_FRAMETRACE` enabled, Windows and Linux input polling and the logger record completed-call elapsed time.
+`log_ms` / `input_poll_ms` are totals; `log_max_ms` / `input_poll_max_ms` are the longest completed call since the
+previous host present. Logging includes lock acquisition and output; polling includes controller reads and mapping.
+Tracing off performs no added clock reads. Calls on different threads may overlap, and a call can span a present,
+so these columns are correlations, not a critical-path decomposition or controller-to-photon latency measurement.
+The reporter sums totals and takes maxima when reconstructing original pictures, and accepts older CSV headers.
+It does not automatically blame a hitch on logging/input. Unit regressions check accumulation, interval reset,
+maxima and legacy reports. Native hitch attribution with these new columns remains pending.
+
 ## Rules
 
 - Two runs per scenario at least; compare medians.

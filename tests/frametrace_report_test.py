@@ -11,6 +11,17 @@ spec.loader.exec_module(report)
 
 
 class PictureCadence(unittest.TestCase):
+    def test_call_totals_sum_but_call_maxima_do_not(self):
+        rows = self.rows()
+        for index,elapsed in ((5,2.),(6,3.)):
+            rows[index].update(log_ms=elapsed,log_max_ms=elapsed,input_poll_ms=elapsed,input_poll_max_ms=elapsed)
+        merged=report.picture_rows(rows,'original')
+        self.assertEqual(merged[1]['log_ms'],5.)
+        self.assertEqual(merged[1]['log_max_ms'],3.)
+        self.assertEqual(merged[1]['input_poll_ms'],5.)
+        self.assertEqual(merged[1]['input_poll_max_ms'],3.)
+        self.assertNotIn('log_ms',report.picture_rows(self.rows(),'original')[0])
+
     def test_upload_volume_does_not_invent_a_measured_stall(self):
         fields = ('frame_ms','acquire_ms','queue_present_ms','replay_ms','fence_ms','present_cpu_ms',
                   'guest_cpu_ms','guest_replay_wait_ms','guest_gap_ms','minflt','pipeline_ms','astc_ms',

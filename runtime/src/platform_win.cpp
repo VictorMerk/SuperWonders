@@ -49,6 +49,7 @@
 #include "platform.h"
 #include "shader_bundle.h"
 #include "stream_cache.h"
+#include "frametrace.h"
 #include "controllers.h"
 
 namespace nx {
@@ -1014,6 +1015,7 @@ bool headless() {  // NX_HEADLESS (platform.h)
 void rumble(float low, float high) { rumble_player(0, low, high); }
 
 void read_pad(PadState& p) {
+    ft::CallTimer timing(ft::TimedCall::InputPoll);
     std::array<bool, kPcControlCount> physical{};
     PadState controller;
     read_controller(0, controller, &physical);

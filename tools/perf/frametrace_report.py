@@ -152,9 +152,9 @@ def classify(rows):
             cause = "pipelines_in_frame"
         elif r["minflt"] > 4 * max(1.0, medk["minflt"]) and r["minflt"] > 500 or r["majflt"] > 0:
             cause = "page_faults"
-        elif r["upload_mb"] >= 4:
-            cause = "upload"
         else:
+            # Upload volume is not a duration. A normal 11 MB/frame stream must
+            # not turn an otherwise unexplained 900 ms stall into an upload claim.
             cause = "unknown"
         out.append(dict(r, index=i, cause=cause, excess_ms=excess))
     return out, med
@@ -274,10 +274,10 @@ def main():
         prev_line = {int(r["frame"]): int(r["log_line"]) for r in rows}
         for h in sorted(hitches, key=lambda h: -h["frame_ms"])[:a.top]:
             print("- frame %d at %.2f s: %.1f ms, **%s** (acquire %.1f, present %.1f, fence %.1f, replay %.1f, pipelines %d/%.1f ms, "
-                  "skipped %d, astc %.1f ms, files %d/%.1f ms, game gap %.1f cpu %.1f waits-replay %.1f, faults %d/%d)" % (
+                  "skipped %d, astc %.1f ms, files %d/%.1f ms, uploads %.1f MB, host CPU %.1f ms, game gap %.1f cpu %.1f waits-replay %.1f, faults %d/%d)" % (
                       h["frame"], h["t_ms"] / 1000, h["frame_ms"], h["cause"], h["acquire_ms"], h["queue_present_ms"],
                       h["fence_ms"], h["replay_ms"], h["pipelines"], h["pipeline_ms"], h["skipped"], h["astc_ms"],
-                      h["file_reads"], h["file_ms"], h["guest_gap_ms"], h["guest_cpu_ms"], h["guest_replay_wait_ms"],
+                      h["file_reads"], h["file_ms"], h["upload_mb"], h["present_cpu_ms"], h["guest_gap_ms"], h["guest_cpu_ms"], h["guest_replay_wait_ms"],
                       h["minflt"], h["majflt"]))
             if lines:
                 hi = int(h["log_line"])

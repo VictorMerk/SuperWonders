@@ -11,6 +11,19 @@ spec.loader.exec_module(report)
 
 
 class PictureCadence(unittest.TestCase):
+    def test_upload_volume_does_not_invent_a_measured_stall(self):
+        fields = ('frame_ms','acquire_ms','queue_present_ms','replay_ms','fence_ms','present_cpu_ms',
+                  'guest_cpu_ms','guest_replay_wait_ms','guest_gap_ms','minflt','pipeline_ms','astc_ms',
+                  'file_ms','guest_interval','pipelines','skipped','majflt','upload_mb')
+        normal = dict.fromkeys(fields, 0.)
+        normal.update(frame_ms=16., guest_gap_ms=16., guest_interval=1, replay_ms=5., fence_ms=8., upload_mb=11.)
+        hitch = dict(normal, frame_ms=900.)
+        found, _ = report.classify([dict(normal) for _ in range(20)] + [hitch])
+        self.assertEqual(found[0]['cause'], 'unknown')
+        hitch['replay_ms'] = 800.
+        found, _ = report.classify([dict(normal) for _ in range(20)] + [hitch])
+        self.assertEqual(found[0]['cause'], 'replay_cpu')
+
     def rows(self):
         return [dict(frame=i, t_ms=i * 5., frame_ms=5., original_picture=int(i % 4 == 0),
                      pipelines=int(i == 6), pipeline_ms=3. if i == 6 else 0., file_ms=1.,

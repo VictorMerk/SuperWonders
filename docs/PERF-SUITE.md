@@ -4,6 +4,10 @@ An average of 60 fps can hold a 160 ms frame. Players feel the slow frames: stut
 suite records every presented frame and reports those. Use it for every performance claim and every change that could
 affect frame pacing, and compare against a baseline.
 
+Hitch labels are diagnostic indicators, not proof of a root cause. In particular, upload volume is not an upload
+duration: an otherwise unexplained long frame stays `unknown` even if it uploaded several megabytes. Worst-frame
+lines show upload volume and presenting-thread CPU time alongside the timed waits so unmeasured gaps remain visible.
+
 The design follows Savage Wind's frame trace and hitch analysis (Revivedx/SavageWindRecomp: `runtime/perfcount.h`,
 `tools/perf_routes.py`, `docs/PERF-ROUTES.md`): record what each frame did, then name the cause of each slow frame.
 

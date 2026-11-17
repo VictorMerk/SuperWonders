@@ -33,6 +33,13 @@ Description panes now retain a row identity and refresh its current text. Previo
 row could leave stale descriptions visible until another row was hovered. The native input/layout probe exercises
 the pending banner and the return to the startup configuration in addition to Esc, F1 and controller input isolation.
 
+These native input-probe captures show the pending resources and the banner clearing after reverting. They are UI
+checks without game simulation; the zero-FPS panel is expected in this probe.
+
+![Changed startup resources listed in German](images/pc-preview-restart-pending.png)
+
+![Reverted settings clear the pending banner](images/pc-preview-restart-reverted.png)
+
 ## Pipeline-cache robustness
 
 The loader reads and validates the small Vulkan cache header before allocating for the whole file. It rejects

@@ -62,6 +62,8 @@ bool fsr_active();
 bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D extent, const int32_t* crop, VkOffset2D offset = {});
 void set_preserve_aspect(bool preserve);
 bool preserve_aspect();
+void set_texture_cache(bool enabled);  // bounded disk cache for the low-VRAM ASTC-to-BC3 conversion
+bool texture_conversion_probe();  // original ASTC blocks; uncached/cold/warm BC3 bytes must match exactly
 GpuImage* fsr_output();  // the last upscaled image, for frame dumps with NX_DUMP_FSR=1 (else null)
 void fsr_release();      // the swapchain goes away
 // nvn_fxaa.cpp: FXAA on the presented image (NX_FXAA, the overlay menu's Anti-aliasing setting).

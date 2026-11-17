@@ -767,6 +767,9 @@ void system_tab(MenuContext& c, const Labels& l) {
         "Cache translated shaders as you play to speed later launches. Needs extra disk space and up to 512 MiB of memory. Modified or damaged entries fall back to the original shader files. Restart to apply.")) {
         settings_changed(true); ui::notify("Restart the game to change shader loading.");
     }
+    if (rows::toggle(lang == 2 ? "Textur-Konvertierungen speichern" : "Cache texture conversions", &s.texture_cache, true,
+        lang == 2 ? "Speichert Textur-Konvertierungen des Low-VRAM-Profils für spätere Ladevorgänge. Bis zu 256 MiB auf dem Datenträger; Schreibzugriffe erfolgen im Hintergrund. Fehlerhafte oder geänderte Daten werden neu konvertiert. Ändert nicht die gewählte Texturqualität. Wirkt sofort auf zukünftige Konvertierungen." :
+        "Reuse low-VRAM texture conversions on later loads. Uses up to 256 MiB on disk, with bounded background writes. Changed or damaged data falls back to conversion. This does not change the selected texture quality. Applies immediately to future conversions.")) settings_changed(true);
     // Quit: A once arms it (the row pulses, "Press again to quit"), A again within 4 s quits as closing the window does
     // (the pipeline cache is saved); progress since the game's last save is lost
     static double armed_at = -10;

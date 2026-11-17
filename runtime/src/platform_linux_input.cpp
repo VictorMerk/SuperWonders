@@ -90,6 +90,7 @@ void apply_settings(const overlay::Settings& s, bool persist) {
     nvn::set_framegen(s.framegen, s.framegen_multiplier);
     nvn::set_render_ahead(s.render_ahead);
     nvn::set_preserve_aspect(s.preserve_aspect);
+    nvn::set_texture_cache(s.texture_cache);
     g_rumble_strength = std::clamp(s.rumble, 0, 100);
     if (s.fullscreen != before.fullscreen || s.width != before.width || s.height != before.height ||
         s.always_on_top != before.always_on_top)

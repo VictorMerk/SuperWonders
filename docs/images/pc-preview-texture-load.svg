@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="310" viewBox="0 0 880 310">
+<rect width="880" height="310" fill="#102326"/>
+<g font-family="Arial,sans-serif" fill="#fbf7e6"><text x="28" y="34" font-size="21">Course entry: cached texture conversions</text>
+<text x="28" y="59" font-size="13">Windows / RX 570 · same runtime, cache toggled · median of 3 runs · lower is better</text>
+<path d="M180 82V226" stroke="#385357"/><text x="180" y="247" text-anchor="middle" font-size="12">0 s</text>
+<path d="M300 82V226" stroke="#385357"/><text x="300" y="247" text-anchor="middle" font-size="12">2 s</text>
+<path d="M420 82V226" stroke="#385357"/><text x="420" y="247" text-anchor="middle" font-size="12">4 s</text>
+<path d="M540 82V226" stroke="#385357"/><text x="540" y="247" text-anchor="middle" font-size="12">6 s</text>
+<path d="M660 82V226" stroke="#385357"/><text x="660" y="247" text-anchor="middle" font-size="12">8 s</text>
+<path d="M780 82V226" stroke="#385357"/><text x="780" y="247" text-anchor="middle" font-size="12">10 s</text>
+<text x="28" y="124" font-size="16">Cache off</text><rect x="180" y="101" width="478.08" height="32" fill="#ffcc48" rx="4"/>
+<text x="668.08" y="124" font-size="16">7.968 s</text><text x="180" y="150" font-size="12">Runs: 8.122, 7.95, 7.968 s</text>
+<text x="28" y="195" font-size="16">Warm cache</text><rect x="180" y="172" width="429.00" height="32" fill="#69deb6" rx="4"/>
+<text x="619.00" y="195" font-size="16">7.150 s</text><text x="180" y="221" font-size="12">Runs: 7.1, 7.183, 7.15 s</text>
+<text x="28" y="282" font-size="12">From first course-load event to course start; warm filesystem cache. Not full startup time or a general FPS claim.</text></g></svg>

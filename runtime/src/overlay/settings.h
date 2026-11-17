@@ -40,6 +40,7 @@ struct Settings {
     int overlay_position = 0;  // top left, top right, bottom left, bottom right
     int upscaler = 1;          // 0 bilinear, 1 FSR 1 (when the game's image is smaller than the window)
     bool preserve_aspect = true;  // centre the picture with bars instead of stretching non-matching windows
+    bool texture_cache = true;  // bounded, byte-verified low-VRAM conversions; can be changed live
     int fsr_sharpness = 25;    // RCAS sharpness in hundredths of a stop: 0 the sharpest, 200 the softest
     int antialiasing = 0;      // 0 off, 1 FXAA (on the presented image)
     int anisotropy = 0;        // 0 the game's own, else 2, 4, 8, 16 (applies after a restart)

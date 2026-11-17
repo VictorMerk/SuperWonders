@@ -129,6 +129,9 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(present_geometry_test tests/present_geometry_test.cpp)
     target_include_directories(present_geometry_test PRIVATE runtime/src/nvn)
     add_test(NAME present_geometry COMMAND present_geometry_test)
+    add_executable(texture_cache_test tests/texture_cache_test.cpp runtime/src/nvn/texture_cache.cpp)
+    target_include_directories(texture_cache_test PRIVATE runtime/src/nvn)
+    add_test(NAME texture_cache COMMAND texture_cache_test)
     if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
         add_executable(netplay_wire_test tests/netplay_wire_test.cpp runtime/src/netplay_wire.cpp runtime/src/launcher/update_crypto.c)
         target_include_directories(netplay_wire_test PRIVATE runtime/src)
@@ -369,6 +372,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_compare_twin.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_upload.cpp
+    runtime/src/nvn/texture_cache.cpp
     runtime/src/nvn/nvn_astc.cpp
     runtime/src/nvn/nvn_spirv_patch.cpp
     runtime/src/nvn/nvn_spirv_warp.cpp

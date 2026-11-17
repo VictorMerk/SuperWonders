@@ -52,10 +52,11 @@ int main() {
     s.controller_preset = 2;
     s.render_ahead = 2;
     s.preserve_aspect = false;
+    s.texture_cache = false;
     s.button_icons = 4; s.keyboard_separate_player = true;
     save_settings(path, s);
     Settings t;
-    check(load_settings(path,t) && t.framegen_multiplier == 4 && t.controller_preset == 2 && t.render_ahead == 2 && !t.preserve_aspect,
+    check(load_settings(path,t) && t.framegen_multiplier == 4 && t.controller_preset == 2 && t.render_ahead == 2 && !t.preserve_aspect && !t.texture_cache,
           "4x generation and Circle-confirm preset survive restart");
     check(default_controller_binding(CtlA,2)==PhyEast && default_controller_binding(CtlB,2)==PhySouth &&
           default_controller_binding(CtlX,2)==PhyWest && default_controller_binding(CtlY,2)==PhyNorth,
@@ -80,6 +81,7 @@ int main() {
     requested.render_ahead = 2; requested.language = 2; requested.fsr_sharpness = 150;
     requested.metrics_enabled = true; requested.pipeline_skip_draws = true;
     requested.preserve_aspect = false;
+    requested.texture_cache = false;
     check(restart_changes(active, requested) == 0, "live settings do not create a false restart warning");
     requested.internal_resolution = 3; requested.low_vram_profile = true;
     requested.anisotropy = 8; requested.shader_bundle = false;

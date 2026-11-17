@@ -262,6 +262,7 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.framegen_multiplier = s.framegen_multiplier;
     o.render_ahead = s.render_ahead;
     o.preserve_aspect = s.preserve_aspect;
+    o.texture_cache = s.texture_cache;
     o.pipeline_skip_draws = s.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         o.keyboard_bindings[i] = s.keyboard_bindings[i], o.controller_bindings[i] = s.controller_bindings[i];
@@ -286,6 +287,7 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.framegen_multiplier = o.framegen_multiplier;
     s.render_ahead = o.render_ahead;
     s.preserve_aspect = o.preserve_aspect;
+    s.texture_cache = o.texture_cache;
     s.pipeline_skip_draws = o.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         s.keyboard_bindings[i] = o.keyboard_bindings[i], s.controller_bindings[i] = o.controller_bindings[i];
@@ -395,6 +397,7 @@ static void save_pc_settings() {
          << "\nframegen_multiplier=" << g_pc_settings.framegen_multiplier
          << "\nrender_ahead=" << g_pc_settings.render_ahead
          << "\npreserve_aspect=" << g_pc_settings.preserve_aspect
+         << "\ntexture_cache=" << g_pc_settings.texture_cache
          << "\npipeline_skip_draws=" << g_pc_settings.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kPcControlCount; ++i)
         file << "keyboard_" << i << '=' << g_pc_settings.keyboard_bindings[i] << '\n'
@@ -455,6 +458,8 @@ static void load_pc_settings() {
             g_pc_settings.render_ahead = std::clamp(value, 1, 2);
         else if (std::sscanf(line.c_str(), "preserve_aspect=%d", &value) == 1)
             g_pc_settings.preserve_aspect = value != 0;
+        else if (std::sscanf(line.c_str(), "texture_cache=%d", &value) == 1)
+            g_pc_settings.texture_cache = value != 0;
         else if (std::sscanf(line.c_str(), "framegen_multiplier=%d", &value) == 1)
             g_pc_settings.framegen_multiplier = std::clamp(value, 2, 8);
         else if (std::sscanf(line.c_str(), "pipeline_skip_draws=%d", &value) == 1)
@@ -489,6 +494,7 @@ static void load_pc_settings() {
     nx::nvn::set_framegen(g_pc_settings.framegen, g_pc_settings.framegen_multiplier);
     nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     nx::nvn::set_preserve_aspect(g_pc_settings.preserve_aspect);
+    nx::nvn::set_texture_cache(g_pc_settings.texture_cache);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     nx::set_native_render_width(g_pc_settings.fullscreen ? uint32_t(GetSystemMetrics(SM_CXSCREEN))
@@ -719,6 +725,7 @@ static void apply_pc_menu(const PcMenuState& state, bool persist) {
     nx::nvn::set_framegen(g_pc_settings.framegen, g_pc_settings.framegen_multiplier);
     nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     nx::nvn::set_preserve_aspect(g_pc_settings.preserve_aspect);
+    nx::nvn::set_texture_cache(g_pc_settings.texture_cache);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     if (g_fullscreen != g_pc_settings.fullscreen) toggle_fullscreen(g_window);

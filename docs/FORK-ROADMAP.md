@@ -3,7 +3,8 @@
 Initial investigation: 2026-11-16, upstream `c9fff40c9fc8aad348b5c001d6d1490bc2311e2e`.
 Reference: [mkw-recomp](https://github.com/adriadam10/mkw-recomp/tree/dd9297545beb9d2c90170eea93a01030961bf7cf).
 
-Latest follow-up: [Vulkan synchronization fixes and the r7 LAN test preview](PC-PREVIEW-2026-11-17-R7.md).
+Latest follow-up: [one-folder setup and corrected Windows controller presets](PC-PREVIEW-2026-11-17-R8.md).
+Graphics follow-up: [Vulkan synchronization fixes and the r7 LAN test preview](PC-PREVIEW-2026-11-17-R7.md).
 Earlier follow-up: [pause-background fix, 2x–8x interpolation, controls, diagnostics and mod management](PC-PREVIEW-2026-11-17.md),
 including native screenshots and explicit test/measurement limits. The earlier measurements below describe the
 initial preview; they are not guarantees for the later build or other hardware.

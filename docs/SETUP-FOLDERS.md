@@ -42,5 +42,11 @@ Keep the complete `game-build` folder, its Python and both EXEs together when ex
 The `game_source` CTest target exercises Unicode/nested paths, direct and sibling selections, multiple dumps,
 empty/wrong Shader content, missing paths, directories pretending to be executable files, loose executable layout,
 compiler-kit exclusion and the depth bound. These use disposable synthetic files, not game content or a real build.
-The Windows runtime builds successfully. Native visual checks of this new screen and a real first build remain
-separate checks; they are deferred while another game is using the GPU.
+The Windows runtime builds successfully. Three native launcher tours also pass: absent tools, incomplete tools
+and the explicit portable folder layout. Captures show the appropriate warnings/disabled build action or the
+automatically populated paths/enabled action. These use synthetic layout fixtures and never execute a setup build;
+they do not establish that an arbitrary user's extraction is complete or the correct game version.
+
+![Native setup page with automatically populated synthetic layout fixtures](images/pc-preview-setup-ready.png)
+
+![Native setup page explains missing first-build tools](images/pc-preview-setup-missing-kit.png)

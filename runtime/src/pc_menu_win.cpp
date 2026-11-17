@@ -289,13 +289,14 @@ void paint_audio(HDC dc) {
 }
 
 void paint_controls(HDC dc) {
-    const bool standard = std::clamp(g_state.controller_preset, 0, 1) == 0;
-    rounded(dc, RECT{44, 143, 272, 173}, standard ? RGB(43, 70, 105) : RGB(35, 43, 61),
-            standard ? RGB(102, 174, 255) : RGB(68, 81, 105), 8);
-    paint_text(dc, L"Xbox / DualSense", RECT{50, 143, 266, 173}, RGB(238, 243, 252), 13, DT_CENTER);
-    rounded(dc, RECT{288, 143, 516, 173}, !standard ? RGB(43, 70, 105) : RGB(35, 43, 61),
-            !standard ? RGB(102, 174, 255) : RGB(68, 81, 105), 8);
-    paint_text(dc, L"Nintendo", RECT{294, 143, 510, 173}, RGB(238, 243, 252), 13, DT_CENTER);
+    const wchar_t* presets[] = {L"Xbox / PS Cross", L"Nintendo", L"PS Circle"};
+    for (int i = 0; i < 3; ++i) {
+        const int left = 44+i*160;
+        const bool selected = g_state.controller_preset == i;
+        rounded(dc, RECT{left,143,left+152,173}, selected ? RGB(43,70,105) : RGB(35,43,61),
+                selected ? RGB(102,174,255) : RGB(68,81,105),8);
+        paint_text(dc,presets[i],RECT{left,143,left+152,173},RGB(238,243,252),12,DT_CENTER);
+    }
     const int language = std::clamp(g_state.language, 0, 12);
     paint_text(dc, kControlHeaders[language][0], RECT{155, 177, 327, 198}, RGB(177, 194, 218), 12, DT_CENTER);
     paint_text(dc, kControlHeaders[language][1], RECT{331, 177, 515, 198}, RGB(177, 194, 218), 12, DT_CENTER);
@@ -461,7 +462,7 @@ void paint(HWND h) {
 }
 
 void set_controller_preset(int preset) {
-    g_state.controller_preset = std::clamp(preset, 0, 1);
+    g_state.controller_preset = std::clamp(preset, 0, 2);
     // Selecting a preset resets custom mappings; rows can be customized again afterward.
     g_state.controller_custom_mask = 0;
     g_controller_preset.store(g_state.controller_preset, std::memory_order_relaxed);
@@ -638,10 +639,9 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             } else if (g_section == Section::Audio && y >= 340 && y <= 384) {
                 g_game_language_dropdown = !g_game_language_dropdown;
                 InvalidateRect(h, nullptr, FALSE);
-            } else if (g_section == Section::Controls && y >= 143 && y <= 173 && x >= 44 && x <= 272) {
-                set_controller_preset(0);
-            } else if (g_section == Section::Controls && y >= 143 && y <= 173 && x >= 288 && x <= 516) {
-                set_controller_preset(1);
+            } else if (g_section == Section::Controls && y >= 143 && y <= 173 && x >= 44 && x <= 516) {
+                const int preset = (x-44)/160;
+                if ((x-44)%160 <= 152) set_controller_preset(preset);
             } else if (g_section == Section::Controls && y >= 200 && y < 552) {
                 const int action = (y - 200) / 22;
                 if (action >= 0 && action < int(kPcControlCount) && x >= 155 && x <= 327) {
@@ -688,7 +688,7 @@ void pc_menu_init(HWND owner, const PcMenuState& state, PcMenuApply apply) {
     g_state = state;
     g_state.language = std::clamp(g_state.language, 0, 12);
     g_state.game_language = std::clamp(g_state.game_language, 0, int(std::size(kGameLanguageNames)) - 1);
-    g_state.controller_preset = std::clamp(g_state.controller_preset, 0, 1);
+    g_state.controller_preset = std::clamp(g_state.controller_preset, 0, 2);
     g_state.overlay_position = std::clamp(g_state.overlay_position, 0, 3);
     g_controller_preset.store(g_state.controller_preset, std::memory_order_relaxed);
     g_apply = apply;
@@ -723,7 +723,7 @@ bool pc_menu_open() { return g_open.load(); }
 
 void pc_menu_sync(const PcMenuState& state) {
     g_state = state;
-    g_controller_preset.store(std::clamp(state.controller_preset, 0, 1), std::memory_order_relaxed);
+    g_controller_preset.store(std::clamp(state.controller_preset, 0, 2), std::memory_order_relaxed);
     if (g_menu) InvalidateRect(g_menu, nullptr, FALSE);
 }
 

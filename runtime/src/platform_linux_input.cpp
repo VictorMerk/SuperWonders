@@ -87,7 +87,8 @@ void apply_settings(const overlay::Settings& s, bool persist) {
     nvn::set_vsync(s.vsync);
     nvn::set_frame_cap(s.frame_cap);
     nvn::set_pipeline_skip_draws(s.pipeline_skip_draws);
-    nvn::set_framegen(s.framegen);
+    nvn::set_framegen(s.framegen, s.framegen_multiplier);
+    nvn::set_render_ahead(s.render_ahead);
     g_rumble_strength = std::clamp(s.rumble, 0, 100);
     if (s.fullscreen != before.fullscreen || s.width != before.width || s.height != before.height ||
         s.always_on_top != before.always_on_top)
@@ -161,7 +162,7 @@ void load_player_settings() {
     overlay::Settings s;
     const int keys[overlay::kControlCount] = {
         SDL_SCANCODE_SPACE, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_J, SDL_SCANCODE_K, SDL_SCANCODE_Q, SDL_SCANCODE_E,
-        SDL_SCANCODE_Z, SDL_SCANCODE_C, SDL_SCANCODE_RETURN, SDL_SCANCODE_ESCAPE, SDL_SCANCODE_M, SDL_SCANCODE_N,
+        SDL_SCANCODE_Z, SDL_SCANCODE_C, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_M, SDL_SCANCODE_N,
         SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN,
     };
     for (size_t a = 0; a < overlay::kControlCount; ++a)
@@ -234,7 +235,8 @@ void sample_input() {
         int count = 0;
         const bool* k = SDL_GetKeyboardState(&count);
         tab = k[SDL_SCANCODE_TAB];  // fast-forward (hle_vi.cpp)
-        auto held = [&](int sc) { return sc > 0 && sc < count && k[sc]; };
+        auto held = [&](int sc) { return sc > 0 && sc < count && k[sc] &&
+            !(sc == SDL_SCANCODE_ESCAPE && overlay::enabled()); };
         if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_LEFT]) p.lx = -kStickMax;
         if (k[SDL_SCANCODE_D] || k[SDL_SCANCODE_RIGHT]) p.lx = kStickMax;
         if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP]) p.ly = kStickMax;

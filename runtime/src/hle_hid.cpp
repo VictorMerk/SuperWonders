@@ -20,6 +20,7 @@
 #include "controllers.h"
 #include "netplay_game.h"
 #include "overlay/overlay.h"
+#include "frametrace.h"
 
 namespace nx {
 
@@ -72,6 +73,7 @@ PadState read(uint32_t player = 0, bool* connected = nullptr) {
         if (g_frame >= s.frame && g_frame < s.frame + 8) p.buttons |= s.buttons;
     read_pad(p);
     play::pad(p);  // NX_INPUT_FRAMES / NX_INPUT_REPLAY / NX_INPUT_RECORD (play.cpp)
+    ft::input_sample(g_frame);
     }
     if (connected) *connected = attached;
     // Stick directions as buttons, like the hid sysmodule reports them.

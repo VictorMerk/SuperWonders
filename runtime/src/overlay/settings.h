@@ -46,7 +46,9 @@ struct Settings {
     int vsync = 1;             // 0 On (FIFO), 1 Fast (MAILBOX, else IMMEDIATE: the default), 2 Adaptive (FIFO_RELAXED), 3 Off
     int frame_cap = 60;        // 30, 60, 90, 120, or 144 FPS
     bool shader_bundle = true;  // sequential shader cache, applies at startup
-    bool framegen = false;  // experimental optical-flow 2x presentation
+    bool framegen = false;  // experimental optical-flow presentation
+    int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
+    int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
     bool pipeline_skip_draws = false;  // opt-in: hide draws while new pipelines compile (can cause flicker)
     std::array<int, kControlCount> keyboard_bindings{};
     std::array<int, kControlCount> controller_bindings{};

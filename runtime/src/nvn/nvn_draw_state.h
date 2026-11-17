@@ -8,6 +8,11 @@
 #include "nvn_pipeline.h"
 
 namespace nx::nvn::replay {
+// Opt-in bounded diagnostic capture: NX_TRACE_REQUEST=1 and data/trace_capture.
+bool trace_capture();
+bool rendering_enabled();
+void reports_begin_submit();
+std::vector<WriteBack> reports_take_write_backs();
 
 constexpr int kStages = 6;  // NVN shader stages: 0 vertex, 1 fragment, 2 geometry, 3/4 tessellation, 5 compute
 
@@ -31,6 +36,8 @@ struct State {
     float blend_color[4] = {};
     int32_t viewport[4] = {}, scissor[4] = {};
     bool rasterizer_discard = false, render_enable = true;  // SetRasterizerDiscard / SetRenderEnable: draws skipped
+    uint64_t render_condition_address = 0;
+    uint32_t render_condition_mode = 0;
     bool has_viewport = false, has_scissor = false;
     float depth_near = 0, depth_far = 1;
     // Command-buffer rasterizer state (nvn_raster.cpp), per face 0 front, 1 back. NVN's defaults: masks 0xFF, ref 0.

@@ -1,5 +1,6 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
+#include "file_io.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -188,11 +189,7 @@ FILE* fopen_utf8(const std::string& path, const char* mode) {
 int64_t ftell64(FILE* f) { return _ftelli64(f); }
 int fseek64(FILE* f, int64_t off, int origin) { return _fseeki64(f, off, origin); }
 uint64_t read_at(FILE* f, int64_t off, void* buf, uint64_t size) {
-    _lock_file(f);  // seek + read as one step for this FILE
-    _fseeki64_nolock(f, off, SEEK_SET);
-    uint64_t n = _fread_nolock(buf, 1, size, f);
-    _unlock_file(f);
-    return n;
+    return file_io::read_at(f,off,buf,size);
 }
 bool make_dirs(const std::string& path) {
     std::error_code ec;
@@ -262,6 +259,8 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.anisotropy = s.anisotropy, o.rumble = s.rumble, o.vsync = s.vsync, o.frame_cap = s.frame_cap;
     o.shader_bundle = s.shader_bundle;
     o.framegen = s.framegen;
+    o.framegen_multiplier = s.framegen_multiplier;
+    o.render_ahead = s.render_ahead;
     o.pipeline_skip_draws = s.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         o.keyboard_bindings[i] = s.keyboard_bindings[i], o.controller_bindings[i] = s.controller_bindings[i];
@@ -283,6 +282,8 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.anisotropy = o.anisotropy, s.rumble = o.rumble, s.vsync = o.vsync, s.frame_cap = o.frame_cap;
     s.shader_bundle = o.shader_bundle;
     s.framegen = o.framegen;
+    s.framegen_multiplier = o.framegen_multiplier;
+    s.render_ahead = o.render_ahead;
     s.pipeline_skip_draws = o.pipeline_skip_draws;
     for (size_t i = 0; i < kPcControlCount; ++i)
         s.keyboard_bindings[i] = o.keyboard_bindings[i], s.controller_bindings[i] = o.controller_bindings[i];
@@ -389,6 +390,8 @@ static void save_pc_settings() {
          << "\nframe_cap=" << g_pc_settings.frame_cap
          << "\nshader_bundle=" << g_pc_settings.shader_bundle
          << "\nframegen=" << g_pc_settings.framegen
+         << "\nframegen_multiplier=" << g_pc_settings.framegen_multiplier
+         << "\nrender_ahead=" << g_pc_settings.render_ahead
          << "\npipeline_skip_draws=" << g_pc_settings.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kPcControlCount; ++i)
         file << "keyboard_" << i << '=' << g_pc_settings.keyboard_bindings[i] << '\n'
@@ -420,7 +423,7 @@ static void load_pc_settings() {
         else if (std::sscanf(line.c_str(), "button_icons=%d", &value) == 1)
             g_pc_settings.button_icons = std::clamp(value, 0, 4);
         else if (std::sscanf(line.c_str(), "controller_preset=%d", &value) == 1)
-            g_pc_settings.controller_preset = std::clamp(value, 0, 1);
+            g_pc_settings.controller_preset = std::clamp(value, 0, 2);
         else if (std::sscanf(line.c_str(), "metrics_enabled=%d", &value) == 1) g_pc_settings.metrics_enabled = value != 0;
         else if (std::sscanf(line.c_str(), "metric_fps=%d", &value) == 1) g_pc_settings.metric_fps = value != 0;
         else if (std::sscanf(line.c_str(), "metric_one_percent_low=%d", &value) == 1)
@@ -445,6 +448,10 @@ static void load_pc_settings() {
             g_pc_settings.shader_bundle = value != 0;
         else if (std::sscanf(line.c_str(), "framegen=%d", &value) == 1)
             g_pc_settings.framegen = value != 0;
+        else if (std::sscanf(line.c_str(), "render_ahead=%d", &value) == 1)
+            g_pc_settings.render_ahead = std::clamp(value, 1, 2);
+        else if (std::sscanf(line.c_str(), "framegen_multiplier=%d", &value) == 1)
+            g_pc_settings.framegen_multiplier = std::clamp(value, 2, 8);
         else if (std::sscanf(line.c_str(), "pipeline_skip_draws=%d", &value) == 1)
             g_pc_settings.pipeline_skip_draws = value != 0;
         else if (std::sscanf(line.c_str(), "frame_cap=%d", &value) == 1)
@@ -455,7 +462,7 @@ static void load_pc_settings() {
             int index = -1, binding = -1;
             if (std::sscanf(line.c_str(), "keyboard_%d=%d", &index, &binding) == 2 &&
                 index >= 0 && index < int(kPcControlCount) && binding >= 0 && binding <= 255)
-                g_pc_settings.keyboard_bindings[size_t(index)] = binding;
+                g_pc_settings.keyboard_bindings[size_t(index)] = index == int(PcMinus) && binding == VK_ESCAPE ? VK_BACK : binding;
             else if (std::sscanf(line.c_str(), "controller_%d=%d", &index, &binding) == 2 &&
                      index >= 0 && index < int(kPcControlCount) && binding >= 0 && binding < int(kPcControlCount))
                 g_pc_settings.controller_bindings[size_t(index)] = binding;
@@ -474,7 +481,8 @@ static void load_pc_settings() {
     nx::nvn::set_vsync(g_pc_settings.vsync);
     nx::nvn::set_frame_cap(g_pc_settings.frame_cap);
     nx::nvn::set_pipeline_skip_draws(g_pc_settings.pipeline_skip_draws);
-    nx::nvn::set_framegen(g_pc_settings.framegen);
+    nx::nvn::set_framegen(g_pc_settings.framegen, g_pc_settings.framegen_multiplier);
+    nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     nx::set_native_render_width(g_pc_settings.fullscreen ? uint32_t(GetSystemMetrics(SM_CXSCREEN))
@@ -702,7 +710,8 @@ static void apply_pc_menu(const PcMenuState& state, bool persist) {
     nx::nvn::set_vsync(g_pc_settings.vsync);
     nx::nvn::set_frame_cap(g_pc_settings.frame_cap);
     nx::nvn::set_pipeline_skip_draws(g_pc_settings.pipeline_skip_draws);
-    nx::nvn::set_framegen(g_pc_settings.framegen);
+    nx::nvn::set_framegen(g_pc_settings.framegen, g_pc_settings.framegen_multiplier);
+    nx::nvn::set_render_ahead(g_pc_settings.render_ahead);
     controller_rumble_strength(g_pc_settings.rumble);
     controller_keyboard_separate(g_pc_settings.keyboard_separate_player);
     if (g_fullscreen != g_pc_settings.fullscreen) toggle_fullscreen(g_window);
@@ -831,7 +840,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             nx::nvn::flush_pipeline_cache();
             ExitProcess(0);
         case WM_KEYDOWN:
-            if (w == VK_F1 && !(l & (1ll << 30))) {
+            if ((w == VK_F1 || w == VK_ESCAPE) && !(l & (1ll << 30))) {
                 if (overlay::enabled())
                     overlay::toggle();
                 else
@@ -967,6 +976,7 @@ void screen_size(uint32_t& w, uint32_t& h) { window_size(w, h); }
 // ---- input: XInput / SDL gamepad + per-action keyboard bindings -----------------------------------------------
 
 static bool key(int vk) {
+    if (vk == VK_ESCAPE && overlay::enabled()) return false;  // reserved for PC settings
     return vk > 0 && g_window && GetForegroundWindow() == g_window && (GetAsyncKeyState(vk) & 0x8000);
 }
 static std::array<bool, kPcControlCount> g_previous_controller_state{};

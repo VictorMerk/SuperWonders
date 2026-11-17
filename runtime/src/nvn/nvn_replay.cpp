@@ -43,7 +43,7 @@ void replay_list(VkCommandBuffer cb, Targets& st, const CmdList& list, int depth
         static const char* tc = std::getenv("NX_TRACE_CMDS");
         static const uint64_t tc_from = tc ? std::strtoull(tc, nullptr, 10) : 0;
         static int tc_n = 0;
-        if (tc && replay::g_stats.done >= tc_from && tc_n++ < 20000)
+        if (replay::trace_capture() || (tc && replay::g_stats.done >= tc_from && tc_n++ < 20000))
             log("cmd after draw %llu: op %u n %u mask %x a0 %llx a1 %llx i %d %d %d %d f %g %g %g %g depth %d",
                 (unsigned long long)replay::g_stats.done, unsigned(c.op), c.n, c.mask, (unsigned long long)c.a[0],
                 (unsigned long long)c.a[1], c.i[0], c.i[1], c.i[2], c.i[3], c.f[0], c.f[1], c.f[2], c.f[3], depth);

@@ -16,6 +16,10 @@ foreach ($name in @('nx.log', 'nx.log.prev', 'pc-settings.ini')) {
     $source = Join-Path $data $name
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination $OutputDirectory }
 }
+# Include only the two newest bounded timing reports, never shaders/game data.
+Get-ChildItem -LiteralPath $data -Filter 'performance-*.csv' -File |
+    Where-Object { $_.Length -le 32MB } | Sort-Object LastWriteTime -Descending | Select-Object -First 2 |
+    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $OutputDirectory }
 if (Test-Path -LiteralPath (Join-Path $root 'VERSION')) {
     Copy-Item -LiteralPath (Join-Path $root 'VERSION') -Destination $OutputDirectory
 }

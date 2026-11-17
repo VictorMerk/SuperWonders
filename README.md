@@ -8,6 +8,10 @@ launcher shortcuts and save backups, a local shader-loading cache, and optional 
 frame generation. Native LAN with separate game instances is under active synchronization
 testing; Nintendo online services remain offline.
 
+The [2026-11-17 follow-up](docs/PC-PREVIEW-2026-11-17.md) includes the blue pause-background fix with native
+before/after captures, 2x–8x interpolation, Esc settings access, one-picture render-ahead, a Circle-confirm preset,
+mod conflict reporting and timing diagnostics. Read its verification limits before treating the preview as stable.
+
 I'm working on SuperWonders, an experimental Windows and Linux x86-64 static recompilation of *Super Mario Bros. Wonder* (Nintendo Switch, base version 1.0.0) for native execution on PC. I started from the DKB/TOTK recompilation framework and have been adapting its runtime and graphics support for Wonder. The graphics backend uses Vulkan.
 
 This repository contains source code and project documentation. It does not contain the builder package, the game, game assets, a game dump, firmware, or a compiled game. The separate Windows GUI Builder is distributed through [GitHub Releases](https://github.com/vfjoo888/SuperWonders/releases).
@@ -17,7 +21,7 @@ This repository contains source code and project documentation. It does not cont
 - I got a Windows build running and tested it by playing in the game's tutorial area.
 - I added a first-launch shader preparation screen. It compiles the known shader program catalog before the first game frame; the current catalog contains about 12,000 programs. The Vulkan pipeline cache is saved locally for later launches. Shader variants outside the catalog can still compile the first time they are encountered, so some first-use stutter may remain.
 - I fixed the misaligned and flickering shadows I saw when changing the internal resolution, and checked the result at multiple internal resolutions in the tutorial area.
-- I added an in-game menu opened with **F1**, organized into Video, Audio, Controls, Overlay, and System sections.
+- The in-game menu opens with **Esc**, **F1**, or the controller's Minus+Plus chord, with Video, Audio, Controls, Overlay, and System sections.
 - The Video section includes window/output size, fullscreen, always-on-top, and internal-resolution options.
 - The Audio section lets me adjust game volume and select the game language. The settings menu itself is available in English, Italian, German, and French.
 - The Controls section has Xbox/DualSense and Nintendo button-layout presets. It also lets me remap keyboard keys and controller buttons. The Windows runtime includes keyboard, XInput, and DualSense input support.

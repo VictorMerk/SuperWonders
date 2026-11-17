@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "nvn/framegen_timing.h"
+#include "nvn/render_condition.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,17 +18,47 @@ int main() {
     check(nx::nvn::framegen_present_period(60,2) == 33'333'333, "game-requested half-rate cadence");
     check(nx::nvn::framegen_present_period(120,1) == 8'333'333, "explicit high-frame-rate cadence");
     Settings s;
+    check(nx::nvn::report_counter_value(0,123)==0 && nx::nvn::report_counter_value(16,124)==0,
+          "timestamp reports leave the compared counter zero");
+    check(nx::nvn::conditional_render(1,1,0), "fresh capture may clear");
+    check(!nx::nvn::conditional_render(1,nx::nvn::report_counter_value(16,124),0),
+          "timestamp report prevents a repeated capture clear");
+    check(nx::nvn::conditional_render(0,0x100000000ull,0x100000000ull) &&
+          !nx::nvn::conditional_render(0,0x100000000ull,0), "compare both halves of 64-bit counters");
     check(!s.pipeline_skip_draws, "preserve draws by default");
+    check(s.render_ahead == 1, "one queued picture by default");
     // Existing settings files must pick up the new default while retaining user options.
     { std::ofstream f(path); f << "frame_cap=144\nmetrics_enabled=1\n"; }
     check(load_settings(path, s), "load old settings");
     check(!s.pipeline_skip_draws && s.frame_cap == 144 && s.metrics_enabled, "old settings migration");
+    { std::ofstream f(path); f << "keyboard_9=" <<
+#ifdef _WIN32
+        27;
+#else
+        41;
+#endif
+    }
+    check(load_settings(path,s) && s.keyboard_bindings[CtlMinus] ==
+#ifdef _WIN32
+        8,
+#else
+        42,
+#endif
+        "old Esc game binding migrates to Backspace so prompts match the reserved settings key");
     s.pipeline_skip_draws = true;
     s.shader_bundle = false;
     s.framegen = true;
+    s.framegen_multiplier = 4;
+    s.controller_preset = 2;
+    s.render_ahead = 2;
     s.button_icons = 4; s.keyboard_separate_player = true;
     save_settings(path, s);
     Settings t;
+    check(load_settings(path,t) && t.framegen_multiplier == 4 && t.controller_preset == 2 && t.render_ahead == 2,
+          "4x generation and Circle-confirm preset survive restart");
+    check(default_controller_binding(CtlA,2)==PhyEast && default_controller_binding(CtlB,2)==PhySouth &&
+          default_controller_binding(CtlX,2)==PhyWest && default_controller_binding(CtlY,2)==PhyNorth,
+          "Circle confirmation swaps Cross/Circle without changing Square/Triangle");
     check(load_settings(path, t) && t.pipeline_skip_draws && !t.shader_bundle && t.framegen && t.button_icons == 4 && t.keyboard_separate_player, "opt-in survives restart");
     t.pipeline_skip_draws = false;
     save_settings(path, t);

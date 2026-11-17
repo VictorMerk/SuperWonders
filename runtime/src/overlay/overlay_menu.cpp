@@ -626,8 +626,20 @@ void video(MenuContext& c, const Labels& l) {
         if (cap_values[i] == s.frame_cap) cap = i;
     if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1, translated_desc(desc::frame_cap, lang)))
         s.frame_cap = cap_values[cap], settings_changed(true);
-    if (rows::toggle("Frame generation (2x)", &s.framegen, false,
-        "Experimental optical-flow interpolation between game frames. Adds GPU work and display latency; it does not increase simulation speed. Best with a 120 Hz or faster screen at 60 game FPS. May show artifacts around moving objects. Works without DLSS hardware. Leave off when the GPU is already overloaded.")) settings_changed(true);
+    const char* latency_modes[] = {"Low (1 frame ahead)", "Balanced (2 frames ahead)"};
+    int ahead = std::clamp(s.render_ahead,1,2)-1;
+    if (rows::choice("Input latency", &ahead, latency_modes, 2, 0,
+        "Low limits the game to one queued picture instead of two, reducing render-ahead latency. Balanced allows more CPU/GPU overlap and can be faster. This is not an input-lag measurement: VSync, display processing, frame generation and LAN waits still add latency.")) {
+        s.render_ahead = ahead+1; settings_changed(true);
+    }
+    const char* fg_modes[] = {"Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+    int fg = s.framegen ? std::clamp(s.framegen_multiplier, 2, 8)-1 : 0;
+    if (rows::choice("Frame generation", &fg, fg_modes, 8, 0,
+        "Experimental optical-flow interpolation. 4x makes three intermediate pictures per game frame; it does not speed up the game. Higher factors cost more GPU time and may add artifacts or latency. Use a matching high-refresh display (60 game FPS at 4x needs 240 Hz). Leave off when GPU-limited.")) {
+        s.framegen = fg != 0;
+        if (fg) s.framegen_multiplier = fg+1;
+        settings_changed(true);
+    }
     if (rows::toggle("Skip draws while compiling", &s.pipeline_skip_draws, kDefaults.pipeline_skip_draws,
                      "Off keeps objects visible while new shaders compile, but may pause on first use. "
                      "On reduces those pauses by temporarily omitting objects and can cause flickering."))
@@ -675,9 +687,10 @@ void controls(MenuContext& c, const Labels& l) {
         settings_changed(true); ui::notify("Restart the game to update its button prompts.");
     }
     rows::section(kHeaders[lang][1]);
-    const char* presets[] = {"Xbox / DualSense", "Nintendo"};
-    if (rows::choice(l.control_preset, &s.controller_preset, presets, 2, kDefaults.controller_preset, translated_desc(desc::preset, lang)))
-        settings_changed(true);
+    const char* presets[] = {"Xbox / PlayStation: bottom confirms", "Nintendo: right confirms", "PlayStation: Circle confirms"};
+    if (rows::choice(l.control_preset, &s.controller_preset, presets, 3, kDefaults.controller_preset,
+        "Choose bottom-button confirmation (Xbox A / PlayStation Cross), Nintendo layout, or PlayStation Circle confirmation. Circle confirmation swaps Cross and Circle only. Per-action custom bindings below take priority. Restart to refresh in-game button prompts."))
+        settings_changed(true), ui::notify("Restart the game to update its button prompts.");
     if (rows::integer(kCommon[lang][8], &s.rumble, 0, 100, 10, kDefaults.rumble, "%d%%", translated_desc(desc::rumble, lang))) settings_changed(true);
     const auto device = plat::controller_kind(0);
     const char* physical[kControlCount];
@@ -702,7 +715,7 @@ void controls(MenuContext& c, const Labels& l) {
         const char* name = waiting ? "Press a key..." : c.host.key_name ? c.host.key_name(s.keyboard_bindings[a]) : "?";
         if (rows::action(id, name, translated_desc(desc::key, lang), true, waiting)) c.capture_action = int(a);  // overlay.cpp takes the next key
     }
-    rows::page_note(s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
+    rows::page_note(s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
     rows::end();
 }
 

@@ -161,10 +161,10 @@ void draw_metrics(float height) {
             }
         };
         if (ImGui::BeginTable("##m", 2, ImGuiTableFlags_SizingFixedFit)) {
-            if (st.metric_fps) line(interpolated ? "Display FPS" : "FPS", rate(fps), "%.0f", fps, "");
+            if (st.metric_fps) line(interpolated ? "Presented FPS" : "FPS", rate(fps), "%.0f", fps, "");
             if (st.metric_fps && interpolated) {
                 const double game_fps = g_render_fps.load();
-                line("Game FPS", rate(game_fps*2.0), "%.0f", game_fps, "");
+                line("Game FPS", rate(game_fps), "%.0f", game_fps, "");
             }
             if (st.metric_fps && fps > 0) line("Frame", plain, "%.1f", 1000.0 / fps, "ms");
             if (st.metric_one_percent_low) line("1% low", rate(low), "%.0f", low, "FPS");
@@ -279,6 +279,10 @@ void apply_settings(const Settings& s, bool persist) {
 
 void key_event(int raw, Key key, bool down) {
     if (key == KeyF1 && down) {
+        toggle();
+        return;
+    }
+    if (key == KeyEscape && down && !taking_input()) {
         toggle();
         return;
     }

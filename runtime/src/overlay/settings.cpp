@@ -28,6 +28,8 @@ int default_controller_binding(size_t action, int preset) {
         PhyEast, PhySouth, PhyNorth, PhyWest, PhyShoulderL, PhyShoulderR, PhyTriggerL, PhyTriggerR,
         PhyStart, PhyBack, PhyStickL, PhyStickR, PhyLeft, PhyUp, PhyRight, PhyDown,
     };
+    // Circle confirms / Cross backs out, with Square and Triangle unchanged.
+    if (preset == 2 && action < 2) return action == 0 ? PhyEast : PhySouth;
     return action < kControlCount ? (preset == 1 ? nintendo[action] : standard[action]) : PhySouth;
 }
 
@@ -60,7 +62,7 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "low_vram_profile=%d", &v) == 1) s.low_vram_profile = v != 0;
         else if (std::sscanf(l, "keyboard_separate_player=%d", &v) == 1) s.keyboard_separate_player = v != 0;
         else if (std::sscanf(l, "button_icons=%d", &v) == 1) s.button_icons = std::clamp(v, 0, 4);
-        else if (std::sscanf(l, "controller_preset=%d", &v) == 1) s.controller_preset = std::clamp(v, 0, 1);
+        else if (std::sscanf(l, "controller_preset=%d", &v) == 1) s.controller_preset = std::clamp(v, 0, 2);
         else if (std::sscanf(l, "metrics_enabled=%d", &v) == 1) s.metrics_enabled = v != 0;
         else if (std::sscanf(l, "metric_fps=%d", &v) == 1) s.metric_fps = v != 0;
         else if (std::sscanf(l, "metric_one_percent_low=%d", &v) == 1) s.metric_one_percent_low = v != 0;
@@ -75,6 +77,8 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "vsync=%d", &v) == 1) s.vsync = std::clamp(v, 0, 3);
         else if (std::sscanf(l, "shader_bundle=%d", &v) == 1) s.shader_bundle = v != 0;
         else if (std::sscanf(l, "framegen=%d", &v) == 1) s.framegen = v != 0;
+        else if (std::sscanf(l, "render_ahead=%d", &v) == 1) s.render_ahead = std::clamp(v, 1, 2);
+        else if (std::sscanf(l, "framegen_multiplier=%d", &v) == 1) s.framegen_multiplier = std::clamp(v, 2, 8);
         else if (std::sscanf(l, "pipeline_skip_draws=%d", &v) == 1) s.pipeline_skip_draws = v != 0;
         else if (std::sscanf(l, "frame_cap=%d", &v) == 1)
             s.frame_cap = v == 30 || v == 60 || v == 90 || v == 120 || v == 144 ? v : 60;
@@ -83,7 +87,12 @@ bool load_settings(const std::string& path, Settings& s) {
             int index = -1, binding = -1;
             if (std::sscanf(l, "keyboard_%d=%d", &index, &binding) == 2 && index >= 0 && index < int(kControlCount) &&
                 binding >= 0 && binding <= 511)
-                s.keyboard_bindings[size_t(index)] = binding;
+                s.keyboard_bindings[size_t(index)] = index == int(CtlMinus) && binding ==
+#if defined(_WIN32)
+                    27 ? 8 : binding;  // Esc is reserved for settings; game Minus moves to Backspace.
+#else
+                    41 ? 42 : binding;  // SDL scancodes
+#endif
             else if (std::sscanf(l, "controller_%d=%d", &index, &binding) == 2 && index >= 0 &&
                      index < int(kControlCount) && binding >= 0 && binding < int(kControlCount))
                 s.controller_bindings[size_t(index)] = binding;
@@ -109,7 +118,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\noverlay_position=" << s.overlay_position << "\ncontroller_custom_mask=" << s.controller_custom_mask
       << "\nupscaler=" << s.upscaler << "\nfsr_sharpness=" << s.fsr_sharpness << "\nantialiasing=" << s.antialiasing
       << "\nanisotropy=" << s.anisotropy << "\nrumble=" << s.rumble << "\nvsync=" << s.vsync
-      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
+      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\nframegen_multiplier=" << s.framegen_multiplier << "\nrender_ahead=" << s.render_ahead << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kControlCount; ++i)
         f << "keyboard_" << i << '=' << s.keyboard_bindings[i] << '\n'
           << "controller_" << i << '=' << s.controller_bindings[i] << '\n';

@@ -172,6 +172,8 @@ void boot() {
     if (plat::setting("trace") == "1") g_trace = true;
     memory_init();
     if (std::getenv("NX_FRAMEGEN_PROBE")) plat::exit_process(nvn::framegen_probe() ? 0 : 1);
+    if (std::getenv("NX_OVERLAY_INPUT_PROBE")) plat::exit_process(nvn::overlay_input_probe() ? 0 : 1);
+    if (std::getenv("NX_COUNTER_CLEAR_PROBE")) plat::exit_process(nvn::counter_clear_probe() ? 0 : 1);
     const auto args = plat::program_args();
     if (std::find(args.begin(),args.end(),"--pack-shaders") != args.end())
         plat::exit_process(optimize_shader_cache() ? 0 : 1);

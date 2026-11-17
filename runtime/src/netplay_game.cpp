@@ -3,6 +3,7 @@
 #include "netplay_save.h"
 #include "controllers.h"
 #include "play.h"
+#include "frametrace.h"
 #include "launcher/update_crypto.h"
 #include <nx/runtime.h>
 #include <nx/game.h>
@@ -147,6 +148,7 @@ void isolate_client_save(const fs::path& data) {
 void exchange() {
     plat::PadState local{};
     plat::read_pad(local); play::pad(local);
+    ft::input_sample(g_frame);  // includes the following network barrier in diagnostic latency
     try { inputs = session.load()->exchange(local,0,play::netplay_player_state()); }
     catch (const std::exception& e) {
         running = false;

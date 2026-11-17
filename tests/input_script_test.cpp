@@ -49,6 +49,8 @@ int main() {
     write("0:PLUS+MINUS:1;0:RIGHT+B:1");
     now = 2'200'000'000;
     p = read(); check(p.buttons == (kPlus|kMinus|kRight|kB) && p.lx == kStickMax);
+    write("0:DLEFT:1"); now = 2'500'000'000;
+    p = read(); check(p.buttons == kLeft && p.lx == 0 && p.ly == 0);
     std::remove(path.c_str());
     std::puts("live input replacement/expiry/release tests passed");
 }

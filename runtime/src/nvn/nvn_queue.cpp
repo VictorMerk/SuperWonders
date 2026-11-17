@@ -290,6 +290,7 @@ uint32_t governor_max(uint64_t now) {
 // fast ones (docs/nvn/DEBUG.md #43). From that call site (lr main+e16ac, x19 = the framework): a histogram of that
 // time every 600 frames, and NX_MAX_INTERVAL=1 clamps the game's own maximum to 1 (fields 0x24c/0x264/0x268).
 std::atomic<int> g_frame_cap{60};  // set_frame_cap: 60, or 30
+std::atomic<int> g_render_ahead{1};
 std::atomic<int> g_cap_hold{0};    // hold_frame_cap: a lower cap for a moment the game needs at its own rate, 0: none
 int frame_cap_setting() {
     static const int forced = [] {
@@ -447,18 +448,25 @@ void QueuePresentTexture(CPU& c) {
     if (work_from) plat::perf_hint_frame(int64_t(t_in - work_from));
     if (auto* w = get<Window>(c.x[1])) {
         plat::overlay_game_interval(w->interval);
-        // At most two presents queued: the game runs at most two frames ahead of the replay.
+        // A bounded presentation queue; shrinking it drains both old slots so
+        // a stale second picture cannot survive a switch to low latency.
         static uint64_t queued[2] = {};
-        static int next_slot = 0;
+        static int next_slot = 0, previous_limit = 1;
+        const int limit = g_render_ahead.load(std::memory_order_relaxed);
         const uint64_t t_wait = plat::monotonic_ns();
+        if (limit != previous_limit) {
+            for (uint64_t serial : queued) worker_wait(serial);
+            next_slot = 0; previous_limit = limit;
+        }
         worker_wait(queued[next_slot]);
         const uint64_t replay_wait_ns = plat::monotonic_ns() - t_wait;
         if (int(c.x[2]) >= 0 && size_t(c.x[2]) < w->textures.size()) {
             uint64_t texture = w->textures[size_t(c.x[2])];
             std::array<int32_t, 4> crop{w->crop[0], w->crop[1], w->crop[2], w->crop[3]};
             const int interval = w->interval;
-            queued[next_slot] = worker_run([texture, crop, interval] { gpu_present(texture, crop.data(), interval); });
-            next_slot ^= 1;
+            const uint64_t input_sample_ns = ft::input_sample_time(g_frame);
+            queued[next_slot] = worker_run([texture, crop, interval, input_sample_ns] { gpu_present(texture, crop.data(), interval,input_sample_ns); });
+            next_slot = (next_slot+1)%limit;
         }
         const uint64_t t_pace = plat::monotonic_ns();
         pace_present(w->interval);
@@ -523,6 +531,7 @@ int held_frame_cap() {
     return hold && hold < frame_cap_setting() ? hold : 0;
 }
 
+void set_render_ahead(int pictures) { g_render_ahead = std::clamp(pictures,1,2); }
 void set_frame_cap(int fps) {
     const int cap = fps == 30 || fps == 60 || fps == 90 || fps == 120 || fps == 144 ? fps : 60;
     g_frame_cap.store(cap, std::memory_order_relaxed);

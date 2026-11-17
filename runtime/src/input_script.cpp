@@ -38,6 +38,7 @@ std::vector<Press> parse(const char* s) {
         {"L", kL, 0, 0},          {"R", kR, 0, 0},          {"ZL", kZL, 0, 0},        {"ZR", kZR, 0, 0},
         {"PLUS", kPlus, 0, 0},    {"MINUS", kMinus, 0, 0},  {"LEFT", kLeft, -kStickMax, 0},
         {"RIGHT", kRight, kStickMax, 0}, {"UP", kUp, 0, kStickMax}, {"DOWN", kDown, 0, -kStickMax},
+        {"DLEFT", kLeft, 0, 0}, {"DRIGHT", kRight, 0, 0}, {"DUP", kUp, 0, 0}, {"DDOWN", kDown, 0, 0},
     };
     std::vector<Press> v;
     std::string all = s;

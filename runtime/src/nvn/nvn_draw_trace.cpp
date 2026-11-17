@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <string>
@@ -15,6 +16,29 @@
 namespace nx::nvn::replay {
 
 using namespace nx::vk;
+
+bool trace_capture() {
+    static const bool enabled = std::getenv("NX_TRACE_REQUEST") != nullptr;
+    if (!enabled) return false;
+    static uint64_t checked = UINT64_MAX, until = 0;
+    if (checked != g_frame) {
+        checked = g_frame;
+        const std::string path = plat::data_root() + "/trace_capture";
+        if (FILE* f = plat::fopen_utf8(path, "r")) {
+            unsigned frames = 0;
+            const bool valid = std::fscanf(f, "%u", &frames) == 1;
+            std::fclose(f);
+            std::error_code ec;
+            std::filesystem::remove(std::filesystem::u8path(path), ec);
+            if (valid && frames) {
+                until = g_frame + std::min(frames, 6u);
+                log("nvn: bounded trace capture frames %llu..%llu", (unsigned long long)g_frame,
+                    (unsigned long long)(until-1));
+            }
+        }
+    }
+    return g_frame < until;
+}
 
 namespace {
 
@@ -117,7 +141,7 @@ void trace_pass(const char* what, const Targets& t, uint32_t a, uint32_t b) {
     static const char* env = std::getenv("NX_TRACE_PASSES");
     static const uint64_t from = env ? std::strtoull(env, nullptr, 10) : 0;
     static int n = 0;
-    if (!env || g_stats.done < from || n++ >= 4000) return;
+    if (!trace_capture() && (!env || g_stats.done < from || n++ >= 4000)) return;
     Texture* c0 = t.color_count && t.colors[0] ? get<Texture>(t.colors[0]) : nullptr;
     log("pass: %s %x %x after draw %llu: %u colours, 0 = %llx (%ux%u f%x L%u l%u view f%x) depth %llx", what, a, b,
         (unsigned long long)g_stats.done, t.color_count, (unsigned long long)t.colors[0], c0 ? c0->width : 0,
@@ -481,8 +505,8 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
     // NX_TRACE_FS_HASH=<hash>[,<hash>...]: only draws with those fragment shaders.
     static const char* fs_env = std::getenv("NX_TRACE_FS_HASH");
     static const uint64_t trace_count = std::getenv("NX_TRACE_COUNT") ? std::strtoull(std::getenv("NX_TRACE_COUNT"), nullptr, 10) : 80;
-    if (trace_env && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
-        (!fs_env || (fs && std::strstr(fs_env, fs->hash.c_str())))) {  // one hash or a comma list
+    if (trace_capture() || (trace_env && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
+        (!fs_env || (fs && std::strstr(fs_env, fs->hash.c_str()))))) {  // one hash or a comma list
         traced++;
         // NX_TRACE_VERTS=1: the first 3 vertices of stream 0 as floats and halves (8 words each at most).
         if (std::getenv("NX_TRACE_VERTS") && !g_state.streams.empty())

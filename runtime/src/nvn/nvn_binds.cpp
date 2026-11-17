@@ -122,12 +122,12 @@ void SetRenderEnable(CPU& c) {
         log("nvn: SetRenderEnable(%u) x%llu", cmd.n, (unsigned long long)n);
 }
 
-// SetRenderEnableConditional(cmd, NVNconditionalRenderMode, NVNbufferAddress): rendering on or off from values the
-// GPU wrote (occlusion results). Treated as "on": drawing what might have been culled is only extra work, while
-// staying off after a SetRenderEnable(false) dropped whole passes.
+// Preserve the report comparison until replay; earlier reports and CPU updates
+// in that stream may change its result after this command was recorded.
 void SetRenderEnableConditional(CPU& c) {
-    Cmd cmd{Cmd::SetRenderEnable};
-    cmd.n = 1;
+    Cmd cmd{Cmd::SetRenderEnableConditional};
+    cmd.n = uint32_t(c.x[1]);
+    cmd.a[0] = c.x[2];
     record(c.x[0], cmd);
 }
 

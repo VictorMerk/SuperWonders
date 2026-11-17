@@ -10,6 +10,8 @@
 
 static std::string data;
 namespace nx {
+std::atomic<uint64_t> g_frame{0};
+namespace ft { void input_sample(uint64_t) {} }
 void log(const char*,...) {}
 void fatal(const char*,...) { std::abort(); }
 namespace game { const Info kInfo={"wonder","test",0,"test","",0}; }

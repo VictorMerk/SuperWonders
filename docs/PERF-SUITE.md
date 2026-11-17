@@ -26,11 +26,17 @@ at events that cost far more); nothing is written without the variable.
 | `file_reads`, `file_mb`, `file_ms` | guest file and RomFS reads |
 | `minflt`, `majflt` | page faults (Windows: one count, in `minflt`) |
 | `log_line` | log lines written so far: the report prints a hitch's log lines from the run's `NX_LOG` |
+| `sample_to_present_ms` | first HID sample associated with this game frame to its host present; -1 when unavailable. Excludes controller polling and display scanout/response. |
+| `original_picture` | 1 for the current original picture, 0 for an interpolated picture; generated pictures are not extra simulation ticks |
 
-**On screen.** With a real window and a GPU that has `VK_KHR_present_id` and `VK_KHR_present_wait`, the time each frame
-reached the display goes to `<file.csv>.display.csv` (`frame,displayed_ms`, same clock). A present that is late by a few
-ms only stutters if it misses the vblank; these times say whether it did. Not with SDL's offscreen driver (Mesa's
-headless surface offers present wait, but waiting crashes in the driver).
+**Measurement boundary.** The NVN presentation path records host-present timestamps. The display-wait helper is
+not wired into this backend, so this trace does not measure scanout, pixel response or full button-to-photon latency.
+Do not describe the CSV as proof of zero input lag. With frame generation, each displayed submission is a separate
+row; use `original_picture` to distinguish source pictures and disable frame generation for a simple stutter baseline.
+
+On Windows, `tools/trace_performance.ps1 -GameRoot '<prepared installation>'` starts a normal measured game session
+and writes `data/performance-<timestamp>.csv`. Quit normally to flush the final rows. The diagnostics collector includes
+the two newest timing reports up to 32 MiB each. No trace is recorded during normal play unless explicitly enabled.
 
 ## Reporting: `tools/perf/frametrace_report.py`
 

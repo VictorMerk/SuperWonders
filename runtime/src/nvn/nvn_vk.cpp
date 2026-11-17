@@ -25,6 +25,8 @@
 #include "nvn_pipeline.h"
 #include "nvn_shader_prepare.h"
 #include "platform.h"
+#include "frametrace.h"
+#include "nvn_draw_state.h"
 
 #include <nx/game.h>
 
@@ -683,8 +685,11 @@ void gpu_submit(const std::vector<std::shared_ptr<CmdList>>& lists, std::shared_
     draw_end_rendering(g_cb);
     const FrameTimes f1 = frame_times();  // the first part's submit and ring waits are not replay time
     g_timing.submits++;
-    g_timing.replay_ns += plat::monotonic_ns() - t0 - (f1.encode_ns - f0.encode_ns) - (f1.fence_ns - f0.fence_ns);
+    const uint64_t replay_ns = plat::monotonic_ns() - t0 - (f1.encode_ns - f0.encode_ns) - (f1.fence_ns - f0.fence_ns);
+    g_timing.replay_ns += replay_ns;
+    ft::add(ft::kReplayNs,replay_ns);
     g_timing.upload_bytes += async ? frame_upload_used() : g_upload_used;
+    ft::add(ft::kUploadBytes,async ? frame_upload_used() : g_upload_used);
     gpu_profile_mark(g_cb, "end");
     if (async)  // the profile, zero-draw queries and snapshots read this submit's results right below: waited for
         frame_submit(VK_NULL_HANDLE, VK_NULL_HANDLE, draw_take_write_backs(),
@@ -710,9 +715,9 @@ void present_headless(uint64_t texture) {
     if (std::getenv("NX_DRAW_STATS") && presents % 300 == 0) zero_draws_log();
     const bool due = frame_dump_due(presents);
     if (framegen_enabled() && src && src->layout != VK_IMAGE_LAYOUT_UNDEFINED && begin()) {
-        GpuImage *current = nullptr, *middle = nullptr;
-        const bool made = framegen_record(g_cb,*src,nullptr,current,middle);
-        GpuImage* shown = made ? (middle && std::getenv("NX_DUMP_FRAMEGEN") ? middle : current) : src;
+        FramegenFrames frames;
+        const bool made = framegen_record(g_cb,*src,nullptr,frames);
+        GpuImage* shown = made ? frames.images[std::getenv("NX_DUMP_FRAMEGEN") ? 0 : frames.count-1] : src;
         bool dump = false;
         if (due) {
             transition(g_cb,*shown,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -814,7 +819,7 @@ bool framegen_probe() {
     std::lock_guard lock(g_gpu);
     if (!init()) return false;
     bool ok = true;
-    for (uint32_t variant = 0; variant < 5; ++variant) {
+    for (uint32_t variant = 0; variant < 17; ++variant) {
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
@@ -822,6 +827,129 @@ bool framegen_probe() {
         ok = framegen_probe_check() && recorded && ok;
     }
     framegen_release(true);
+    return ok;
+}
+
+bool overlay_input_probe() {
+    if (!present_ui_frame()) return false;  // real ImGui context and Vulkan swapchain
+    bool ok = !overlay::is_open();
+    overlay::key_event(27,overlay::KeyEscape,true);
+    ok = overlay::is_open() && ok;
+    plat::PadState pad{}; pad.buttons = plat::kA;
+    overlay::filter_pad(pad);
+    ok = pad.buttons == 0 && ok;  // the game must not receive menu input
+    if (!present_ui_frame()) return false;
+    overlay::key_event(27,overlay::KeyEscape,false);
+    overlay::key_event(27,overlay::KeyEscape,true);
+    if (!present_ui_frame()) return false;
+    ok = !overlay::is_open() && ok;
+    overlay::key_event(0,overlay::KeyF1,true);
+    ok = overlay::is_open() && ok;
+    pad = {}; overlay::filter_pad(pad);  // release previous controller state
+    pad.buttons = plat::kPlus|plat::kMinus; overlay::filter_pad(pad);
+    ok = !overlay::is_open() && pad.buttons == 0 && ok;
+    overlay::filter_pad(pad);
+    pad.buttons = plat::kPlus|plat::kMinus; overlay::filter_pad(pad);
+    ok = overlay::is_open() && pad.buttons == 0 && ok;
+    if (!present_ui_frame()) return false;
+    overlay::key_event(27,overlay::KeyEscape,true);
+    if (!present_ui_frame()) return false;
+    ok = !overlay::is_open() && ok;
+    log("overlay input probe: Esc open/close, F1, controller chord, input isolation: %s",ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+bool counter_clear_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    // Original synthetic storage, registered exactly like an NVN pool/texture.
+    // No driver getters or game/firmware library are needed for this test.
+    alignas(64) std::array<uint64_t,8> counters{};
+    std::array<uint8_t,16*16*4> texels{};
+    constexpr uint64_t pool_id = 0x7fff00000100ull, texture_id = 0x7fff00000200ull;
+    auto& pool = make<MemoryPool>(pool_id);
+    pool.memory = reinterpret_cast<uintptr_t>(counters.data());
+    pool.size = sizeof counters; pool.gpu = gpu_alloc(pool.size); pool_register(&pool);
+    constexpr uint64_t alias_id = 0x7fff00000300ull;
+    auto& alias = make<MemoryPool>(alias_id);
+    alias.memory = pool.memory; alias.size = pool.size; alias.gpu = gpu_alloc(alias.size); pool_register(&alias);
+    auto& texture = make<Texture>(texture_id);
+    texture.target = 1; texture.format = 0x25; texture.flags = 8;
+    texture.width = texture.height = 16; texture.depth = texture.levels = texture.samples = 1;
+    texture.memory = reinterpret_cast<uintptr_t>(texels.data()); texture.storage_size = texels.size();
+    GpuImage* image = image_of(texture_id);
+    if (!image) return false;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    uint8_t* mapped = nullptr;
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = texels.size(); bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (p_vkCreateBuffer(g_device,&bi,nullptr,&buffer) != VK_SUCCESS) return false;
+    VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,buffer,&req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (p_vkAllocateMemory(g_device,&ai,nullptr,&memory) != VK_SUCCESS ||
+        p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
+        p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;
+    bool ok = true;
+    for (unsigned variant = 0; variant < 7; ++variant) {
+        if (!begin(true)) { ok = false; break; }
+        draw_begin_submit();
+        counters = {}; counters[0] = variant == 5 ? 0x100000000ull : 1;
+        CmdList list;
+        auto enable = [&](bool on) { Cmd c{Cmd::SetRenderEnable}; c.n = on; list.cmds.push_back(c); };
+        auto clear = [&](bool red) {
+            Cmd c{Cmd::ClearColor}; c.mask = 15; c.f[red ? 0 : 2] = c.f[3] = 1;
+            list.cmds.push_back(c);
+        };
+        auto condition = [&](uint32_t mode) {
+            Cmd c{Cmd::SetRenderEnableConditional}; c.n = mode; c.a[0] = variant == 6 ? alias.gpu : pool.gpu; list.cmds.push_back(c);
+        };
+        auto report = [&] { Cmd c{Cmd::ReportCounter}; c.n = 16; c.a[0] = pool.gpu; list.cmds.push_back(c); };
+        enable(true);
+        Cmd target{Cmd::SetRenderTargets}; target.n = 1; target.a[0] = texture_id; list.cmds.push_back(target);
+        clear(false);  // blue baseline
+        bool red = false;
+        if (variant == 0) { report(); condition(1); clear(true); }
+        if (variant == 1) { condition(1); clear(true); report(); clear(false); red = true; }
+        if (variant == 2) { enable(false); clear(true); }
+        if (variant == 3) {
+            report();
+            Cmd update{Cmd::UpdateUniformBuffer}; update.a[0] = pool.gpu; update.a[1] = 32;
+            list.blobs.emplace_back(sizeof(uint64_t)); const uint64_t one = 1;
+            std::memcpy(list.blobs.back().data(),&one,sizeof one); list.cmds.push_back(update);
+            condition(1); clear(true); red = true;
+        }
+        if (variant == 4) { report(); condition(0); clear(true); red = true; }
+        if (variant == 5) { condition(0); clear(true); }
+        if (variant == 6) { report(); condition(1); clear(true); }
+        enable(true);
+        Targets targets;
+        replay_list(g_cb,targets,list,0);
+        // No CPU-visible timestamp completion while the commands are only encoded.
+        bool pass = variant == 5 ? counters[0] == 0x100000000ull : counters[0] == 1;
+        draw_end_rendering(g_cb);
+        transition(g_cb,*image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        copy.imageExtent = {16,16,1};
+        p_vkCmdCopyImageToBuffer(g_cb,image->image,image->layout,buffer,1,&copy);
+        VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,draw_take_write_backs(),true);
+        else { end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE); draw_end_submit(); }
+        for (size_t p = 0; p < texels.size(); p += 4)
+            pass = pass && mapped[p] == (red ? 255 : 0) && mapped[p+1] == 0 && mapped[p+2] == (red ? 0 : 255) && mapped[p+3] == 255;
+        if (variant == 0 || variant == 1 || variant == 4 || variant == 6) pass = pass && counters[0] == 0;
+        if (variant == 3) pass = pass && counters[0] == 1;
+        log("counter/clear GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");
+        ok = pass && ok;
+    }
+    p_vkDeviceWaitIdle(g_device);
+    p_vkUnmapMemory(g_device,memory); p_vkDestroyBuffer(g_device,buffer,nullptr); p_vkFreeMemory(g_device,memory,nullptr);
+    pool_unregister(&pool); pool_unregister(&alias);
+    destroy(texture_id); destroy(pool_id); destroy(alias_id); drain_objects();
     return ok;
 }
 
@@ -833,7 +961,7 @@ bool present_ui_frame() {
     return true;
 }
 
-void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
+void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, uint64_t input_sample_ns) {
     plat::perf_hint_thread();  // the thread that presents takes part in the frame (perf_hint.cpp)
     std::lock_guard lk(g_gpu);
     PresentTimer timer;
@@ -875,7 +1003,9 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     if (!g_swapchain && !make_swapchain()) return;
     uint32_t index = 0;
     VkSemaphore acquired = async_gpu() ? frame_acquire_semaphore() : g_acquired;
+    uint64_t acquire_from = plat::monotonic_ns();
     VkResult r = p_vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index);
+    uint64_t acquire_ns = plat::monotonic_ns()-acquire_from;
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         make_swapchain();
         return;
@@ -900,19 +1030,21 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     // sleep after that work makes its cost accumulate on top of the game cadence.
     const uint64_t base_ns = last_original_ns && started-last_original_ns < interval_ns*3
         ? last_original_ns : started;
-    GpuImage *current = nullptr, *middle = nullptr;
-    if (src && framegen_record(g_cb, *src, crop, current, middle)) {
-        src = middle ? middle : current;
-        crop = nullptr;  // the history snapshot already includes the scaled crop
+    FramegenFrames frames;
+    if (src && framegen_record(g_cb, *src, crop, frames)) {
+        src = frames.images[0];
+        crop = nullptr;  // history snapshots already include the scaled crop
     }
-    const int display_count = middle ? 2 : 1;
+    const int display_count = frames.count ? int(frames.count) : 1;
     for (int display = 0; display < display_count; ++display) {
         if (display) {
             acquired = async_gpu() ? frame_acquire_semaphore() : g_acquired;
+            acquire_from = plat::monotonic_ns();
             r = p_vkAcquireNextImageKHR(g_device,g_swapchain,UINT64_MAX,acquired,VK_NULL_HANDLE,&index);
+            acquire_ns = plat::monotonic_ns()-acquire_from;
             if (r == VK_ERROR_OUT_OF_DATE_KHR) { make_swapchain(); break; }
             if (!check(r,"vkAcquireNextImageKHR (generated frame)") || !begin()) break;
-            src = current;
+            src = frames.images[display];
             dst = {};
             dst.image = g_sc_images[index]; dst.format = g_sc_format;
         }
@@ -950,9 +1082,6 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     overlay::record(g_cb, index, g_sc_images, g_sc_format, g_sc_extent);  // the F1 menu and metrics (overlay/)
     static uint64_t presents = 0;
     presents++;
-    if (std::getenv("NX_DRAW_STATS") && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
-    if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
-    if (std::getenv("NX_DRAW_STATS") && presents % 300 == 0) zero_draws_log();
     frame_sig_flush(presents);
     const bool due = frame_dump_due(presents);
     GpuImage* shown = src;  // NX_DUMP_FSR: the image as presented (after FXAA and FSR 1)
@@ -985,14 +1114,18 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
-    if (middle) {
-        const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/2;
+    if (display_count > 1) {
+        const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/uint64_t(display_count);
         const uint64_t now = plat::monotonic_ns();
         if (target > now) plat::sleep_ns(target-now);
     }
+    const uint64_t present_from = plat::monotonic_ns();
     r = p_vkQueuePresentKHR(g_queue, &pi);
-    if (!middle || display == 1) last_original_ns = plat::monotonic_ns();
+    const uint64_t queue_present_ns = plat::monotonic_ns()-present_from;
+    if (display+1 == display_count) last_original_ns = plat::monotonic_ns();
     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
+    const FrameTimes totals = frame_times();
+    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count);
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
     bool remake = r == VK_ERROR_OUT_OF_DATE_KHR;
@@ -1004,7 +1137,14 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval) {
     }
     if (remake) { make_swapchain(); break; }
     }  // original and optional generated presentation
-    overlay::rendered(plat::monotonic_ns(), framegen_enabled());
+    // Generated pictures must not multiply cache-save frequency or make game
+    // replay/submission statistics appear divided by the interpolation factor.
+    static uint64_t game_presents = 0;
+    ++game_presents;
+    if (std::getenv("NX_DRAW_STATS") && game_presents % (game_presents < 300 ? 60 : 300) == 0) draw_log_stats();
+    if (game_presents % 60 == 0) log_timing(60), gpu_profile_log(60);
+    if (std::getenv("NX_DRAW_STATS") && game_presents % 300 == 0) zero_draws_log();
+    overlay::rendered(plat::monotonic_ns(), display_count > 1);
 }
 
 }  // namespace nx::nvn

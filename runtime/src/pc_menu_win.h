@@ -28,6 +28,7 @@ inline int pc_default_controller_binding(size_t action, int preset) {
         PcEast, PcSouth, PcNorth, PcWest, PcShoulderL, PcShoulderR, PcTriggerL, PcTriggerR,
         PcStart, PcBack, PcStickL, PcStickR, PcLeft, PcUp, PcRight, PcDown,
     };
+    if (preset == 2 && action < 2) return action == 0 ? PcEast : PcSouth;
     return action < kPcControlCount ? (preset == 1 ? nintendo[action] : standard[action]) : PcSouth;
 }
 
@@ -58,12 +59,14 @@ struct PcMenuState {
     int vsync = 1;             // overlay menu: 0 On, 1 Fast, 2 Adaptive, 3 Off
     int frame_cap = 60;        // 30, 60, 90, 120, or 144 FPS
     bool shader_bundle = true;  // sequential shader cache, applies at startup
-    bool framegen = false;  // experimental optical-flow 2x presentation
+    bool framegen = false;  // experimental optical-flow presentation
+    int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
+    int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
     bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16
     int rumble = 100;          // overlay menu: rumble strength, percent
     std::array<int, kPcControlCount> keyboard_bindings = {
-        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_ESCAPE, 'M', 'N',
+        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_BACK, 'M', 'N',
         VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN,
     };
     std::array<int, kPcControlCount> controller_bindings{};

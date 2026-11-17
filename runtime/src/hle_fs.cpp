@@ -23,6 +23,8 @@
 #include <nx/runtime.h>
 
 #include "platform.h"
+#include "file_io.h"
+#include <optional>
 #include "frametrace.h"
 #include "play.h"
 #include "netplay_game.h"
@@ -265,21 +267,32 @@ void GetEntryType(CPU& c) {  // (DirectoryEntryType* out, path)
 }
 
 void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4 append)
-    std::lock_guard lk(g_fs);
     std::string guest = cstr(c.x[1]);
-    fs::path p = resolve(guest);
+    fs::path p;
+    std::optional<std::string> virtual_data;
+    {
+        std::lock_guard lk(g_fs);
+        p = resolve(guest);
+        if (const std::string* data = find_virtual(p)) virtual_data = *data;
+    }
+    auto publish = [&](FILE* file) {
+        std::lock_guard lk(g_fs);
+        const uint64_t handle = g_next++;
+        g_files[handle] = std::make_shared<File>(file,guest);
+        st<uint64_t>(c.x[0],handle);
+        return handle;
+    };
     int mode = int(c.x[2]);
-    if (const std::string* v = find_virtual(p)) {  // served from memory, through a temporary file
+    if (const std::string* v = virtual_data ? &*virtual_data : nullptr) {  // copied while the table was locked
         FILE* f = std::tmpfile();
         if (!f) {
             c.x[0] = kPathNotFound;
             return;
         }
-        std::fwrite(v->data(), 1, v->size(), f);
-        std::fflush(f);
-        uint64_t h = g_next++;
-        g_files[h] = std::make_shared<File>(f, guest);
-        st<uint64_t>(c.x[0], h);
+        const bool wrote = std::fwrite(v->data(), 1, v->size(), f)==v->size();
+        const bool flushed = std::fflush(f)==0;
+        if (!wrote || !flushed) { std::fclose(f); c.x[0] = kTargetNotFound; return; }
+        const uint64_t h = publish(f);
         if (trace_fs()) log("fs: OpenFile(%s) -> virtual, %zu bytes", guest.c_str(), v->size());
         c.x[0] = kOk;
         return;
@@ -295,9 +308,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         c.x[0] = kPathNotFound;
         return;
     }
-    uint64_t h = g_next++;
-    g_files[h] = std::make_shared<File>(f, guest);
-    st<uint64_t>(c.x[0], h);
+    const uint64_t h = publish(f);
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     play::file_opened(guest);
     c.x[0] = kOk;
@@ -320,13 +331,10 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
         c.x[0] = kTargetNotFound;
         return;
     }
-    std::lock_guard lk(g_fs);  // the FILE position is shared with writers
-    FILE* f = file->f;
-    int64_t cur = plat::ftell64(f);
-    plat::fseek64(f, 0, SEEK_END);
-    st<int64_t>(c.x[0], plat::ftell64(f));
-    if (g_trace) log("fs: size %s = %lld", file->path.c_str(), (long long)ld<int64_t>(c.x[0]));
-    plat::fseek64(f, cur, SEEK_SET);
+    const int64_t length = file_io::size(file->f);
+    if (length < 0) { c.x[0] = kTargetNotFound; return; }
+    st<int64_t>(c.x[0],length);
+    if (g_trace) log("fs: size %s = %lld", file->path.c_str(),(long long)length);
     c.x[0] = kOk;
 }
 
@@ -377,17 +385,14 @@ void WriteFile(CPU& c) {  // (FileHandle, s64 off, const void* buf, size_t size,
         c.x[0] = kTargetNotFound;
         return;
     }
-    std::lock_guard lk(g_fs);
-    plat::fseek64(file->f, int64_t(c.x[1]), SEEK_SET);
-    fwrite(reinterpret_cast<const void*>(c.x[2]), 1, c.x[3], file->f);
-    fflush(file->f);  // positional reads bypass the FILE buffer (saves only: rare and small)
-    c.x[0] = kOk;
+    const bool ok = file_io::write_at(file->f,int64_t(c.x[1]),reinterpret_cast<const void*>(c.x[2]),c.x[3]);
+    if (!ok) log("fs: positional write/flush failed for %s",file->path.c_str());
+    c.x[0] = ok ? kOk : kTargetNotFound;
 }
 
 void FlushFile(CPU& c) {
     if (auto file = open_file(c.x[0])) {
-        std::lock_guard lk(g_fs);
-        fflush(file->f);
+        if (std::fflush(file->f)!=0) { c.x[0] = kTargetNotFound; return; }
     }
     c.x[0] = kOk;
 }

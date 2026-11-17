@@ -1,3 +1,4 @@
+#include "file_io.h"
 #include <cstdlib>
 // Android host (NativeActivity): memory (mmap at fixed addresses), pthreads, the app's window (ANativeWindow),
 // game controllers + touch, AAudio, the Vulkan loader and android surface, a signal crash handler and
@@ -242,17 +243,7 @@ FILE* fopen_utf8(const std::string& path, const char* mode) { return std::fopen(
 int64_t ftell64(FILE* f) { return ftello(f); }
 int fseek64(FILE* f, int64_t off, int origin) { return fseeko(f, off, origin); }
 uint64_t read_at(FILE* f, int64_t off, void* buf, uint64_t size) {
-    // A size that does not fit ssize_t (the game passes -1) reads nothing, as fread did (and the game expects).
-    if (size > uint64_t(SSIZE_MAX)) return 0;
-    int fd = fileno(f);
-    uint64_t done = 0;
-    while (done < size) {
-        ssize_t n = pread(fd, static_cast<uint8_t*>(buf) + done, size_t(size - done), off + int64_t(done));
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
-        done += uint64_t(n);
-    }
-    return done;
+    return file_io::read_at(f,off,buf,size);
 }
 bool make_dirs(const std::string& path) {
     std::error_code ec;

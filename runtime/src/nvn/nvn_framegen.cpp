@@ -16,9 +16,10 @@ namespace nx::nvn {
 using namespace nx::vk;
 namespace {
 std::atomic<bool> enabled{false};
+std::atomic<int> multiplier{2};
 struct State {
     bool tried = false, ready = false, history = false;
-    uint32_t width = 0, height = 0, failed_width = 0, failed_height = 0, current = 0, next_set = 0;
+    uint32_t width = 0, height = 0, failed_width = 0, failed_height = 0, failed_factor = 0, current = 0, next_set = 0;
     uint64_t last = 0, generated = 0;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -30,7 +31,8 @@ struct State {
     std::array<VkDescriptorSet, kSets> sets{};
     std::array<GpuImage, 2> picture{}, luma_full{}, quarter{}, sixteenth{};
     std::array<GpuImage, 6> flow{};
-    GpuImage middle;
+    std::array<GpuImage, 7> middle{};
+    uint32_t factor = 0;
 } state;
 
 void barrier(VkCommandBuffer cb) {
@@ -54,7 +56,8 @@ void free_images() {
     for (auto* images : {&state.picture, &state.luma_full, &state.quarter, &state.sixteenth})
         for (auto& image : *images) free_image(image);
     for (auto& image : state.flow) free_image(image);
-    free_image(state.middle);
+    for (auto& image : state.middle) free_image(image);
+    state.factor = 0;
     state.width = state.height = 0; state.history = false;
 }
 bool image(GpuImage& out, uint32_t width, uint32_t height, VkFormat format) {
@@ -144,9 +147,9 @@ bool init() {
     log("nvn/vk: optical-flow frame generation pipelines %s", state.ready ? "ready" : "unavailable");
     return state.ready;
 }
-bool ensure_images(uint32_t width, uint32_t height) {
-    if (state.width == width && state.height == height) return true;
-    if (state.failed_width == width && state.failed_height == height) return false;
+bool ensure_images(uint32_t width, uint32_t height, uint32_t factor) {
+    if (state.width == width && state.height == height && state.factor == factor) return true;
+    if (state.failed_width == width && state.failed_height == height && state.failed_factor == factor) return false;
     p_vkDeviceWaitIdle(vk_device()); free_images();
     const uint32_t qw = (width+3)/4, qh = (height+3)/4, gw = (width+15)/16, gh = (height+15)/16;
     bool ok = true;
@@ -157,12 +160,13 @@ bool ensure_images(uint32_t width, uint32_t height) {
              image(state.sixteenth[i], gw, gh, VK_FORMAT_R16_SFLOAT);
     for (uint32_t i = 0; i < 6 && ok; ++i)
         ok = image(state.flow[i], i < 2 ? (gw+1)/2 : gw, i < 2 ? (gh+1)/2 : gh, VK_FORMAT_R16G16_SFLOAT);
-    ok = ok && image(state.middle, width, height, VK_FORMAT_R8G8B8A8_UNORM);
+    for (uint32_t i = 0; i+1 < factor && ok; ++i)
+        ok = image(state.middle[i], width, height, VK_FORMAT_R8G8B8A8_UNORM);
     if (!ok) {
-        free_images(); state.failed_width = width; state.failed_height = height;
+        free_images(); state.failed_width = width; state.failed_height = height; state.failed_factor = factor;
         log("nvn/vk: frame generation disabled for %ux%u: image allocation failed", width, height); return false;
     }
-    state.width = width; state.height = height; state.current = 0;
+    state.width = width; state.height = height; state.current = 0; state.factor = factor;
     log("nvn/vk: optical-flow history allocated: %ux%u", width, height);
     return true;
 }
@@ -189,13 +193,14 @@ void pass(VkCommandBuffer cb, VkPipeline program, GpuImage& a, GpuImage& b, GpuI
 }
 }
 
-void set_framegen(bool on) { enabled = on; }
+void set_framegen(bool on, int factor) { multiplier = std::clamp(factor,2,8); enabled = on; }
 bool framegen_enabled() {
     static const int forced = [] { const char* e = std::getenv("NX_FRAMEGEN"); return e ? (e[0] != '0') : -1; }();
     return forced < 0 ? enabled.load() : forced != 0;
 }
-bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, GpuImage*& current, GpuImage*& middle) {
-    current = middle = nullptr;
+bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, FramegenFrames& frames) {
+    frames = {};
+    const uint32_t factor = uint32_t(multiplier.load());
     if (!framegen_enabled()) { state.history = false; return false; }
     if (src.format != VK_FORMAT_R8G8B8A8_UNORM && src.format != VK_FORMAT_B8G8R8A8_UNORM) {
         state.history = false; return false;
@@ -210,7 +215,7 @@ bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, Gpu
     }
     x = std::clamp(x, 0, int(src.width)); y = std::clamp(y, 0, int(src.height));
     w = std::clamp(w, 0, int(src.width)-x); h = std::clamp(h, 0, int(src.height)-y);
-    if (!w || !h || !ensure_images(uint32_t(w), uint32_t(h))) return false;
+    if (!w || !h || !ensure_images(uint32_t(w), uint32_t(h), factor)) return false;
     const uint64_t now = plat::monotonic_ns();
     const bool interpolate = state.history && now > state.last && now-state.last < 100'000'000;
     state.last = now;
@@ -238,18 +243,22 @@ bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, Gpu
         pass(cb,state.median,f[2],f[2],f[2],f[3],level);
         pass(cb,state.full,state.luma_full[prev],lf,f[3],f[4],pc1);
         pass(cb,state.median,f[4],f[4],f[4],f[5],level);
-        const float pc[4] = {.5f,1.0f/(16.0f*le.width),1.0f/(16.0f*le.height),0};
-        pass(cb,state.synth,state.picture[prev],pic,f[5],state.middle,pc);
-        middle = &state.middle;
-        if (++state.generated % 600 == 1) log("nvn/vk: optical-flow interpolation: %llu frames generated", (unsigned long long)state.generated);
+        for (uint32_t i = 0; i+1 < factor; ++i) {
+            const float pc[4] = {float(i+1)/float(factor),1.0f/(16.0f*le.width),1.0f/(16.0f*le.height),0};
+            pass(cb,state.synth,state.picture[prev],pic,f[5],state.middle[i],pc);
+            frames.images[frames.count++] = &state.middle[i];
+        }
+        state.generated += factor-1;
+        if ((state.generated-(factor-1))/600 != state.generated/600 || state.generated == factor-1)
+            log("nvn/vk: optical-flow interpolation %ux: %llu frames generated", factor, (unsigned long long)state.generated);
     }
-    current = &pic; state.history = true; state.current ^= 1;
+    frames.images[frames.count++] = &pic; state.history = true; state.current ^= 1;
     return true;
 }
 void framegen_release(bool destroy_pipelines) {
     if (!state.tried) return;
     p_vkDeviceWaitIdle(vk_device()); free_images();
-    state.last = 0; state.failed_width = state.failed_height = 0;
+    state.last = 0; state.failed_width = state.failed_height = state.failed_factor = 0;
     if (!destroy_pipelines) return;  // window resizing keeps size-independent compute pipelines
     const auto device = vk_device();
     for (auto program : {state.luma,state.coarse,state.fine,state.full,state.median,state.synth})
@@ -270,7 +279,9 @@ struct Probe {
     VkQueryPool timing = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint8_t* mapped = nullptr;
-    std::vector<uint8_t> a, b, expected;
+    std::vector<uint8_t> a, b;
+    std::vector<std::vector<uint8_t>> expected;
+    uint32_t factor = 2;
     bool recorded = false, still = false;
 } probe;
 }
@@ -280,21 +291,31 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     const uint32_t height = variant >= 3 ? 720 : variant == 1 ? 96 : 128;
     const size_t bytes = size_t(width)*height*4;
     if (!image(probe.source,width,height,VK_FORMAT_R8G8B8A8_UNORM)) return false;
-    auto picture = [&](int shift) {
+    auto colour = [](int x, uint32_t y) {
+        uint32_t h = uint32_t(std::max(0,x)) + y*0x9E3779B9u;
+        h = (h^(h>>16))*0x85EBCA6Bu; h = (h^(h>>13))*0xC2B2AE35u; h ^= h>>16;
+        return std::array<uint8_t,4>{uint8_t(32+(h&127)),uint8_t(64+((h>>8)&127)),uint8_t(32+((h>>16)&127)),255};
+    };
+    auto picture = [&](float shift) {
         std::vector<uint8_t> pixels(bytes);
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
-            uint32_t h = uint32_t(std::max(0,int(x)-shift)) + y*0x9E3779B9u;
-            h = (h^(h>>16))*0x85EBCA6Bu; h = (h^(h>>13))*0xC2B2AE35u; h ^= h>>16;
+            const float source = float(x)-shift;
+            const int lo = int(std::floor(source));
+            const float f = source-float(lo);
+            const auto a = colour(lo,y), b = colour(lo+1,y);
             const size_t p = (size_t(y)*width+x)*4;
-            pixels[p] = uint8_t(32+(h&127)); pixels[p+1] = uint8_t(64+((h>>8)&127));
-            pixels[p+2] = uint8_t(32+((h>>16)&127)); pixels[p+3] = 255;
+            for (size_t c = 0; c < 4; ++c) pixels[p+c] = uint8_t(std::lround(float(a[c])*(1-f)+float(b[c])*f));
         }
         return pixels;
     };
-    probe.still=variant==4;
-    probe.a = picture(0); probe.b = picture(probe.still?0:16); probe.expected = picture(probe.still?0:8);
+    probe.factor = variant < 3 ? 2 : 2+(variant-3)%7;
+    probe.still = variant >= 10;
+    probe.a = picture(0); probe.b = picture(probe.still ? 0 : 16);
+    for (uint32_t i = 1; i < probe.factor; ++i)
+        probe.expected.push_back(picture(probe.still ? 0 : 16.0f*float(i)/float(probe.factor)));
+    const size_t output_bytes = bytes*(probe.factor-1);
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size = bytes; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bi.size = output_bytes; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     const auto device = vk_device();
     if (p_vkCreateBuffer(device,&bi,nullptr,&probe.buffer) != VK_SUCCESS) return false;
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(device,probe.buffer,&req);
@@ -303,7 +324,7 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (p_vkAllocateMemory(device,&ai,nullptr,&probe.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(device,probe.buffer,probe.memory,0) != VK_SUCCESS ||
-        p_vkMapMemory(device,probe.memory,0,bytes,0,reinterpret_cast<void**>(&probe.mapped)) != VK_SUCCESS) return false;
+        p_vkMapMemory(device,probe.memory,0,output_bytes,0,reinterpret_cast<void**>(&probe.mapped)) != VK_SUCCESS) return false;
     VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = 2;
     if (p_vkCreateQueryPool(device,&qi,nullptr,&probe.timing) == VK_SUCCESS) {
@@ -311,8 +332,8 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         p_vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,probe.timing,0);
     }
     state.history = false;
-    set_framegen(true);
-    GpuImage *current = nullptr, *middle = nullptr;
+    set_framegen(true,int(probe.factor));
+    FramegenFrames frames;
     for (const auto* pixels : {&probe.a,&probe.b}) {
         auto data = upload_alloc(bytes,16);
         std::memcpy(data.ptr,pixels->data(),bytes);
@@ -320,12 +341,16 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         VkBufferImageCopy copy{}; copy.bufferOffset = data.offset;
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent = {width,height,1};
         p_vkCmdCopyBufferToImage(cb,data.buffer,probe.source.image,probe.source.layout,1,&copy);
-        if (!framegen_record(cb,probe.source,nullptr,current,middle)) return false;
+        if (!framegen_record(cb,probe.source,nullptr,frames)) return false;
     }
-    if (!middle) return false;
-    transition(cb,*middle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent = {width,height,1};
-    p_vkCmdCopyImageToBuffer(cb,middle->image,middle->layout,probe.buffer,1,&copy);
+    if (frames.count != probe.factor) return false;
+    for (uint32_t i = 0; i+1 < frames.count; ++i) {
+        GpuImage* middle = frames.images[i];
+        transition(cb,*middle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy copy{}; copy.bufferOffset = bytes*i;
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent = {width,height,1};
+        p_vkCmdCopyImageToBuffer(cb,middle->image,middle->layout,probe.buffer,1,&copy);
+    }
     VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     p_vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
@@ -336,22 +361,28 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
 bool framegen_probe_check() {
     bool ok = probe.recorded;
     if (ok) {
-        double generated = 0, before = 0, after = 0;
-        for (size_t i = 0; i < probe.expected.size(); ++i) if (i%4 != 3) {
-            generated += std::abs(int(probe.mapped[i])-int(probe.expected[i]));
-            before += std::abs(int(probe.a[i])-int(probe.expected[i]));
-            after += std::abs(int(probe.b[i])-int(probe.expected[i]));
+        for (size_t frame = 0; frame < probe.expected.size(); ++frame) {
+            const auto& expected = probe.expected[frame];
+            const uint8_t* actual = probe.mapped+frame*expected.size();
+            double generated = 0, before = 0, after = 0;
+            for (size_t i = 0; i < expected.size(); ++i) if (i%4 != 3) {
+                generated += std::abs(int(actual[i])-int(expected[i]));
+                before += std::abs(int(probe.a[i])-int(expected[i]));
+                after += std::abs(int(probe.b[i])-int(expected[i]));
+            }
+            const double channels = double(expected.size()/4*3);
+            const bool pass = probe.still ? generated==0 : generated < .9*std::min(before,after);
+            ok = pass && ok;
+            log("framegen probe %ux %ux%u %s %zu/%u: error %.3f, input errors %.3f / %.3f: %s",
+                probe.factor,probe.source.width,probe.source.height,probe.still ? "still" : "moving",
+                frame+1,probe.factor,generated/channels,before/channels,after/channels,pass ? "PASS" : "FAIL");
         }
-        const double channels = double(probe.expected.size()/4*3);
-        ok = probe.still ? generated==0 : generated < .9*std::min(before,after);
-        log("framegen probe %ux%u: midpoint error %.3f, input errors %.3f / %.3f: %s",
-            probe.source.width,probe.source.height,generated/channels,before/channels,after/channels,ok ? "PASS" : "FAIL");
-    } else log("framegen probe: no interpolated image: FAIL");
+    } else log("framegen probe: missing interpolated images: FAIL");
     if (probe.recorded && probe.timing) {
         uint64_t ticks[2]{};
         if (p_vkGetQueryPoolResults(vk_device(),probe.timing,0,2,sizeof ticks,ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
             VkPhysicalDeviceProperties props{}; p_vkGetPhysicalDeviceProperties(vk_physical(),&props);
-            log("framegen probe GPU workload: %.3f ms (two captures, one midpoint)",double(ticks[1]-ticks[0])*props.limits.timestampPeriod/1e6);
+            log("framegen probe GPU workload: %.3f ms (two captures, %u intermediates)",double(ticks[1]-ticks[0])*props.limits.timestampPeriod/1e6,probe.factor-1);
         }
     }
     if (probe.timing) p_vkDestroyQueryPool(vk_device(),probe.timing,nullptr);

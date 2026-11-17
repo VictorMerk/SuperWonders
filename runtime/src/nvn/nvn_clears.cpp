@@ -198,6 +198,7 @@ void clears_log() {
 // targets: most of the ~25 ms per frame of GPU time "outside passes" (docs/nvn/DEBUG.md #31). Depth and stencil
 // clears honour the call's masks.
 void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
+    if (!replay::rendering_enabled()) return;
     bool color = c.op == Cmd::ClearColor;
     uint64_t guest = color ? (c.n < 8 ? t.colors[c.n] : 0) : t.depth;
     GpuImage* img = guest ? image_of(guest) : nullptr;

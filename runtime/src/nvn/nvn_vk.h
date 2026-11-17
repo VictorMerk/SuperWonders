@@ -66,10 +66,15 @@ void fsr_release();      // the swapchain goes away
 void set_fxaa(bool on);
 GpuImage* fxaa_record(VkCommandBuffer cb, GpuImage& src);  // the anti-aliased image, or null (off, or not RGBA8)
 void fxaa_release();
-// Optional 2x picture-based interpolation. Called under the GPU lock.
-void set_framegen(bool on);
+// Optional 2x..8x picture-based interpolation. Called under the GPU lock.
+void set_framegen(bool on, int multiplier = 2);
+void set_render_ahead(int pictures);  // 1 low latency, 2 balanced, drained on changes
 bool framegen_enabled();
-bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, GpuImage*& current, GpuImage*& middle);
+struct FramegenFrames {
+    GpuImage* images[8]{};  // chronological intermediates, then the current original
+    uint32_t count = 0;
+};
+bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, FramegenFrames& frames);
 void framegen_release(bool destroy_pipelines = false);
 bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant);
 bool framegen_probe_check();

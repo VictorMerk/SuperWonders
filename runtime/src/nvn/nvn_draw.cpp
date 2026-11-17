@@ -399,7 +399,7 @@ void vertex_read_barrier(VkCommandBuffer cb, const ShaderInfo* vs) {
 
 bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, const Cmd& c) {
     g_stats.total++;
-    if (g_state.rasterizer_discard || !g_state.render_enable) return false;  // nothing reaches the targets
+    if (g_state.rasterizer_discard || !rendering_enabled()) return false;  // nothing reaches the targets
     const auto* shaders = program_shaders(g_state.program);
     if (!shaders || shaders->empty()) {
         g_stats.no_program++;
@@ -654,6 +654,8 @@ void draw_end_submit() {  // after the submit's fence: compute results to guest 
 
 std::vector<WriteBack> draw_take_write_backs() {  // an asynchronous submit copies them when it is retired
     std::vector<WriteBack> v = written_take();  // one per written range (disjoint), then NX_COMPUTE_SEPARATE's
+    auto reports = reports_take_write_backs();
+    v.insert(v.end(),reports.begin(),reports.end());
     v.insert(v.end(), separate_write_backs().begin(), separate_write_backs().end());
     separate_write_backs().clear();
     return v;
@@ -669,6 +671,7 @@ void draw_begin_submit() {
     g_submit_ns = plat::monotonic_ns();
     dedup_reset();
     written_reset();
+    reports_begin_submit();
     pipeline_begin_submit();
 }
 

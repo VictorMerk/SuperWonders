@@ -1,6 +1,7 @@
 // SuperWonders Launcher (launcher.h): state, the setup job, and the screen.
 #include "launcher/launcher.h"
 #include "launcher/save_backup.h"
+#include "launcher/mod_catalog.h"
 
 #include <algorithm>
 #include <atomic>
@@ -308,28 +309,15 @@ private:
 };
 
 // ---- mods: <data root>/mods/<name>/ (hle_fs.cpp mod_roots: name order, a leading '-' turns one off) ----
-struct Mod {
-    std::string name;  // without the '-'
-    bool on;
-};
-
-std::vector<Mod> list_mods() {
-    std::vector<Mod> out;
-    std::error_code ec;
-    for (auto& e : fs::directory_iterator(u8(plat::data_root()) / "mods", ec)) {
-        if (!e.is_directory()) continue;
-        std::string n = str(e.path().filename());
-        bool on = n.rfind('-', 0) != 0;
-        out.push_back({on ? n : n.substr(1), on});
-    }
-    std::sort(out.begin(), out.end(), [](const Mod& a, const Mod& b) { return a.name < b.name; });
-    return out;
-}
+using Mod = ModInfo;
+std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods"); }
 
 bool set_mod(const Mod& m, bool on) {
     const fs::path dir = u8(plat::data_root()) / "mods";
     std::error_code ec;
-    fs::rename(dir / u8(m.on ? m.name : "-" + m.name), dir / u8(on ? m.name : "-" + m.name), ec);
+    const auto destination = dir / u8(on ? m.name : "-"+m.name);
+    if (fs::exists(destination,ec) || ec) return false;
+    fs::rename(dir / u8(m.on ? m.name : "-" + m.name), destination, ec);
     return !ec;
 }
 
@@ -876,7 +864,7 @@ void page_settings() {
     if (!fs::is_directory(u8(plat::data_root()) / "backups", backup_error)) rows::disable_next();
     if (rows::action("Open save backups", "Folder", "Browse your saved copies. Close the game before manually restoring a backup."))
         plat::open_folder(plat::data_root() + "/backups");
-    rows::page_note("These are the same settings used in-game. Open them any time with F1 or Minus + Plus.");
+    rows::page_note("These are the same settings used in-game. Open them any time with Esc, F1 or Minus + Plus.");
     rows::end();
 }
 
@@ -887,14 +875,33 @@ void page_mods() {
         rows::action("No mods yet", "", "Put each mod in a folder of its own in the mods folder. A mod holds a romfs "
                                         "folder (romfs/, or contents/<title id>/romfs/ as Switch mods come).",
                      true);
+    uint64_t enabled = 0, conflicts = 0;
+    for (const auto& m : g->mods) if (m.on) { ++enabled; conflicts += m.shadowed; }
+    const std::string summary = std::to_string(enabled)+" enabled | "+std::to_string(conflicts)+" shadowed files";
+    rows::action("Load order",summary.c_str(),"Mods load in name order. The first enabled mod supplying a path wins. Shadowed files in later mods are ignored. Changes apply after restarting the game. LAN peers need identical enabled mods.",true);
+    bool rescan = false;
     for (Mod& m : g->mods) {
         bool on = m.on;
-        if (rows::toggle(m.name.c_str(), &on, true,
-                         "Its files go over the game's. Mods load in name order; the first with a file wins. "
-                         "Applies the next time the game starts.") &&
-            set_mod(m, on))
-            m.on = on;
+        std::string details = std::to_string(m.files)+" files, "+std::to_string(m.bytes/1024)+" KiB. ";
+        details += m.issue.empty() ? "RomFS layout detected. " : m.issue+" ";
+        if (m.shadowed) details += std::to_string(m.shadowed)+" files are overridden by earlier mods. ";
+        for (const auto& conflict : m.conflicts) details += "\n"+conflict;
+        details += "\nRestart after changes. Custom code patches outside RomFS are not installed by this manager.";
+        const auto phase = lan::lobby_status().phase;
+        const bool paired = lan::active() || phase == lan::LobbyPhase::Preparing || phase == lan::LobbyPhase::Waiting || phase == lan::LobbyPhase::Ready;
+        if (paired) rows::disable_next();
+        const std::string toggle_label = m.name+"###mod-"+(m.on ? "on-" : "off-")+m.name;
+        if (rows::toggle(toggle_label.c_str(), &on, true,details.c_str())) {
+            if (set_mod(m,on)) {
+                rescan = true;
+                ui::notify("Mod selection saved. Restart the game to apply it.");
+            } else ui::notify("Could not change this mod. Check for a duplicate enabled/disabled folder.");
+        }
+        std::string label = m.name+" details###mod-details-"+(m.on ? "on-" : "off-")+m.name;
+        std::string state = !m.issue.empty() ? "Check folder" : m.shadowed ? "File conflicts" : std::to_string(m.files)+" files";
+        rows::action(label.c_str(),state.c_str(),details.c_str(),true);
     }
+    if (rescan) g->mods = list_mods();
     rows::section(lt(LtFolder));
     if (rows::action(lt(LtOpenModsFolder), "", "Add, remove or rename mods there.", true))
         plat::open_folder(plat::data_root() + "/mods");

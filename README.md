@@ -1,6 +1,7 @@
 # SuperWonders — Super Mario Bros. Wonder PC Recompilation
 
 PC fork follow-up: [picture shape, cache checks and settings diagnostics](docs/PC-PREVIEW-2026-11-17-R3.md).
+Latest test preview: [Vulkan synchronization fixes, optional audio prefetch and two-PC LAN testing](docs/PC-PREVIEW-2026-11-17-R7.md).
 Measured loading follow-up: [verified low-VRAM texture conversions](docs/TEXTURE-CONVERSION-CACHE.md).
 
 This fork's PC stability work and remaining multiplayer/rendering milestones are tracked in

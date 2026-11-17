@@ -63,6 +63,9 @@ void refresh() {  // caller holds lock; all SDL APIs here are thread-safe
 void controller_binding(size_t action, int physical) {
     if (action < bindings.size()) bindings[action] = std::clamp(physical, 0, 15);
 }
+int current_controller_binding(size_t action) {
+    return action < bindings.size() ? bindings[action].load(std::memory_order_relaxed) : -1;
+}
 void controller_rumble_strength(int percent) { strength = std::clamp(percent, 0, 100); }
 void controller_keyboard_separate(bool separate) {
     separate_requested=separate;

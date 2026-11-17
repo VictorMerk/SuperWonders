@@ -716,7 +716,7 @@ static void apply_pc_menu(const PcMenuState& state, bool persist) {
     g_pc_settings.language = std::clamp(g_pc_settings.language, 0, 12);
     g_pc_settings.game_language = std::clamp(g_pc_settings.game_language, 0, 11);
     g_pc_settings.memory_limit_gb = std::clamp(g_pc_settings.memory_limit_gb, 2, 32);
-    g_pc_settings.controller_preset = std::clamp(g_pc_settings.controller_preset, 0, 1);
+    g_pc_settings.controller_preset = std::clamp(g_pc_settings.controller_preset, 0, 2);
     g_pc_settings.overlay_position = std::clamp(g_pc_settings.overlay_position, 0, 3);
     apply_input_bindings(g_pc_settings);
     nx::set_game_language(g_pc_settings.game_language);

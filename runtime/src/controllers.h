@@ -11,6 +11,7 @@ bool read_controller(uint32_t player, PadState& out, std::array<bool, 16>* physi
 bool player_connected(uint32_t player);  // player 1 also has the keyboard
 bool read_player_pad(uint32_t player, PadState& out);
 void controller_binding(size_t action, int physical);
+int current_controller_binding(size_t action);  // read-only diagnostic of the applied mapping; -1 for an invalid action
 void controller_rumble_strength(int percent);
 void controller_keyboard_separate(bool separate);
 void controller_force_primary(bool force);  // LAN: every PC contributes its primary local device

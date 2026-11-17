@@ -28,6 +28,7 @@
 #include "platform.h"
 #include "frametrace.h"
 #include "nvn_draw_state.h"
+#include "controllers.h"
 
 #include <nx/game.h>
 
@@ -873,6 +874,29 @@ bool overlay_input_probe() {
     overlay::apply_settings(startup, false);
     for (int frame = 0; frame < 30; ++frame) if (!present_ui_frame()) return false;
     overlay::toggle();
+    // Verify the platform's applied bindings, not just the menu's requested
+    // settings. In particular, Win32 used to clamp Circle-confirm back to the
+    // Nintendo preset even though the shared settings correctly retained 2.
+    for (int preset : {0, 1, 2}) {
+        auto requested = startup;
+        requested.controller_preset = preset;
+        requested.controller_custom_mask = 0;
+        overlay::apply_settings(requested, false);
+        bool applied = false;
+        const auto deadline = plat::monotonic_ns() + 1'000'000'000ull;
+        do {
+            if (!present_ui_frame()) return false;
+            applied = true;
+            for (size_t action = 0; action < 4; ++action)
+                applied = applied && plat::current_controller_binding(action) == overlay::default_controller_binding(action, preset);
+            if (applied) break;
+            plat::sleep_ns(1'000'000);
+        } while (plat::monotonic_ns() < deadline);
+        log("controller bridge probe preset %d: %s", preset, applied ? "PASS" : "FAIL");
+        ok = applied && ok;
+    }
+    overlay::apply_settings(startup, false);
+    if (!present_ui_frame()) return false;
     return ok;
 }
 

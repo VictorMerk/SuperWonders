@@ -17,6 +17,9 @@ The optional developer player probe's remembered address is now atomic. `NX_PROB
 previously observed fixture address, still subject to the normal vtable check. A bad hint retains the normal scan.
 This does not expand the LAN guard: it still samples the primary player, not the complete world state.
 
-The underlying LAN protocol and frame barrier are unchanged by these diagnostics. Prior two-instance tests used
-two real characters with independent inputs. A new native route and a separate physical-PC test are still required
-for this particular preview; the transport/unit tests alone do not prove full game synchronization.
+The underlying LAN protocol and frame barrier are unchanged by these diagnostics. A fresh two-instance route on
+the exact r7 runtime (`6b72279`) used Mario and Blue Toad with independent host movement/jumping and guest jumping,
+pause/continue and normal session exit. The partial primary-player comparison matched 2,042 valid samples with
+zero position difference. This does not check every actor or full world state. Physical-PC testing remains pending.
+
+![Independent Blue Toad jump beside Mario with the compact LAN panel](images/pc-preview-lan-two-characters.png)

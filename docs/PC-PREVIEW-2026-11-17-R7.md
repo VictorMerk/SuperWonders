@@ -47,7 +47,9 @@ The r7 ZIP includes `LAN-TEST-WITH-YOUR-BROTHER.txt`: install the same runtime o
 port and pairing code, then select **Two Players inside Wonder too**. Both PCs run independently and each player
 controls a visible co-op character. Begin with interpolation and experimental audio prefetch off.
 
-Earlier two-instance, two-character tests are documented in r2. The LAN protocol/barrier is unchanged by r7's
-telemetry, but a fresh r7 in-game HUD check and physical two-PC verification remain pending. The guard still checks
+Earlier two-instance, two-character tests are documented in r2. A fresh exact-r7 route with independent Mario/Blue
+Toad inputs, compact HUD, pause/continue and session exit matched 2,042 valid primary-player samples with zero
+position difference. The LAN protocol/barrier is unchanged by r7's telemetry. Physical two-PC verification remains
+pending. The guard still checks
 only the primary player; there is no full-world checksum, rollback, live reconnect or Nintendo online service.
 Preserve both `data/nx.log` files when reporting a failure.

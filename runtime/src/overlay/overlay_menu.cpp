@@ -594,6 +594,9 @@ void video(MenuContext& c, const Labels& l) {
     if (rows::toggle(l.fullscreen, &s.fullscreen, kDefaults.fullscreen, translated_desc(desc::fullscreen, lang))) settings_changed(true);
     if (!c.host.can_always_on_top) rows::disable_next();
     if (rows::toggle(l.topmost, &s.always_on_top, kDefaults.always_on_top, translated_desc(desc::topmost, lang))) settings_changed(true);
+    if (rows::toggle(lang == 2 ? "Seitenverhältnis beibehalten" : "Preserve aspect ratio", &s.preserve_aspect, true,
+        lang == 2 ? "Erhält die Form des Spielbilds und zentriert es bei Bedarf mit schwarzen Balken. Aus streckt es auf das Fenster. Wirkt sofort, auch mit FSR 1 und Bildgenerierung. Erweitert nicht den sichtbaren Spielbereich." :
+        "Keep the game's picture shape and centre it with black bars when needed. Off stretches it to the window. Applies immediately, including FSR 1 and frame generation. This does not expand the game's field of view.")) settings_changed(true);
     rows::section(kCommon[lang][1]);
     if (rows::choice(l.internal_resolution, &s.internal_resolution, kInternal[lang], 7, kDefaults.internal_resolution,
                      translated_desc(desc::internal, lang)))
@@ -626,21 +629,25 @@ void video(MenuContext& c, const Labels& l) {
         if (cap_values[i] == s.frame_cap) cap = i;
     if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1, translated_desc(desc::frame_cap, lang)))
         s.frame_cap = cap_values[cap], settings_changed(true);
-    const char* latency_modes[] = {"Low (1 frame ahead)", "Balanced (2 frames ahead)"};
+    const char* latency_modes[] = {lang == 2 ? "Niedrig (1 Bild voraus)" : "Low (1 frame ahead)",
+                                  lang == 2 ? "Ausgewogen (2 Bilder voraus)" : "Balanced (2 frames ahead)"};
     int ahead = std::clamp(s.render_ahead,1,2)-1;
-    if (rows::choice("Input latency", &ahead, latency_modes, 2, 0,
+    if (rows::choice(lang == 2 ? "Eingabeverzögerung" : "Input latency", &ahead, latency_modes, 2, 0,
+        lang == 2 ? "Niedrig begrenzt die Renderwarteschlange auf ein Bild. Ausgewogen erlaubt zwei Bilder und mehr gleichzeitige CPU-/GPU-Arbeit. Das ist keine Messung der Eingabelatenz: VSync, Bildschirm, Bildgenerierung und LAN-Wartezeiten wirken weiterhin mit." :
         "Low limits the game to one queued picture instead of two, reducing render-ahead latency. Balanced allows more CPU/GPU overlap and can be faster. This is not an input-lag measurement: VSync, display processing, frame generation and LAN waits still add latency.")) {
         s.render_ahead = ahead+1; settings_changed(true);
     }
-    const char* fg_modes[] = {"Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+    const char* fg_modes[] = {lang == 2 ? "Aus" : "Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
     int fg = s.framegen ? std::clamp(s.framegen_multiplier, 2, 8)-1 : 0;
-    if (rows::choice("Frame generation", &fg, fg_modes, 8, 0,
+    if (rows::choice(lang == 2 ? "Bildgenerierung" : "Frame generation", &fg, fg_modes, 8, 0,
+        lang == 2 ? "Experimentelle Zwischenbilder per Optical Flow. 4x erzeugt drei Zwischenbilder je Spielbild, ohne die Simulation zu beschleunigen. Höhere Faktoren kosten GPU-Zeit und können Bildfehler oder Verzögerung verstärken. 60 Spiel-FPS bei 4x benötigen für die volle Ausgabe einen 240-Hz-Bildschirm. Bei GPU-Limit ausgeschaltet lassen." :
         "Experimental optical-flow interpolation. 4x makes three intermediate pictures per game frame; it does not speed up the game. Higher factors cost more GPU time and may add artifacts or latency. Use a matching high-refresh display (60 game FPS at 4x needs 240 Hz). Leave off when GPU-limited.")) {
         s.framegen = fg != 0;
         if (fg) s.framegen_multiplier = fg+1;
         settings_changed(true);
     }
-    if (rows::toggle("Skip draws while compiling", &s.pipeline_skip_draws, kDefaults.pipeline_skip_draws,
+    if (rows::toggle(lang == 2 ? "Objekte beim Kompilieren auslassen" : "Skip draws while compiling", &s.pipeline_skip_draws, kDefaults.pipeline_skip_draws,
+                     lang == 2 ? "Aus erhält alle Zeichenbefehle. Neue Shader können beim ersten Auftreten kurz blockieren. Ein lässt Objekte während der Kompilierung weg und kann dadurch Flackern oder verschwundene Geometrie verursachen." :
                      "Off keeps objects visible while new shaders compile, but may pause on first use. "
                      "On reduces those pauses by temporarily omitting objects and can cause flickering."))
         settings_changed(true);
@@ -827,6 +834,28 @@ void draw_menu(MenuContext& c) {
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopFont();
     if (close_button(k)) c.open = false;
+
+    if (c.startup_settings) {
+        const uint32_t changes = restart_changes(*c.startup_settings, c.settings);
+        if (changes) {
+            const bool german = s.language == 2;
+            std::string pending = german ? "Neustart ausstehend: " : "Restart pending: ";
+            const uint32_t flags[] = {RestartResolution, RestartTextures, RestartFiltering, RestartShaders, RestartLanguage, RestartPrompts};
+            const char* english[] = {"internal resolution", "texture profile", "texture filtering", "shader loading", "game language", "button prompts"};
+            const char* deutsch[] = {"interne Auflösung", "Texturprofil", "Texturfilterung", "Shader-Laden", "Spielsprache", "Tastensymbole"};
+            bool first = true;
+            for (int i = 0; i < 6; ++i) if (changes & flags[i]) {
+                if (!first) pending += ", ";
+                pending += german ? deutsch[i] : english[i];
+                first = false;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent));
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextUnformatted(pending.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        }
+    }
 
     const char* names[kTabs] = {l.video, l.audio, l.controls, l.overlay, l.system};
     int current = -1;

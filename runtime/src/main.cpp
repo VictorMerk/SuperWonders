@@ -20,6 +20,7 @@
 #include "platform.h"
 #include "nvn/nvn.h"
 #include "nvn/nvn_vk.h"
+#include "overlay/overlay.h"
 #include "shader_bundle.h"
 #include "netplay_game.h"
 
@@ -174,6 +175,7 @@ void boot() {
     if (std::getenv("NX_FRAMEGEN_PROBE")) plat::exit_process(nvn::framegen_probe() ? 0 : 1);
     if (std::getenv("NX_OVERLAY_INPUT_PROBE")) plat::exit_process(nvn::overlay_input_probe() ? 0 : 1);
     if (std::getenv("NX_COUNTER_CLEAR_PROBE")) plat::exit_process(nvn::counter_clear_probe() ? 0 : 1);
+    if (std::getenv("NX_PRESENTATION_PROBE")) plat::exit_process(nvn::presentation_probe() ? 0 : 1);
     const auto args = plat::program_args();
     if (std::find(args.begin(),args.end(),"--pack-shaders") != args.end())
         plat::exit_process(optimize_shader_cache() ? 0 : 1);
@@ -182,6 +184,7 @@ void boot() {
     // allocates lands there), before the kernel and its watchdog start (the game hasn't, and isn't hung).
     launcher::run();
 #endif
+    overlay::mark_game_started();
     lan::initialize();
     kernel_init();
     const ModuleInfo* mods[] = {&main_module(), &sdk_module()};

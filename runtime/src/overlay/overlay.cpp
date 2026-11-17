@@ -36,6 +36,8 @@ Host g_host;
 bool g_has_pending = false;
 Settings g_pending;   // from the platform (sync), taken by the next frame
 Settings g_settings;  // the presenting thread's copy
+Settings g_startup_settings;
+bool g_game_started = false;  // protected by g_lock
 std::atomic<bool> g_open{false};
 std::atomic<ScreenFn> g_screen{nullptr};  // a full-window screen under the menu (the launcher), or none
 // Input goes to the overlay: the menu is open, or a screen is shown.
@@ -277,6 +279,12 @@ void apply_settings(const Settings& s, bool persist) {
     settings_changed(persist);
 }
 
+void mark_game_started() {
+    std::lock_guard lock(g_lock);
+    g_startup_settings = g_has_pending ? g_pending : g_settings;
+    g_game_started = true;
+}
+
 void key_event(int raw, Key key, bool down) {
     if (key == KeyF1 && down) {
         toggle();
@@ -398,10 +406,14 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     ui::apply_style(float(h));
 
     std::vector<Event> events;
+    Settings startup_settings;
+    bool game_started = false;
     {
         std::lock_guard lk(g_lock);
         events.swap(g_events);
         if (g_has_pending) g_settings = g_pending, g_has_pending = false;
+        startup_settings = g_startup_settings;
+        game_started = g_game_started;
     }
     bool changed = false;
     for (const Event& e : events) {
@@ -460,7 +472,7 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, a);
         bool still_open = open;
         MenuContext c{g_settings, g_host, g_capture, open ? g_tab_request.exchange(-1) : -1, still_open, scale,
-                      appearing, float(h), reveal};
+                      appearing, float(h), reveal, game_started ? &startup_settings : nullptr};
         draw_menu(c);
         ImGui::PopStyleVar();
         if (open && c.tab_request >= 0 && c.tab_request != g_tab) log("overlay: tab %d", c.tab_request);

@@ -6,6 +6,20 @@
 
 namespace nx::overlay {
 
+uint32_t restart_changes(const Settings& active, const Settings& requested) {
+    uint32_t changes = 0;
+    if (active.internal_resolution != requested.internal_resolution) changes |= RestartResolution;
+    if (active.low_vram_profile != requested.low_vram_profile) changes |= RestartTextures;
+    if (active.anisotropy != requested.anisotropy) changes |= RestartFiltering;
+    if (active.shader_bundle != requested.shader_bundle) changes |= RestartShaders;
+    if (active.game_language != requested.game_language) changes |= RestartLanguage;
+    if (active.button_icons != requested.button_icons || active.keyboard_bindings != requested.keyboard_bindings)
+        changes |= RestartPrompts;
+    for (size_t action = 0; action < kControlCount; ++action)
+        if (controller_binding(active, action) != controller_binding(requested, action)) changes |= RestartPrompts;
+    return changes;
+}
+
 void apply_graphics_profile(Settings& s, GraphicsProfile profile) {
     s.frame_cap = 60;
     s.vsync = 1;
@@ -70,6 +84,7 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "metric_frametime_graph=%d", &v) == 1) s.metric_frametime_graph = v != 0;
         else if (std::sscanf(l, "overlay_position=%d", &v) == 1) s.overlay_position = std::clamp(v, 0, 3);
         else if (std::sscanf(l, "upscaler=%d", &v) == 1) s.upscaler = std::clamp(v, 0, 1);
+        else if (std::sscanf(l, "preserve_aspect=%d", &v) == 1) s.preserve_aspect = v != 0;
         else if (std::sscanf(l, "fsr_sharpness=%d", &v) == 1) s.fsr_sharpness = std::clamp(v, 0, 200);
         else if (std::sscanf(l, "antialiasing=%d", &v) == 1) s.antialiasing = std::clamp(v, 0, 1);
         else if (std::sscanf(l, "anisotropy=%d", &v) == 1) s.anisotropy = std::clamp(v, 0, 16);
@@ -118,7 +133,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\noverlay_position=" << s.overlay_position << "\ncontroller_custom_mask=" << s.controller_custom_mask
       << "\nupscaler=" << s.upscaler << "\nfsr_sharpness=" << s.fsr_sharpness << "\nantialiasing=" << s.antialiasing
       << "\nanisotropy=" << s.anisotropy << "\nrumble=" << s.rumble << "\nvsync=" << s.vsync
-      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\nframegen_multiplier=" << s.framegen_multiplier << "\nrender_ahead=" << s.render_ahead << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
+      << "\nframe_cap=" << s.frame_cap << "\nshader_bundle=" << s.shader_bundle << "\nframegen=" << s.framegen << "\nframegen_multiplier=" << s.framegen_multiplier << "\nrender_ahead=" << s.render_ahead << "\npreserve_aspect=" << s.preserve_aspect << "\npipeline_skip_draws=" << s.pipeline_skip_draws << '\n';
     for (size_t i = 0; i < kControlCount; ++i)
         f << "keyboard_" << i << '=' << s.keyboard_bindings[i] << '\n'
           << "controller_" << i << '=' << s.controller_bindings[i] << '\n';

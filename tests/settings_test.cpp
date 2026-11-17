@@ -51,10 +51,11 @@ int main() {
     s.framegen_multiplier = 4;
     s.controller_preset = 2;
     s.render_ahead = 2;
+    s.preserve_aspect = false;
     s.button_icons = 4; s.keyboard_separate_player = true;
     save_settings(path, s);
     Settings t;
-    check(load_settings(path,t) && t.framegen_multiplier == 4 && t.controller_preset == 2 && t.render_ahead == 2,
+    check(load_settings(path,t) && t.framegen_multiplier == 4 && t.controller_preset == 2 && t.render_ahead == 2 && !t.preserve_aspect,
           "4x generation and Circle-confirm preset survive restart");
     check(default_controller_binding(CtlA,2)==PhyEast && default_controller_binding(CtlB,2)==PhySouth &&
           default_controller_binding(CtlX,2)==PhyWest && default_controller_binding(CtlY,2)==PhyNorth,
@@ -74,5 +75,26 @@ int main() {
         check(!configured.pipeline_skip_draws && !configured.framegen && configured.frame_cap == 60, "presets retain complete-image rendering and a normal speed cap");
     }
     std::remove(path.c_str());
+    Settings active, requested;
+    requested.volume = 37; requested.fullscreen = true; requested.framegen = true;
+    requested.render_ahead = 2; requested.language = 2; requested.fsr_sharpness = 150;
+    requested.metrics_enabled = true; requested.pipeline_skip_draws = true;
+    requested.preserve_aspect = false;
+    check(restart_changes(active, requested) == 0, "live settings do not create a false restart warning");
+    requested.internal_resolution = 3; requested.low_vram_profile = true;
+    requested.anisotropy = 8; requested.shader_bundle = false;
+    requested.game_language = 2; requested.button_icons = 4;
+    check(restart_changes(active, requested) == (RestartResolution | RestartTextures | RestartFiltering |
+          RestartShaders | RestartLanguage | RestartPrompts), "all startup resource changes are reported together");
+    requested = active;
+    requested.controller_bindings[CtlA] = PhyNorth;
+    check(restart_changes(active, requested) == 0, "unused custom bindings do not change the effective prompts");
+    requested.controller_custom_mask = 1u << CtlA;
+    check(restart_changes(active, requested) == RestartPrompts, "effective custom bindings require refreshed prompts");
+    requested = active;
+    requested.keyboard_bindings[CtlA] = 99;
+    check(restart_changes(active, requested) == RestartPrompts, "keyboard prompt changes are detected");
+    requested = active;
+    check(restart_changes(active, requested) == 0, "reverting startup settings clears the restart warning");
     std::puts("settings tests passed");
 }

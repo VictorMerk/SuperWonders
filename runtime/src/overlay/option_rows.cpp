@@ -19,6 +19,8 @@ namespace {
 
 float g_k = 1;  // style scale (1 at 1080 p)
 std::string g_desc_hover, g_desc_focus, g_desc_shown, g_desc_first, g_note;
+std::string g_desc_retained;
+ImGuiID g_desc_id = 0, g_desc_hover_id = 0, g_desc_focus_id = 0, g_desc_first_id = 0;
 float g_desc_alpha = 1;
 bool g_next_disabled = false;
 int g_indent = 0;
@@ -69,9 +71,10 @@ int row(const char* label, const std::string& value, bool changed, const char* d
         for (ImGuiKey k : {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight, ImGuiKey_LeftArrow, ImGuiKey_RightArrow})
             ImGui::SetKeyOwner(k, id);
     }
-    if (foc) g_desc_focus = desc ? desc : "";
-    if (hov) g_desc_hover = desc ? desc : "";
-    if (g_desc_first.empty() && desc) g_desc_first = desc;
+    if (foc) g_desc_focus = desc ? desc : "", g_desc_focus_id = id;
+    if (hov) g_desc_hover = desc ? desc : "", g_desc_hover_id = id;
+    if (g_desc_first.empty() && desc) g_desc_first = desc, g_desc_first_id = id;
+    if (id == g_desc_id && desc) g_desc_retained = desc;
 
     // the highlight eases in (and out) over about a tenth of a second
     const float t = ui::eased(id + 1, hov || foc ? 1.0f : 0.0f, 22.0f);
@@ -128,6 +131,8 @@ void begin(const char* id, float height) {
     if (g_take_first) ImGui::NavMoveRequestCancel();
     g_indent = 0;
     g_desc_hover.clear(), g_desc_focus.clear(), g_desc_first.clear(), g_note.clear();
+    g_desc_retained.clear();
+    g_desc_hover_id = g_desc_focus_id = g_desc_first_id = 0;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::PushID(id);
     ImGui::BeginChild("##rows", ImVec2(avail.x * 0.54f, avail.y), ImGuiChildFlags_NavFlattened);
@@ -182,8 +187,13 @@ void end() {
     ImGui::PopStyleVar();
     ImGui::EndChild();
     // the description: the hovered row (mouse) wins, else the selected one (controller), else the last shown
-    std::string want = !g_desc_hover.empty() ? g_desc_hover : !g_desc_focus.empty() ? g_desc_focus
-                       : !g_desc_shown.empty() ? g_desc_shown : g_desc_first;
+    // Keep a row's current description, not an old copy of its text. A language
+    // change or removed row must not leave another language/stale mod details here.
+    std::string want;
+    if (!g_desc_hover.empty()) want = g_desc_hover, g_desc_id = g_desc_hover_id;
+    else if (!g_desc_focus.empty()) want = g_desc_focus, g_desc_id = g_desc_focus_id;
+    else if (!g_desc_retained.empty()) want = g_desc_retained;
+    else want = g_desc_first, g_desc_id = g_desc_first_id;
     if (want != g_desc_shown) g_desc_shown = want, g_desc_alpha = 0;
     g_desc_alpha = ui::approach(g_desc_alpha, 1.0f, 16.0f);
     ImGui::SameLine(0, 0);

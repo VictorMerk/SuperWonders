@@ -39,6 +39,7 @@ struct Settings {
     bool metric_fps = true, metric_one_percent_low = true, metric_game_speed = true, metric_frametime_graph = true;
     int overlay_position = 0;  // top left, top right, bottom left, bottom right
     int upscaler = 1;          // 0 bilinear, 1 FSR 1 (when the game's image is smaller than the window)
+    bool preserve_aspect = true;  // centre the picture with bars instead of stretching non-matching windows
     int fsr_sharpness = 25;    // RCAS sharpness in hundredths of a stop: 0 the sharpest, 200 the softest
     int antialiasing = 0;      // 0 off, 1 FXAA (on the presented image)
     int anisotropy = 0;        // 0 the game's own, else 2, 4, 8, 16 (applies after a restart)
@@ -61,6 +62,12 @@ int default_controller_binding(size_t action, int preset);
 int controller_binding(const Settings& s, size_t action);
 
 enum class GraphicsProfile { Performance, Balanced, Quality };
+enum RestartChange : uint32_t {
+    RestartResolution = 1 << 0, RestartTextures = 1 << 1, RestartFiltering = 1 << 2,
+    RestartShaders = 1 << 3, RestartLanguage = 1 << 4, RestartPrompts = 1 << 5,
+};
+// Startup-only resources compared with the settings actually used to start this game.
+uint32_t restart_changes(const Settings& active, const Settings& requested);
 // Change graphics options together, preserving display size, controls, audio, language and user data.
 void apply_graphics_profile(Settings& s, GraphicsProfile profile);
 

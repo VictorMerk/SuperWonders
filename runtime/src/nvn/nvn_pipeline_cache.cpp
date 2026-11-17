@@ -12,6 +12,8 @@
 #include "cache_file.h"
 #include "nvn_pipeline_async.h"
 #include "nvn_vk.h"
+#include "pipeline_cache_data.h"
+#include "file_io.h"
 #include "platform.h"
 #include "frametrace.h"
 
@@ -41,8 +43,11 @@ void write_pipeline_cache(bool force) {
     // Vulkan drivers generally grow the serialized cache as new entries are added. Avoid rewriting a large cache
     // every few seconds when its serialized size is unchanged; the explicit shutdown flush forces same-size updates.
     if (!force && n <= g_saved_size) return note_pipeline_cache_changed();  // still owed: the shutdown save writes it
-    std::vector<uint8_t> data(n);
-    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, data.data()) != VK_SUCCESS) return note_pipeline_cache_changed();
+    std::vector<uint8_t> data;
+    if (!pipeline_cache_snapshot([](size_t* size, void* bytes) {
+            return p_vkGetPipelineCacheData(vk_device(), g_cache, size, bytes);
+        }, data, n)) return note_pipeline_cache_changed();
+    n = data.size();
     CacheFile pending(g_path);
     if (FILE* f = plat::fopen_utf8(pending.path(), "wb")) {
         bool ok = std::fwrite(data.data(), 1, n, f) == n;
@@ -85,10 +90,18 @@ VkPipelineCache pipeline_cache() {
     g_path = plat::data_root() + name;
     std::vector<uint8_t> data;
     if (FILE* f = plat::fopen_utf8(g_path, "rb")) {
-        plat::fseek64(f, 0, SEEK_END);
-        int64_t n = plat::ftell64(f);
-        plat::fseek64(f, 0, SEEK_SET);
-        if (n > 0) data.resize(size_t(n)), data.resize(std::fread(data.data(), 1, data.size(), f));
+        const int64_t n = file_io::size(f);
+        VkPipelineCacheHeaderVersionOne header{};
+        if (n > 0 && std::fread(&header, 1, sizeof header, f) == sizeof header &&
+            compatible_pipeline_cache_header(&header, size_t(n), p)) {
+            try { data.resize(size_t(n)); } catch (const std::bad_alloc&) { data.clear(); }
+            if (!data.empty()) {
+                std::memcpy(data.data(), &header, sizeof header);
+                if (std::fread(data.data() + sizeof header, 1, data.size() - sizeof header, f) != data.size() - sizeof header)
+                    data.clear();
+            }
+        }
+        if (data.empty()) log("nvn/vk: pipeline cache header/size/read rejected; starting empty (existing file retained)");
         std::fclose(f);
     }
     VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};

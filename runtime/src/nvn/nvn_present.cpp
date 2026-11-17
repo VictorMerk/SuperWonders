@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "nvn_vk.h"
+#include "present_geometry.h"
 #include "platform.h"
 
 namespace nx::nvn {
@@ -376,14 +377,14 @@ bool present_pass_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop,
     float logical_width = float(src.logical_width ? src.logical_width : src.width);
     float logical_height = float(src.logical_height ? src.logical_height : src.height);
     float cx = 0, cy = 0, cw = logical_width, ch = logical_height;
-    if (crop && crop[2] > 0 && crop[3] > 0 && crop[0] + crop[2] <= int32_t(logical_width) &&
-        crop[1] + crop[3] <= int32_t(logical_height))
+    if (valid_picture_crop(crop, uint32_t(logical_width), uint32_t(logical_height)))
         cx = float(crop[0]), cy = float(crop[1]), cw = float(crop[2]), ch = float(crop[3]);
     p.crop[0] = cx / logical_width, p.crop[1] = cy / logical_height;
     p.crop[2] = cw / logical_width, p.crop[3] = ch / logical_height;
     bool sideways = r == 1 || r == 3;
     float tw = float(sideways ? g.extent.height : g.extent.width), th = float(sideways ? g.extent.width : g.extent.height);
     float scale = std::min(tw / cw, th / ch), bw = cw * scale / tw, bh = ch * scale / th;
+    if (!preserve_aspect()) bw = bh = 1;
     p.box[0] = (1 - bw) / 2, p.box[1] = (1 - bh) / 2, p.box[2] = bw, p.box[3] = bh;
     // The touch controls (platform_android_input.cpp), in upright uv; none elsewhere.
     plat::OverlayShape shapes[kOverlayMax];

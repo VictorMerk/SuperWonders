@@ -1,5 +1,7 @@
 # SuperWonders — Super Mario Bros. Wonder PC Recompilation
 
+PC fork follow-up: [picture shape, cache checks and settings diagnostics](docs/PC-PREVIEW-2026-11-17-R3.md).
+
 This fork's PC stability work and remaining multiplayer/rendering milestones are tracked in
 [the fork roadmap](docs/FORK-ROADMAP.md). The initial changes preserve draws during shader compilation,
 correct logical 32-lane shader operations on wider GPU subgroups, and return a valid offline friends-service interface.

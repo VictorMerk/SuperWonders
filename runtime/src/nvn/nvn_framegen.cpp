@@ -2,6 +2,7 @@
 // Its shaders follow SkyboundTotk, Copyright (c) 2026 NotRexed (MIT).
 // See third_party/mkw-framegen. This is picture-based interpolation, not FSR 3 or DLSS.
 #include "nvn_vk.h"
+#include "present_geometry.h"
 #include "framegen_spv.h"
 #include "platform.h"
 #include <algorithm>
@@ -207,7 +208,8 @@ bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, Fra
     }
     if (!init()) return false;
     int x = 0, y = 0, w = int(src.width), h = int(src.height);
-    if (crop && crop[2] > 0 && crop[3] > 0) {
+    if (valid_picture_crop(crop, src.logical_width ? src.logical_width : src.width,
+                           src.logical_height ? src.logical_height : src.height)) {
         const float sx = float(src.width)/float(src.logical_width ? src.logical_width : src.width);
         const float sy = float(src.height)/float(src.logical_height ? src.logical_height : src.height);
         x = int(std::lround(crop[0]*sx)); y = int(std::lround(crop[1]*sy));

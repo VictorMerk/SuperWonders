@@ -28,6 +28,7 @@ struct MenuContext {
     bool appearing;  // first frame after opening
     float height;    // the image height in pixels (the style is sized from it)
     float reveal;    // 0..1: the open / close fade
+    const Settings* startup_settings = nullptr;  // null while configuring in the launcher
 };
 void draw_menu(MenuContext& c);
 int menu_tab_count();

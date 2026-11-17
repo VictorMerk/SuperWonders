@@ -35,6 +35,7 @@ void sync(const Settings& s);                    // the platform changed setting
 Settings current_settings();
 std::string key_binding_name(int key);
 void apply_settings(const Settings& s, bool persist = true);
+void mark_game_started();  // snapshots settings after leaving the launcher, before guest resource loading
 void open_settings(int tab = 0);  // Video, Audio, Controls, Overlay, System
 
 // ---- input (any thread) ----

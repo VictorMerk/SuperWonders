@@ -40,6 +40,19 @@ the two newest timing reports up to 32 MiB each. No trace is recorded during nor
 
 ## Reporting: `tools/perf/frametrace_report.py`
 
+The default `--pictures original` reports **original-picture cadence at host presentation**. When a trace contains
+interpolated pictures, it reconstructs consecutive original-to-original intervals and sums work counters across
+the intervening presents. Merely filtering the original rows would incorrectly retain an intermediate's short
+`frame_ms` and lose work. This measures host output cadence, not simulation ticks or physical scanout.
+Use `--pictures presented --target-fps 240` to inspect a 240-present target separately. Legacy traces without the
+picture flag retain their old row interpretation. Baselines must carry the same explicit timing domain;
+regenerate an old/unspecified baseline before using the default original-picture gate.
+
+The report includes p50/p95/p99/max HID-sample-to-present proxy values from original pictures only, omitting
+unavailable negative samples. It excludes controller transport and display response. The historical JSON field
+`missed_vsyncs` counts missed **target intervals**, not observed physical monitor refreshes. Non-finite and
+incomplete CSV rows are ignored.
+
     python tools/perf/frametrace_report.py run.csv --log run.log [--from-s 5] [--to-s 80] [--target-fps 60]
                                            [--json run.json] [--baseline base.json]
 

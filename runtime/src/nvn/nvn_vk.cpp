@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "nvn_vk.h"
+#include "present_geometry.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
 #include "nvn_shader_prepare.h"
@@ -331,6 +332,7 @@ bool init() {
 void* g_window = nullptr;
 uint64_t g_window_gen = 0;
 std::atomic<int> g_vsync_wanted{1};  // set_vsync; the swapchain is re-made when it differs from g_vsync_made
+std::atomic<bool> g_preserve_aspect{true};
 int g_vsync_made = -1;
 
 int vsync_mode() {
@@ -479,6 +481,8 @@ bool make_swapchain() {
 }  // namespace
 
 void set_vsync(int mode) { g_vsync_wanted.store(mode < 0 || mode > 3 ? 1 : mode); }
+void set_preserve_aspect(bool preserve) { g_preserve_aspect.store(preserve, std::memory_order_relaxed); }
+bool preserve_aspect() { return g_preserve_aspect.load(std::memory_order_relaxed); }
 
 void flush_pipeline_cache() {
     std::lock_guard<std::recursive_mutex> lock(g_gpu);
@@ -832,6 +836,8 @@ bool framegen_probe() {
 
 bool overlay_input_probe() {
     if (!present_ui_frame()) return false;  // real ImGui context and Vulkan swapchain
+    const auto startup = overlay::current_settings();
+    overlay::mark_game_started();
     bool ok = !overlay::is_open();
     overlay::key_event(27,overlay::KeyEscape,true);
     ok = overlay::is_open() && ok;
@@ -856,7 +862,55 @@ bool overlay_input_probe() {
     if (!present_ui_frame()) return false;
     ok = !overlay::is_open() && ok;
     log("overlay input probe: Esc open/close, F1, controller chord, input isolation: %s",ok ? "PASS" : "FAIL");
+    auto pending = startup;
+    pending.internal_resolution = (startup.internal_resolution + 1) % 7;
+    pending.low_vram_profile = !startup.low_vram_profile;
+    pending.language = 2;
+    overlay::apply_settings(pending, false);
+    overlay::open_settings();
+    // A stable native capture exercises the pending-restart banner and its page layout.
+    for (int frame = 0; frame < 30; ++frame) if (!present_ui_frame()) return false;
+    overlay::apply_settings(startup, false);
+    for (int frame = 0; frame < 30; ++frame) if (!present_ui_frame()) return false;
+    overlay::toggle();
     return ok;
+}
+
+bool presentation_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!present_ui_frame()) return false;
+    auto settings = overlay::current_settings();
+    settings.metrics_enabled = false;
+    overlay::apply_settings(settings, false);
+    std::array<uint8_t,32*18*4> texels{};
+    constexpr uint64_t id = 0x7fff00000400ull;
+    auto& texture = make<Texture>(id);
+    texture.target = 1; texture.format = 0x25; texture.flags = 8;
+    texture.width = 32; texture.height = 18; texture.depth = texture.levels = texture.samples = 1;
+    texture.memory = reinterpret_cast<uintptr_t>(texels.data()); texture.storage_size = texels.size();
+    GpuImage* image = image_of(id);
+    if (!image || !begin(true)) return false;
+    transition(g_cb, *image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    const VkClearColorValue colour{{0.25f, 0.5f, 0.75f, 1}};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    p_vkCmdClearColorImage(g_cb, image->image, image->layout, &colour, 1, &range);
+    if (async_gpu()) frame_submit(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, true);
+    else end_and_wait(VK_NULL_HANDLE, VK_NULL_HANDLE);
+    set_framegen(false);
+    for (bool fit : {true, false}) for (bool fsr : {false, true}) for (bool aa : {false, true}) {
+        set_preserve_aspect(fit); set_fsr(fsr, 1); set_fxaa(aa);
+        gpu_present(id, nullptr, 1);
+        log("presentation probe: fit %d FSR %d FXAA %d recorded at %ux%u", int(fit), int(fsr), int(aa),
+            g_sc_extent.width, g_sc_extent.height);
+    }
+    set_preserve_aspect(true); set_fsr(true, 1); set_fxaa(false);
+    const int32_t cropped[] = {8, 0, 16, 18}, invalid[] = {-1, 0, 32, 18};
+    gpu_present(id, cropped, 1);
+    gpu_present(id, invalid, 1);
+    p_vkDeviceWaitIdle(g_device);
+    destroy(id); drain_objects();
+    log("presentation probe: 10 host outputs recorded; verify native readback pictures separately");
+    return true;
 }
 
 bool counter_clear_probe() {
@@ -1053,7 +1107,25 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
     // FXAA first when on (nvn_fxaa.cpp): its output stands in for the game's image from here.
     GpuImage* in = src && !drawn ? fxaa_record(g_cb, *src) : nullptr;
     if (!in) in = src;
-    const bool upscaled = in && !drawn && fsr_record(g_cb, *in, dst, g_sc_extent, crop);
+    PictureRect box{0, 0, g_sc_extent.width, g_sc_extent.height};
+    if (in && !drawn) {
+        uint32_t width = in->logical_width ? in->logical_width : in->width;
+        uint32_t height = in->logical_height ? in->logical_height : in->height;
+        if (valid_picture_crop(crop, width, height)) width = uint32_t(crop[2]), height = uint32_t(crop[3]);
+        box = fit_picture(width, height, g_sc_extent.width, g_sc_extent.height, preserve_aspect());
+        if (box.width != g_sc_extent.width || box.height != g_sc_extent.height) {
+            transition(g_cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            const VkClearColorValue black{{0, 0, 0, 1}};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            p_vkCmdClearColorImage(g_cb, dst.image, dst.layout, &black, 1, &range);
+            VkMemoryBarrier ordered{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            ordered.srcAccessMask = ordered.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            p_vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   0, 1, &ordered, 0, nullptr, 0, nullptr);
+        }
+    }
+    const bool upscaled = in && !drawn && fsr_record(g_cb, *in, dst, {box.width, box.height}, crop,
+                                                   {int32_t(box.x), int32_t(box.y)});
     if (in && !drawn && !upscaled) transition(g_cb, *in, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     if (!drawn) transition(g_cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     if (in && !drawn && !upscaled) {
@@ -1063,8 +1135,7 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
         // nvnWindowSetCrop is in guest pixels; convert its rectangle to the upscaled Vulkan image.
         const uint32_t logical_width = in->logical_width ? in->logical_width : in->width;
         const uint32_t logical_height = in->logical_height ? in->logical_height : in->height;
-        if (crop && crop[2] > 0 && crop[3] > 0 && crop[0] + crop[2] <= int32_t(logical_width) &&
-            crop[1] + crop[3] <= int32_t(logical_height)) {
+        if (valid_picture_crop(crop, logical_width, logical_height)) {
             const float scale_x = float(in->width) / float(logical_width);
             const float scale_y = float(in->height) / float(logical_height);
             const int32_t x0 = int32_t(std::lround(crop[0] * scale_x));
@@ -1074,7 +1145,8 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
             blit.srcOffsets[0] = {x0, y0, 0}, blit.srcOffsets[1] = {x1, y1, 1};
         }
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {int32_t(g_sc_extent.width), int32_t(g_sc_extent.height), 1};
+        blit.dstOffsets[0] = {int32_t(box.x), int32_t(box.y), 0};
+        blit.dstOffsets[1] = {int32_t(box.x + box.width), int32_t(box.y + box.height), 1};
         p_vkCmdBlitImage(g_cb, in->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
     }

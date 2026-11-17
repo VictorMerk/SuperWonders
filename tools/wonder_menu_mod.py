@@ -436,6 +436,12 @@ def write_zs(path, data):
     print("wrote", path)
 
 
+def resource_size_table(romfs):
+    tables = glob.glob(os.path.join(glob.escape(romfs), "System", "Resource", "ResourceSizeTable.Product.*.rsizetable.zs"))
+    assert len(tables) == 1, f"one resource size table expected, found {tables}"
+    return tables[0]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--romfs", default=os.path.join(REPO, "private", "wonder", "extract", "romfs"))
@@ -488,9 +494,7 @@ def main():
             return m
         mod("Mals/" + f, {"LayoutMsgRef/PauseRef.msbt": button, "LayoutMsgRef/TitleRef.msbt": title})
 
-    tables = glob.glob(os.path.join(romfs, "System", "Resource", "ResourceSizeTable.Product.*.rsizetable.zs"))
-    assert len(tables) == 1, f"one resource size table expected, found {tables}"
-    name = "System/Resource/" + os.path.basename(tables[0])
+    name = "System/Resource/" + os.path.basename(resource_size_table(romfs))
     write_zs(os.path.join(out, name), rstb_grow(unzs(os.path.join(romfs, name)), growth))
 
 

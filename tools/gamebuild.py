@@ -81,7 +81,7 @@ class Kit:
 
     def files(self):
         """What the generated code's result depends on, besides the input."""
-        out = sorted(glob.glob(os.path.join(self.recomp, "*.py")))
+        out = sorted(glob.glob(os.path.join(glob.escape(self.recomp), "*.py")))
         out += [os.path.join(self.include, "nx", h) for h in ("cpu.h", "module.h", "gamelib.h")]
         out.append(self.entry)
         out.append(os.path.abspath(__file__))  # (how it builds: the order it links in, its flags)
@@ -191,7 +191,7 @@ def recompile(kit, exefs, gen, done_before, share):
 def compile_all(kit, gen, obj, jobs, done_before, share):
     units = []
     for name, _ in MODULES:
-        for src in sorted(glob.glob(os.path.join(gen, name, "*.cpp"))):
+        for src in sorted(glob.glob(os.path.join(glob.escape(gen), name, "*.cpp"))):
             units.append((src, os.path.join(obj, name, os.path.basename(src) + ".o"),
                           [f"-I{kit.include}", f"-I{os.path.join(gen, name)}"]))
     entry_o = os.path.join(obj, "gamelib_entry.o")

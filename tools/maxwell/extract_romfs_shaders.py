@@ -29,7 +29,7 @@ def write_program_catalog(romfs, output):
     )
     stages, stage_index, programs = [], {}, set()
     for pattern in groups:
-        for path in sorted(glob.glob(os.path.join(romfs, pattern))):
+        for path in sorted(glob.glob(os.path.join(glob.escape(romfs), pattern))):
             data = containers.read_file(path)
             root = containers.open_blob(data, 0, len(data), os.path.basename(path))
             if not root:
@@ -66,8 +66,10 @@ def write_program_catalog(romfs, output):
         for refs in ordered_programs:
             f.write(struct.pack("<I", len(refs)))
             f.write(struct.pack("<%dI" % len(refs), *refs))
+    with open(output, "rb") as completed:
+        digest = hashlib.sha256(completed.read()).hexdigest()[:16]
     print(f"Shader program catalog: {len(ordered_programs)} programs, {len(stages)} stage variants, "
-          f"{os.path.getsize(output) >> 20} MiB (SHA-256 {hashlib.sha256(open(output, 'rb').read()).hexdigest()[:16]})",
+          f"{os.path.getsize(output) >> 20} MiB (SHA-256 {digest})",
           flush=True)
 
 
@@ -83,7 +85,7 @@ def extract_romfs(romfs, output):
     total_stages = 0
     recognized_groups = set()
     for group, pattern in groups:
-        paths = sorted(glob.glob(os.path.join(romfs, pattern)))
+        paths = sorted(glob.glob(os.path.join(glob.escape(romfs), pattern)))
         recognized = 0
         for path in paths:
             data = containers.read_file(path)

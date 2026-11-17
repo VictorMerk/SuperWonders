@@ -1088,7 +1088,10 @@ void screen(float w, float h) {
             dl->AddRectFilled(at, {at.x + nav_w, at.y + row_h}, ui::fade(th.accent, 0.16f * a), 10 * k);
             dl->AddRectFilled(at, {at.x + 5 * k, at.y + row_h}, ui::fade(th.accent, a), 3 * k);
         }
-        if (busy && i != g->page) ImGui::BeginDisabled();
+        // The selected page may change during navigation below. Balance this
+        // scope using the entry snapshot, never a second read of the page.
+        const bool row_disabled = busy && !sel;
+        ImGui::BeginDisabled(row_disabled);
         ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::fade(th.accent, 0.10f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ui::fade(th.accent, 0.20f));
@@ -1104,9 +1107,9 @@ void screen(float w, float h) {
         ImGui::PopStyleVar();
         const bool focused = ImGui::IsItemFocused();
         list_focused |= focused;
-        if (focused && i != g->page && !g->follow_hold)  // (the page follows the cursor)
+        if (focused && !row_disabled && i != g->page && !g->follow_hold)  // (the page follows the cursor)
             g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
-        if (clicked) {  // A (or a click): into the page
+        if (clicked && !row_disabled) {  // A (or a click): into the page
             if (i != g->page) g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
             rows::focus_first();
         }
@@ -1118,7 +1121,7 @@ void screen(float w, float h) {
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopFont();
         ImGui::PopStyleColor(3);
-        if (busy && i != g->page) ImGui::EndDisabled();
+        ImGui::EndDisabled();
         ImGui::PopID();
     }
     ImGui::EndGroup();

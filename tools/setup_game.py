@@ -134,14 +134,14 @@ class Setup:
         gamebuild.check_exefs(self.exefs)
         if not os.path.isdir(self.romfs):
             raise SystemExit(f"error: {self.romfs} not found: pick the RomFS folder of your own copy of the game")
-        if not glob.glob(os.path.join(self.romfs, "Shader", "*.zs")):
+        if not glob.glob(os.path.join(glob.escape(self.romfs), "Shader", "*.zs")):
             raise SystemExit(f"error: {self.romfs} doesn't look like Super Mario Bros. Wonder's RomFS (no Shader/*.zs)")
 
     def ids(self):
         if not hasattr(self, "_ids"):
             exe_id = gamebuild.input_id(self.exefs)
             rom_id, self.rom_files, self.rom_bytes = romfs_fingerprint(self.romfs)
-            maxwell = sorted(glob.glob(os.path.join(TOOLS, "maxwell", "*.py")))
+            maxwell = sorted(glob.glob(os.path.join(glob.escape(TOOLS), "maxwell", "*.py")))
             harness = harness_command()
             font = system_font() or ""
             self._ids = {

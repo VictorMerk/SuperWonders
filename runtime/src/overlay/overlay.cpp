@@ -295,6 +295,14 @@ void mark_game_started() {
     g_game_started = true;
 }
 
+int aspect_ratio() { return std::clamp(current_settings().aspect_ratio, 0, 2); }
+
+void set_aspect_ratio(int ratio) {
+    auto settings = current_settings();
+    settings.aspect_ratio = std::clamp(ratio, 0, 2);
+    apply_settings(settings);
+}
+
 void key_event(int raw, Key key, bool down) {
     if (key == KeyF1 && down) {
         toggle();

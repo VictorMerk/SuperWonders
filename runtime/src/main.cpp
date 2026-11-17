@@ -184,6 +184,7 @@ void boot() {
     // The start screen, when the game isn't set up or with --config: after the guest memory is reserved (so nothing it
     // allocates lands there), before the kernel and its watchdog start (the game hasn't, and isn't hung).
     launcher::run();
+    launcher::prepare_ultrawide_layouts();
 #endif
     overlay::mark_game_started();
     lan::initialize();

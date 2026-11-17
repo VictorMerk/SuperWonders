@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "nvn.h"
+#include "kernel.h"
 #include "nvn_shaders.h"
 #include "platform.h"
 
@@ -69,6 +70,15 @@ void BindUniformBuffer(CPU& c) {
     Cmd cmd{Cmd::BindUniformBuffer};
     cmd.i[0] = int32_t(c.x[1]), cmd.i[1] = int32_t(c.x[2]);
     cmd.a[0] = c.x[3], cmd.a[1] = c.x[4];
+    static int terrain_logs = 0;
+    const char* terrain_trigger = std::getenv("NX_TERRAIN_BIND_TRACE");
+    FILE* terrain_file = terrain_trigger && terrain_logs < 8 && cmd.i[0] == 0 && cmd.i[1] == 4 && cmd.a[1] == 57408 ? std::fopen(terrain_trigger, "rb") : nullptr;
+    if (terrain_file) {
+        std::fclose(terrain_file);
+        ++terrain_logs;
+        log("terrain bind single: address=%llx size=%llu lr=%s", (unsigned long long)cmd.a[0], (unsigned long long)cmd.a[1], describe(c.x[30]).c_str());
+        backtrace(c);
+    }
     record(c.x[0], cmd);
 }
 

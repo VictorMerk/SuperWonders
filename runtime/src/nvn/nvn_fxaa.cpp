@@ -165,6 +165,7 @@ GpuImage* fxaa_record(VkCommandBuffer cb, GpuImage& src) {
     p_vkCmdDispatch(cb, (src.width + 7) / 8, (src.height + 7) / 8, 1);
     // Read next by FSR (sampled) or the blit (transfer): the transition there orders it.
     g_out.logical_width = src.logical_width, g_out.logical_height = src.logical_height;
+    g_out.uw = src.uw;
     static bool logged = false;
     if (!logged) logged = true, log("nvn/vk: FXAA on the presented image (%ux%u)", src.width, src.height);
     return &g_out;

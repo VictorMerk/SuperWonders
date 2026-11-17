@@ -174,6 +174,22 @@ void load_player_settings() {
     for (size_t a = 0; a < overlay::kControlCount; ++a)
         s.keyboard_bindings[a] = keys[a], s.controller_bindings[a] = overlay::default_controller_binding(a, s.controller_preset);
     bool found = overlay::load_settings(settings_path(), s);
+    // Aspect-dependent resources and render targets are selected at startup. Keep explicit environment overrides
+    // for developer tests, otherwise configure the same profiles as the Windows launcher.
+    const char* profile = std::getenv("NX_ASPECT_PROFILE");
+    int ratio = profile && std::strcmp(profile, "21:9") == 0 ? 1 :
+                profile && std::strcmp(profile, "32:9") == 0 ? 2 :
+                profile && std::strcmp(profile, "16:9") == 0 ? 0 : std::clamp(s.aspect_ratio, 0, 2);
+    setenv("NX_ASPECT_PROFILE", ratio == 1 ? "21:9" : ratio == 2 ? "32:9" : "16:9", 0);
+    setenv("NX_ULTRAWIDE", ratio == 1 ? "2560x1080" : ratio == 2 ? "3840x1080" : "0", 0);
+    const char* flags[] = {"NX_TERRAIN_MOD_ASPECT_TEST", "NX_UW_POWERUP_TEST", "NX_UW_FLOWER_TEST",
+        "NX_UW_MAP_ALIGN_TEST", "NX_UW_MAP_COMPOSITE_TEST", "NX_UW_MAP_CARD_TEST",
+        "NX_UW_MAP_MARKERS_TEST", "NX_UW_MAP_DETAIL_TEST", "NX_UW_SETTINGS_SCISSOR_TEST"};
+    for (const char* flag : flags) setenv(flag, ratio ? "1" : "0", 0);
+    // The alternate flower offset shifts normal Linux bubbles away from their flower.
+    setenv("NX_UW_FLOWER_ALT_TEST", "0", 0);
+    if (ratio > 0 && s.width > 0) s.height = std::max(360, ratio == 1 ? s.width * 27 / 64 :
+                                              ratio == 2 ? s.width * 9 / 32 : s.width * 9 / 16);
     if (const char* e = std::getenv("NX_MEM_LIMIT_GB"); e && std::atof(e) > 0) s.memory_limit_gb = std::atoi(e);
     apply_settings(s, false);
     overlay::Host host;

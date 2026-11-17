@@ -18,6 +18,13 @@ ORIGINAL = (
 ADRP8, LOAD_RATIO, LOAD_SECONDS, NOP = -1, -2, -3, -4
 REPLACEMENT = (ADRP8, LOAD_RATIO, LOAD_SECONDS, 2, 4, 5, NOP, NOP)
 
+# The perspective config builder (main+0x160de44) copies the aspect pointer's float
+# at main+0x160deac into the projection config. Read a runtime-owned aspect instead.
+# This is the same kind of camera-input patch used by TOTK Recomp, not a shader edit.
+ASPECT_SITE = 0x160dea4
+ASPECT_ORIGINAL = (0xF9402009, 0xAA0803E0, 0xBD400120, 0xBD005900)
+ASPECT_LOAD = 0xBD400920  # ldr s0, [x9, #8]
+
 
 def _adrp(rd, pc, target):
     pages = (target >> 12) - (pc >> 12)
@@ -62,6 +69,22 @@ def patch_wonder_realtime(module):
                 word = ORIGINAL[item]
             words.append(word)
         struct.pack_into("<" + "I" * SITE_WORDS, module.image, branch, *words)
+
+    if ASPECT_SITE < module.text[0] or ASPECT_SITE + len(ASPECT_ORIGINAL) * 4 > module.text[0] + module.text[1]:
+        raise ValueError(f"Wonder perspective-aspect site main+{ASPECT_SITE:#x} is outside main text")
+    actual = struct.unpack_from("<" + "I" * len(ASPECT_ORIGINAL), module.image, ASPECT_SITE)
+    if actual != ASPECT_ORIGINAL:
+        raise ValueError(
+            f"Wonder perspective-aspect patch expects game version 1.0.0: "
+            f"main+{ASPECT_SITE:#x} has {actual!r}"
+        )
+    aspect_words = (
+        _adrp(9, ASPECT_SITE, page),
+        ASPECT_ORIGINAL[1],  # preserve x0 = projection config
+        ASPECT_LOAD,
+        ASPECT_ORIGINAL[3],
+    )
+    struct.pack_into("<" + "I" * len(aspect_words), module.image, ASPECT_SITE, *aspect_words)
 
     # load_modules() commits through the end of BSS. Put the page at the end so the
     # runtime can find it through the optional ModuleInfo offset.

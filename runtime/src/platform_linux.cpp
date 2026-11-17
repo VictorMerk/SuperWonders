@@ -306,8 +306,21 @@ void overlay_game_speed(double percent) { overlay::game_speed(percent); }
 void overlay_presented(uint64_t now_ns) { overlay::presented(now_ns); }
 
 void window_size(uint32_t& w, uint32_t& h) {
-    w = g_pixel_w;
-    h = g_pixel_h;
+    if (g_window) {
+        w = g_pixel_w;
+        h = g_pixel_h;
+        return;
+    }
+
+    // Game hooks may run before SDL creates the window. Reuse the configured output size so
+    // camera initialization does not see the temporary 16:9 fallback.
+    int width = 1280, height = 720;
+    bool fullscreen = false;
+    linux_host::initial_window(width, height, fullscreen);
+    const std::string resolution = setting("resolution");
+    if (!resolution.empty()) std::sscanf(resolution.c_str(), "%dx%d", &width, &height);
+    w = uint32_t(std::max(0, width));
+    h = uint32_t(std::max(0, height));
 }
 
 void screen_size(uint32_t& w, uint32_t& h) { window_size(w, h); }

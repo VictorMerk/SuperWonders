@@ -3,6 +3,7 @@
 // uniform blocks and glyph records. Moved out of nvn_draw.cpp, which calls trace_draw() after every draw.
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -159,12 +160,27 @@ bool snap_follow(const Targets& t, const ShaderInfo* vs, const ShaderInfo* fs, c
     static int left = 0;
     if (env.empty() || !t.color_count) return false;
     static const int count = std::getenv("NX_SNAP_FOLLOW_COUNT") ? std::atoi(std::getenv("NX_SNAP_FOLLOW_COUNT")) : 48;
+    static const char* trigger = std::getenv("NX_SNAP_TRIGGER_FILE");
+    static bool triggered = !trigger || !*trigger;
+    if (!triggered && (g_stats.done % 500 == 0 || (fs && env.compare(0, 16, fs->hash) == 0))) {
+        if (FILE* f = std::fopen(trigger, "rb")) {
+            std::fclose(f);
+            triggered = true;
+            log("widescreen snapshots: trigger received");
+        }
+    }
+    if (!triggered) return false;
     static const bool by_frame = env.find("@f") != std::string::npos;  // <hash>@f<presented frame>
     static const uint64_t frame_from = by_frame ? std::strtoull(env.c_str() + env.find("@f") + 2, nullptr, 10) : 0;
     bool started = by_frame ? g_frame >= frame_from : g_stats.done >= from;
-    if (!target && started && ((fs && env.compare(0, 16, fs->hash) == 0) || env.compare(0, 16, vs->hash) == 0))
+    static const bool full_target = std::getenv("NX_SNAP_FOLLOW_MAIN_TARGET") != nullptr;
+    GpuImage* candidate = t.colors[0] ? image_of(t.colors[0]) : nullptr;
+    const bool target_ok = !full_target || (candidate && candidate->logical_width == 1920 && candidate->logical_height == 1080);
+    if (!target && started && target_ok && ((fs && env.compare(0, 16, fs->hash) == 0) || env.compare(0, 16, vs->hash) == 0))
         target = t.colors[0], left = count;  // the vertex shader's hash matches too
     if (!target || t.colors[0] != target || left <= 0) return false;
+    static const char* skip_fs = std::getenv("NX_SNAP_FOLLOW_SKIP_FS");
+    if (skip_fs && fs && std::strstr(skip_fs, fs->hash.c_str())) return false;
     left--;
     std::string tex;
     for (size_t k = 0; k < handles.size(); k++) {
@@ -308,6 +324,58 @@ namespace nx::nvn::replay {
 
 void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, const ShaderInfo* vs,
                 const ShaderInfo* fs, const TexBindings& tex_bindings, const std::vector<uint64_t>& handles) {
+    // NX_TRACE_SCENE_UNIFORMS=1: capture shader uniform blocks used by draws to Wonder's full-size
+    // 16:9 scene targets. This identifies the actual scene projection without changing rendering.
+    static const bool trace_scene_uniforms = std::getenv("NX_TRACE_SCENE_UNIFORMS") != nullptr;
+    static const uint64_t scene_from = [] { const char* s = std::getenv("NX_TRACE_SCENE_FROM_FRAME"); return s ? std::strtoull(s, nullptr, 10) : 0ull; }();
+    static unsigned scene_uniform_logs = 0;
+    if (trace_scene_uniforms && scene_uniform_logs < 32 && t.color_count && t.colors[0] &&
+        g_frame.load(std::memory_order_relaxed) >= scene_from &&
+        ((scene_from == 0 && g_stats.done < 24) || g_stats.done % 5000 == 0)) {
+        Texture* target = get<Texture>(t.colors[0]);
+        GpuImage* image = image_of(t.colors[0]);
+        if (target && image && target->width >= 1360 && target->height >= 760 &&
+            uint64_t(target->width) * 9 >= uint64_t(target->height) * 16 - 16 &&
+            uint64_t(target->width) * 9 <= uint64_t(target->height) * 16 + 16) {
+            const unsigned draw = scene_uniform_logs++;
+            log("scene-uniform draw %u frame %llu index %llu target %ux%u host %ux%u viewport %d,%d %dx%d vs %s fs %s",
+                draw, (unsigned long long)g_frame.load(), (unsigned long long)g_stats.done, target->width,
+                target->height, image->width, image->height, g_state.viewport[0], g_state.viewport[1],
+                g_state.viewport[2], g_state.viewport[3], vs ? vs->hash.c_str() : "-", fs ? fs->hash.c_str() : "-");
+            for (int stage = 0; stage < 2; ++stage) {
+                const int max_blocks = stage == 0 ? 4 : 4;
+                for (int block = 0; block < max_blocks; ++block) {
+                    const Range& u = g_state.uniforms[stage][block];
+                    if (!u.address || !u.size) continue;
+                    const auto* f = reinterpret_cast<const float*>(guest_bytes(u.address));
+                    if (!f) continue;
+                    const unsigned count = std::min<unsigned>(u.size / sizeof(float), 4096);
+                    char item[48];
+                    unsigned rows = 0;
+                    for (unsigned i = 0; i + 3 < count && rows < 24; i += 4) {
+                        const float a = f[i], b = f[i + 1], d = f[i + 2], e = f[i + 3];
+                        if ((!std::isfinite(a) || std::abs(a) < 1.0e-7f) &&
+                            (!std::isfinite(b) || std::abs(b) < 1.0e-7f) &&
+                            (!std::isfinite(d) || std::abs(d) < 1.0e-7f) &&
+                            (!std::isfinite(e) || std::abs(e) < 1.0e-7f)) continue;
+                        std::string values;
+                        for (unsigned j = 0; j < 4; ++j) {
+                            const float value = f[i + j];
+                            if (std::isfinite(value)) std::snprintf(item, sizeof item, " %.6g", double(value));
+                            else std::snprintf(item, sizeof item, " %g", double(value));
+                            values += item;
+                        }
+                        log("    scene-uniform stage %s block %d row %u:%s", stage == 0 ? "vs" : "fs", block,
+                            i / 4, values.c_str());
+                        ++rows;
+                    }
+                    log("  scene-uniform stage %s block %d guest %llx bytes %llu nonzero-rows %u",
+                        stage == 0 ? "vs" : "fs", block, (unsigned long long)u.address,
+                        (unsigned long long)u.size, rows);
+                }
+            }
+        }
+    }
     // Always: the first draws with a huge vertex or instance count (a GPU hang candidate).
     static int big = 0;
     uint32_t count = uint32_t(indexed ? c.i[0] : c.i[1]), instances = uint32_t(std::max(1, c.i[3]));
@@ -505,9 +573,83 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
     // NX_TRACE_FS_HASH=<hash>[,<hash>...]: only draws with those fragment shaders.
     static const char* fs_env = std::getenv("NX_TRACE_FS_HASH");
     static const uint64_t trace_count = std::getenv("NX_TRACE_COUNT") ? std::strtoull(std::getenv("NX_TRACE_COUNT"), nullptr, 10) : 80;
-    if (trace_capture() || (trace_env && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
+    static const char* trigger_file = std::getenv("NX_TRACE_TRIGGER_FILE");
+    static bool triggered = !trigger_file || !*trigger_file;
+    if (trace_env && !triggered && g_stats.done % 500 == 0) {
+        if (FILE* f = std::fopen(trigger_file, "rb")) {
+            std::fclose(f);
+            triggered = true;
+            log("widescreen trace: trigger received at draw %llu frame %llu",
+                (unsigned long long)g_stats.done, (unsigned long long)g_frame.load());
+        }
+    }
+    if (trace_capture() || (trace_env && triggered && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
         (!fs_env || (fs && std::strstr(fs_env, fs->hash.c_str()))))) {  // one hash or a comma list
         traced++;
+        if (std::getenv("NX_TRACE_GEOMETRY") && indexed && c.a[0] && c.i[0] > 0 && c.i[0] < 1000000) {
+            const uint8_t* idx = guest_bytes(c.a[0]);
+            uint32_t size = index_size(c.mask), lo = UINT32_MAX, hi = 0;
+            if (idx && (size == 1 || size == 2 || size == 4)) {
+                log("terrain gpu overlap: indices=%d separate=%d", int(written_overlaps(idx, uint64_t(c.i[0]) * size)), int(written_separate()));
+                for (int k = 0; k < 2; ++k) {
+                    const Range& b = g_state.vertex_buffers[k];
+                    const uint8_t* p = b.address ? guest_bytes(b.address) : nullptr;
+                    log("terrain gpu overlap: vertex%d=%d", k, int(p && written_overlaps(p, b.size)));
+                }
+                for (int k = 3; k <= 4; ++k) {
+                    const Range& b = g_state.uniforms[0][k];
+                    const uint8_t* p = b.address ? guest_bytes(b.address) : nullptr;
+                    log("terrain gpu overlap: c%d=%d", k + 3, int(p && written_overlaps(p, b.size)));
+                }
+                if (std::getenv("NX_TRACE_GEOMETRY_DUMP")) {
+                    auto dump = [&](const char* label, const uint8_t* data, uint64_t bytes) {
+                        if (!data || !bytes || bytes > 16 * 1024 * 1024) return;
+                        char name[256];
+                        std::snprintf(name, sizeof name, "%s/terrain-%llu-%s.bin", plat::data_root().c_str(), (unsigned long long)g_stats.done, label);
+                        if (FILE* existing = std::fopen(name, "rb")) { std::fclose(existing); return; }
+                        if (FILE* out = std::fopen(name, "wb")) { size_t written = std::fwrite(data, 1, size_t(bytes), out); std::fclose(out); log("terrain dump: %s %llu/%llu bytes", name, (unsigned long long)written, (unsigned long long)bytes); }
+                    };
+                    dump("indices", idx, uint64_t(c.i[0]) * size);
+                    for (int stream = 0; stream < 2; ++stream) {
+                        const Range& b = g_state.vertex_buffers[stream];
+                        dump(stream ? "vertex1" : "vertex0", b.address ? guest_bytes(b.address) : nullptr, b.size);
+                    }
+                    for (int block = 3; block <= 4; ++block) {
+                        const Range& b = g_state.uniforms[0][block];
+                        dump(block == 3 ? "c6" : "c7", b.address ? guest_bytes(b.address) : nullptr, b.size);
+                    }
+                }
+                for (int k = 0; k < c.i[0]; ++k) {
+                    uint32_t v = 0; std::memcpy(&v, idx + uint64_t(k) * size, size);
+                    lo = std::min(lo, v); hi = std::max(hi, v);
+                }
+                log("terrain geometry: index count=%d size=%u base=%d min=%u max=%u", c.i[0], size, c.i[1], lo, hi);
+                for (const ShaderIo& input : vs->refl.inputs) {
+                    if (input.location >= g_state.attribs.size()) continue;
+                    const VertexAttrib& a = g_state.attribs[input.location];
+                    if (a.stream >= g_state.streams.size() || a.stream >= 16) continue;
+                    const Range& b = g_state.vertex_buffers[a.stream];
+                    log("terrain geometry: loc=%u format=%x vkformat=%u stream=%u offset=%u stride=%u buffer=%llx size=%llu", input.location, a.format, unsigned(vk_vertex_format(a.format)), a.stream, a.offset, g_state.streams[a.stream].stride, (unsigned long long)b.address, (unsigned long long)b.size);
+                    if (vk_vertex_format(a.format) != VK_FORMAT_R32G32B32_SFLOAT || !b.address) continue;
+                    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
+                    uint32_t valid = 0;
+                    for (int k = 0; k < c.i[0]; ++k) {
+                        uint32_t v = 0; std::memcpy(&v, idx + uint64_t(k) * size, size);
+                        int64_t vertex = int64_t(v) + c.i[1];
+                        if (vertex < 0) continue;
+                        uint64_t off = uint64_t(vertex) * g_state.streams[a.stream].stride + a.offset;
+                        if (off + 12 > b.size) continue;
+                        const uint8_t* p = guest_bytes(b.address + off);
+                        if (!p) continue;
+                        float xyz[3]; std::memcpy(xyz, p, sizeof xyz);
+                        if (!std::isfinite(xyz[0]) || !std::isfinite(xyz[1]) || !std::isfinite(xyz[2])) continue;
+                        for (int j = 0; j < 3; ++j) { low[j] = std::min(low[j], xyz[j]); high[j] = std::max(high[j], xyz[j]); }
+                        ++valid;
+                    }
+                    log("terrain geometry: loc=%u valid=%u min=%g,%g,%g max=%g,%g,%g (guest memory)", input.location, valid, low[0], low[1], low[2], high[0], high[1], high[2]);
+                }
+            }
+        }
         // NX_TRACE_VERTS=1: the first 3 vertices of stream 0 as floats and halves (8 words each at most).
         if (std::getenv("NX_TRACE_VERTS") && !g_state.streams.empty())
             if (const Range& vb = g_state.vertex_buffers[0]; vb.address)
@@ -549,9 +691,13 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
         }
         if (std::getenv("NX_TRACE_VS_BLOCKS"))
             if (const Range& u = g_state.uniforms[0][0]; u.address)
-                if (auto* f = reinterpret_cast<const float*>(guest_bytes(u.address)))
+                if (auto* f = reinterpret_cast<const float*>(guest_bytes(u.address))) {
+                    log("widescreen buffer: gpu=%llx cpu=%llx size=%llu draw=%llu",
+                        (unsigned long long)u.address, (unsigned long long)reinterpret_cast<uintptr_t>(f),
+                        (unsigned long long)u.size, (unsigned long long)g_stats.done);
                     for (int row = 0; row < std::min<int>(int(u.size / 16), 24); row++)
                         log("  vs c3[%d]: %g %g %g %g", row, f[4 * row], f[4 * row + 1], f[4 * row + 2], f[4 * row + 3]);
+                }
         // NX_TRACE_VS_SHADOW=1: c3 rows 43..45 generate VS output location 11,
         // consumed by the shadow receiver fragment shader for its Dref coordinates.
         if (std::getenv("NX_TRACE_VS_SHADOW"))

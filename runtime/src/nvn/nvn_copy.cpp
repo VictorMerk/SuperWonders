@@ -14,6 +14,7 @@
 
 #include "nvn_pipeline.h"
 #include "nvn_vk.h"
+#include "nvn_ultrawide.h"
 
 namespace nx::nvn {
 
@@ -94,11 +95,13 @@ void replay_copy(VkCommandBuffer cb, const Cmd& c, const CmdList& list) {
         int32_t b = scaled_origin(origin + extent, scale);
         return std::max(1, b - a);
     };
-    int32_t sx = scaled_origin(info.src[0], src->render_scale), sy = scaled_origin(info.src[1], src->render_scale);
-    int32_t dx = scaled_origin(info.dst[0], dst->render_scale), dy = scaled_origin(info.dst[1], dst->render_scale);
-    int32_t sw = scaled_extent(info.src[0], std::max(info.src[3], 1), src->render_scale);
+    const float sx_scale = src->render_scale * (src->uw ? uw_factor() : 1.0f);
+    const float dx_scale = dst->render_scale * (dst->uw ? uw_factor() : 1.0f);
+    int32_t sx = scaled_origin(info.src[0], sx_scale), sy = scaled_origin(info.src[1], src->render_scale);
+    int32_t dx = scaled_origin(info.dst[0], dx_scale), dy = scaled_origin(info.dst[1], dst->render_scale);
+    int32_t sw = scaled_extent(info.src[0], std::max(info.src[3], 1), sx_scale);
     int32_t sh = scaled_extent(info.src[1], std::max(info.src[4], 1), src->render_scale);
-    int32_t dw = scaled_extent(info.dst[0], std::max(info.dst[3], 1), dst->render_scale);
+    int32_t dw = scaled_extent(info.dst[0], std::max(info.dst[3], 1), dx_scale);
     int32_t dh = scaled_extent(info.dst[1], std::max(info.dst[4], 1), dst->render_scale);
     if (same) {
         // One subresource and layer range, and the rectangles (and 3D slices) meet: Vulkan forbids it, dropped.

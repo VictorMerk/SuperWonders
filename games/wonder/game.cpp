@@ -9,17 +9,225 @@
 #include <cstdlib>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 
 #include "platform.h"
 #include "netplay_game.h"
+#include "nvn/nvn_ultrawide.h"
 
 namespace nx {
+
+namespace nvn { void hold_scene_frame_cap(int fps); }
+
+void game::file_opened(const char* path) {
+    static std::atomic<bool> held{false};
+    // The map can remain resident while entering a course, so returning to it does not necessarily reopen its
+    // StageLoadInfo. Its world music does reopen when the player returns from this house.
+    if (held.load() && std::strstr(path, "/Sound/Resource/Stream/BGM_World_") && held.exchange(false)) {
+        nvn::hold_scene_frame_cap(0);
+        log("wonder: first house scene left for world map: selected frame cap restored");
+        return;
+    }
+    constexpr const char* prefix = "/Stage/StageLoadInfo/";
+    const char* scene = std::strstr(path, prefix);
+    if (!scene) return;
+    scene += std::strlen(prefix);
+    constexpr const char* house = "Course500_Course.game__stage__StageLoadInfo.bgyml";
+    const bool in_house = std::strcmp(scene, house) == 0;
+    if (held.exchange(in_house) != in_house) {
+        nvn::hold_scene_frame_cap(in_house ? 60 : 0);
+        log("wonder: first house scene %s: %s", in_house ? "loading" : "left",
+            in_house ? "frame cap held at 60 for dialogue compatibility" : "selected frame cap restored");
+    }
+}
 
 const game::Info game::kInfo = {"wonder", "Super Mario Bros. Wonder", 0x010015100B514000ull,
                                 "io.github.belmantegu.wonderrecomp", "private/wonder",
                                 0x1000000 /* main.npdm: 16 MiB system resource */};
 
 namespace {
+
+std::atomic<uint64_t> g_wide_calls{0};
+Fn g_wide_original = nullptr;
+Fn g_ortho_original = nullptr;
+Fn g_camera_entry_original = nullptr;
+Fn g_active_rect_original = nullptr;
+std::atomic<unsigned> g_active_rect_count{0};
+std::atomic<unsigned> g_camera_entry_calls{0};
+std::atomic<unsigned> g_ortho_samples{0};
+std::atomic<unsigned> g_ortho_adjustments{0};
+static uint64_t frame_step_page();
+
+void active_rect_hook(CPU& c) {
+    const ModuleInfo* main = game_lib().main;
+    static const uint64_t chosen_caller = [] {
+        const char* v = std::getenv("NX_UW_RECT_CALLER");
+        return v ? std::strtoull(v, nullptr, 16) : uint64_t(0x6caba4);
+    }();
+    static const bool candidate_group = [] {
+        const char* v = std::getenv("NX_UW_RECT_GROUP_TEST");
+        return v && std::strcmp(v, "1") == 0;
+    }();
+    static const bool candidate_all = [] {
+        const char* v = std::getenv("NX_UW_RECT_ALL_TEST");
+        return v && std::strcmp(v, "1") == 0;
+    }();
+    const uint64_t rel = main && c.x[30] >= main->base ? c.x[30] - main->base : 0;
+    const bool relevant = main && (candidate_all || rel == chosen_caller || (candidate_group &&
+        (rel == 0x1d1f50 || rel == 0x441328 || rel == 0x82d62c || rel == 0x3293a8 ||
+         rel == 0x329008 || rel == 0x49b224)));
+    const uint64_t caller = c.x[30];
+    const uint64_t result = c.x[0];
+    g_active_rect_original(c);
+    static const bool rect_trace = std::getenv("NX_UW_RECT_TRACE") &&
+                                   std::strcmp(std::getenv("NX_UW_RECT_TRACE"), "1") == 0;
+    if (rect_trace && main && result && ld<uint8_t>(result + 0x10)) {
+        static std::atomic<uint64_t> seen[64]{};
+        bool first = false;
+        for (auto& slot : seen) {
+            uint64_t value = slot.load(std::memory_order_relaxed);
+            if (value == caller) break;
+            if (!value && slot.compare_exchange_strong(value, caller, std::memory_order_relaxed)) {
+                first = true;
+                break;
+            }
+            if (value == caller) break;
+        }
+        const bool valid = ld<uint8_t>(result + 0x10) != 0;
+        if (first) log("widescreen rect trace: caller=main+%llx valid=%u bounds=%g,%g,%g,%g",
+            (unsigned long long)(caller - main->base), unsigned(valid), double(ld<float>(result)),
+            double(ld<float>(result + 4)), double(ld<float>(result + 8)), double(ld<float>(result + 12)));
+    }
+    static const bool active = std::getenv("NX_UW_ACTIVE_AREA_TEST") &&
+                               std::strcmp(std::getenv("NX_UW_ACTIVE_AREA_TEST"), "1") == 0;
+    if (!active) return;
+    if (!relevant || !result || !ld<uint8_t>(result + 0x10)) return;
+    const float left = ld<float>(result), right = ld<float>(result + 8);
+    const float factor = nvn::uw_factor();
+    if (!std::isfinite(left) || !std::isfinite(right) || right <= left || factor <= 1.f) return;
+    const float extra = (right - left) * (factor - 1.f) * 0.5f;
+    if (!std::isfinite(extra) || extra > 10000.f) return;
+    st<float>(result, left - extra);
+    st<float>(result + 8, right + extra);
+    if (g_active_rect_count.fetch_add(1, std::memory_order_relaxed) < (candidate_all ? 32u : 8u))
+        log("widescreen active-area test: caller=main+%llx index=%u bounds=%.3f,%.3f..%.3f,%.3f -> x %.3f..%.3f",
+            (unsigned long long)rel, unsigned(c.x[1]), double(left), double(ld<float>(result + 4)),
+            double(right), double(ld<float>(result + 12)), double(left - extra), double(right + extra));
+}
+
+static bool horplus_enabled() {
+    const char* value = std::getenv("NX_WONDER_HORPLUS");
+    return value && value[0] && std::strcmp(value, "0") != 0;
+}
+
+static float horplus_aspect() {
+    const uint64_t page = frame_step_page();
+    if (!page) return 16.0f / 9.0f;
+    return ld<float>(page + 8);
+}
+
+void ortho_camera_hook(CPU& c) {
+    const unsigned sample = g_ortho_samples.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t p = c.x[0];
+    const float top = ld<float>(p + 0xa0), bottom = ld<float>(p + 0xa4);
+    float left = ld<float>(p + 0xa8), right = ld<float>(p + 0xac);
+    const float current_aspect = (right - left) / std::abs(top - bottom);
+    const float target_aspect = nvn::uw_on() ? (16.0f / 9.0f) * nvn::uw_factor() : horplus_aspect();
+    const ModuleInfo* main = game_lib().main;
+    const bool world_camera = main && c.x[30] == main->base + 0x1a95e44;
+    if (((nvn::uw_on() && world_camera) || horplus_enabled()) &&
+        std::isfinite(current_aspect) && std::isfinite(target_aspect) &&
+        current_aspect > 1.76f && current_aspect < 1.80f && target_aspect > current_aspect + 0.01f &&
+        target_aspect < 4.1f) {
+        const float center = (left + right) * 0.5f;
+        const float half_width = std::abs(top - bottom) * target_aspect * 0.5f;
+        left = center - half_width;
+        right = center + half_width;
+        st<float>(p + 0xa8, left);
+        st<float>(p + 0xac, right);
+        const unsigned adjusted = g_ortho_adjustments.fetch_add(1, std::memory_order_relaxed);
+        if (adjusted < 32)
+            log("widescreen ortho-camera: adjusted caller=%llx aspect %.5f -> %.5f bounds %.4f..%.4f",
+                (unsigned long long)c.x[30], double(current_aspect), double(target_aspect), double(left), double(right));
+    } else if (plat::setting("wonder_widescreen_trace") == "1" && (sample < 32 || (sample % 5000) == 0)) {
+        log("widescreen ortho-camera: object=%llx caller=%llx left=%.4f right=%.4f top=%.4f bottom=%.4f",
+            (unsigned long long)p, (unsigned long long)c.x[30], double(left), double(right), double(top), double(bottom));
+    }
+    g_ortho_original(c);
+}
+
+void wide_probe(CPU& c) {
+    g_wide_calls.fetch_add(1, std::memory_order_relaxed);
+    g_wide_original(c);
+}
+
+void camera_entry_probe(CPU& c) {
+    unsigned n = g_camera_entry_calls.fetch_add(1, std::memory_order_relaxed);
+    if (n < 16 || n % 10000 == 0)
+        log("widescreen camera-entry: count=%u caller=%llx object=%llx runtime-aspect=%.5f", n + 1,
+            (unsigned long long)c.x[30], (unsigned long long)c.x[0], double(horplus_aspect()));
+    g_camera_entry_original(c);
+}
+
+void install_wide_probe() {
+    const bool trace = plat::setting("wonder_widescreen_trace") == "1";
+    const char* uw = std::getenv("NX_ULTRAWIDE");
+    if (!trace && !horplus_enabled() && !(uw && uw[0] && uw[0] != '0')) return;
+    const ModuleInfo* main = game_lib().main;
+    if (!main) return;
+    constexpr uint64_t offset = 0x1c34328;
+    constexpr uint32_t code[] = {0xfc1b0fee, 0x6d00b3ed, 0xf90027f3, 0x6d01abeb,
+                                 0x6d02a3e9, 0xa903fbfd, 0x9100e3fd, 0xb000cfc8};
+    const LoadedModule* module = module_at(main->base);
+    if (!module) return;
+    const char* active_test = std::getenv("NX_UW_ACTIVE_AREA_TEST");
+    const char* rect_trace = std::getenv("NX_UW_RECT_TRACE");
+    if ((active_test && std::strcmp(active_test, "1") == 0) ||
+        (rect_trace && std::strcmp(rect_trace, "1") == 0)) {
+        constexpr uint64_t fn = 0x1d6610;
+        constexpr uint32_t words[] = {0x2a2103e8, 0x3900401f, 0x72001d1f, 0xa9007c1f};
+        bool ok = ld<uint32_t>(main->base + 0x6caba0) == 0x97ec2e9c;
+        for (unsigned i = 0; i < 4; ++i) ok &= ld<uint32_t>(main->base + fn + 4 * i) == words[i];
+        if (ok && module->table[fn / 4]) {
+            g_active_rect_original = module->table[fn / 4];
+            module->table[fn / 4] = active_rect_hook;
+            log("widescreen active-area test: hook installed at main+1d6610");
+        } else log("widescreen active-area test: incompatible code or unavailable");
+    }
+    constexpr uint64_t camera_entry = 0x160de38;
+    if (trace && ld<uint32_t>(main->base + camera_entry) == 0x14000003 && module->table[camera_entry / 4]) {
+        g_camera_entry_original = module->table[camera_entry / 4];
+        module->table[camera_entry / 4] = camera_entry_probe;
+        log("widescreen camera-entry: probe installed at main+160de38");
+    }
+    constexpr uint64_t ortho = 0x10578c;
+    constexpr uint32_t ortho_code[] = {0x2d550400, 0x1e3c1003, 0x1e2e1004, 0xd2e7f008};
+    bool compatible = true;
+    for (unsigned i = 0; i < 4; ++i)
+        compatible &= ld<uint32_t>(main->base + ortho + 4 * i) == ortho_code[i];
+    if (compatible && module->table[ortho / 4]) {
+        g_ortho_original = module->table[ortho / 4];
+        module->table[ortho / 4] = ortho_camera_hook;
+        log("widescreen ortho-camera: %s hook installed at main+10578c",
+            (horplus_enabled() || (uw && uw[0] && uw[0] != '0')) ? "ultrawide" : "trace");
+    } else {
+        log("widescreen ortho-camera: incompatible code or unavailable; probe disabled");
+    }
+    if (!trace) return;
+    for (unsigned i = 0; i < 8; ++i) {
+        if (ld<uint32_t>(main->base + offset + 4 * i) != code[i]) {
+            log("widescreen calls: incompatible game code; probe disabled");
+            return;
+        }
+    }
+    g_wide_original = module->table[offset / 4];
+    if (!g_wide_original) {
+        log("widescreen calls: function unavailable; probe disabled");
+        return;
+    }
+    module->table[offset / 4] = wide_probe;
+    log("widescreen calls: probe installed at main+%llx", (unsigned long long)offset);
+}
 
 static uint32_t float_bits(float value) {
     uint32_t bits;
@@ -44,12 +252,35 @@ static void store_frame_step(float seconds) {
     std::atomic_ref<uint64_t>(*step).store(bits, std::memory_order_release);
 }
 
+static void update_wide_aspect() {
+    static const bool horplus = [] {
+        const char* value = std::getenv("NX_WONDER_HORPLUS");
+        return value && value[0] && std::strcmp(value, "0") != 0;
+    }();
+    static uint32_t last_width = 0, last_height = 0;
+    uint32_t width = 1920, height = 1080;
+    if (horplus) plat::window_size(width, height);
+    if (!width || !height) width = 1920, height = 1080;
+    if (width == last_width && height == last_height) return;
+
+    const uint64_t page = frame_step_page();
+    if (!page) return;
+    const float aspect = horplus ? float(width) / float(height) : (16.0f / 9.0f);
+    auto* aspect_bits = reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(page + 8));
+    std::atomic_ref<uint32_t>(*aspect_bits).store(float_bits(aspect), std::memory_order_release);
+    last_width = width;
+    last_height = height;
+    if (horplus)
+        log("widescreen perspective: runtime camera aspect %.5f from window %u x %u", double(aspect), width, height);
+}
+
 static void init_frame_step() {
     if (!frame_step_page()) {
         log("wonder: real-time frame step page was not reserved; retaining the game's original frame timing");
         return;
     }
     store_frame_step(1.0f / 60.0f);
+    update_wide_aspect();
     plat::overlay_game_speed(100.0);
     log("wonder: real-time frame step initialized at 16.67 ms");
 }
@@ -103,6 +334,7 @@ void seed_guard_tick(uint64_t now_ns);
 void game::after_init() {
     init_frame_step();
     trace_screen_globals();
+    install_wide_probe();
     wonder::menu_init();
     wonder::lan_init();
     if (!lan::active()) wonder::seed_guard_init();
@@ -121,6 +353,23 @@ void game::frame_presented(uint64_t now_ns, int present_interval) {
         }
         return;
     }
+    if (plat::setting("wonder_widescreen_trace") == "1") {
+        static uint64_t next_trace = 0;
+        if (now_ns >= next_trace) {
+            next_trace = now_ns + 10'000'000'000ull;
+            log("widescreen calls: main+1c34328 last 10s = %llu",
+                (unsigned long long)g_wide_calls.exchange(0, std::memory_order_relaxed));
+            const ModuleInfo* module = game_lib().main;
+            constexpr uint64_t offsets[] = {0x362db38, 0x362dbb0, 0x362dc00, 0x362dc50};
+            if (module) for (uint64_t offset : offsets) {
+                if (offset + 8 > module->bss + module->bss_size) continue;
+                float pair[2];
+                std::memcpy(pair, reinterpret_cast<const void*>(module->base + offset), sizeof pair);
+                log("widescreen live: main+%llx = %.3f x %.3f",
+                    (unsigned long long)offset, pair[0], pair[1]);
+            }
+        }
+    }
     // recomp/wonder_realtime.py reserves one aligned page at the end of main's BSS.
     // Two adjacent floats are consumed by the patched game code: seconds * 60 and seconds.
     static const bool realtime = [] {
@@ -135,6 +384,7 @@ void game::frame_presented(uint64_t now_ns, int present_interval) {
     static double speed_elapsed = 0, speed_simulated = 0;
 
     if (!frame_step_page()) return;
+    update_wide_aspect();
 
     if (!previous_ns) {
         previous_ns = now_ns;

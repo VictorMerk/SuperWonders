@@ -26,5 +26,7 @@ void renderer_start();
 void first_frame();
 // Called after each present so the game's simulation step can follow elapsed real time.
 void frame_presented(uint64_t now_ns, int present_interval);
+// Called after a guest file has been opened successfully.
+void file_opened(const char* path);
 
 }  // namespace nx::game

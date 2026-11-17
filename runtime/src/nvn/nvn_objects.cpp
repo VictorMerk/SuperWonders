@@ -4,13 +4,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <map>
 #include <set>
+#include <string>
 
 #include "nvn.h"
+#include "nvn_ultrawide.h"
 #include "kernel.h"
 #include "platform.h"
 
@@ -302,6 +305,16 @@ void TextureInitialize(CPU& c) {  // NVNboolean (NVNtexture*, const NVNtextureBu
     t.samples = uint32_t(driver(c, "nvnTextureBuilderGetSamples", {builder}));
     t.width = uint32_t(driver(c, "nvnTextureBuilderGetWidth", {builder}));
     t.height = uint32_t(driver(c, "nvnTextureBuilderGetHeight", {builder}));
+    t.uw = uw_is_target(t);
+    static const bool uw_trace = std::getenv("NX_UW_TRACE") && std::string(std::getenv("NX_UW_TRACE")) == "1";
+    if (uw_trace && t.target == 1 && t.width >= 640 && t.height >= 360) {
+        static std::set<std::string> seen_uw_targets;
+        char shape[128];
+        std::snprintf(shape, sizeof shape, "%ux%u/f%x/flags%x/uw%u", t.width, t.height, t.format, t.flags,
+                      unsigned(t.uw));
+        if (seen_uw_targets.insert(shape).second)
+            log("nvn: UW trace: target init %s", shape);
+    }
     t.depth = uint32_t(driver(c, "nvnTextureBuilderGetDepth", {builder}));
     t.stride = uint32_t(driver(c, "nvnTextureBuilderGetStride", {builder}));
     t.depth_stencil_mode = uint32_t(driver(c, "nvnTextureBuilderGetDepthStencilMode", {builder}));
@@ -532,6 +545,7 @@ uint64_t make_snapshot(uint64_t guest) {  // under objects_lock
     copy->target = t->target, copy->format = t->format, copy->flags = t->flags, copy->levels = t->levels;
     copy->samples = t->samples, copy->depth_stencil_mode = t->depth_stencil_mode;
     copy->width = t->width, copy->height = t->height, copy->depth = t->depth, copy->stride = t->stride;
+    copy->uw = t->uw;
     copy->pool = t->pool, copy->offset = t->offset, copy->storage_size = t->storage_size;
     copy->memory = t->memory, copy->gpu = t->gpu, copy->block_height_gobs = t->block_height_gobs;
     std::memcpy(copy->swizzle, t->swizzle, sizeof copy->swizzle);

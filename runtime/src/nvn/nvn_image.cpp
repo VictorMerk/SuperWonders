@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include "nvn_vk.h"
+#include "nvn_ultrawide.h"
 #include "../svc_am.h"
 
 namespace nx::nvn {
@@ -149,19 +150,20 @@ GpuImage* image_of(uint64_t guest) {
     if (share && t->memory && (old_rule ? t->pool_swizzle == 0 : !widened))
         if (auto it = g_live_images.find(key); it != g_live_images.end())
             if (auto shared = it->second.lock(); shared && shared->image && !shared->alpha_from_r &&
-                (!scaled_scene_rt || shared->render_scale == image_scale)) {
+                shared->uw == t->uw && (!scaled_scene_rt || shared->render_scale == image_scale)) {
                 static uint64_t shares = 0;
                 if (++shares % 1000 == 1) log("nvn/vk: %llu textures shared an image with another", (unsigned long long)shares);
                 shared->pool = t->pool, shared->pool_offset = t->offset, shared->pool_size = t->storage_size;
                 t->image = shared;
                 return shared.get();
             }
-    if ((t->image = reuse_image(*t)); t->image && t->image->render_scale == image_scale) {
+    if ((t->image = reuse_image(*t)); t->image && t->image->render_scale == image_scale && t->image->uw == t->uw) {
         t->image->pool = t->pool, t->image->pool_offset = t->offset, t->image->pool_size = t->storage_size;
         return t->image.get();
     }
     t->image.reset();
     auto img = std::make_shared<GpuImage>();
+    img->uw = t->uw;
     img->format = bc_host_decode(t->format) ? bc_decoded_format(t->format) : vk_format(t->format);  // nvn_bc.cpp
     img->nvn_format = t->format;
     img->pool = t->pool, img->pool_offset = t->offset, img->pool_size = t->storage_size;
@@ -179,7 +181,8 @@ GpuImage* image_of(uint64_t guest) {
     img->logical_height = (t->target == 0 || t->target == 3) && !one_d ? 1u : std::max(1u, t->height);
     // Guest pool allocations and layouts stay unchanged; only this Vulkan image changes size.
     img->render_scale = image_scale;
-    img->width = std::max(1u, uint32_t(std::lround(img->logical_width * img->render_scale)));
+    img->width = t->uw ? uw_host_width(*t, img->render_scale)
+                       : std::max(1u, uint32_t(std::lround(img->logical_width * img->render_scale)));
     img->height = std::max(1u, uint32_t(std::lround(img->logical_height * img->render_scale)));
     img->levels = std::max(1u, t->levels);
     uint32_t depth = std::max(1u, t->target == 3 && !one_d && t->depth <= 1 ? t->height : t->depth);  // GL-style layers

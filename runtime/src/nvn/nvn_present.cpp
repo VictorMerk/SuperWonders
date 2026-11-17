@@ -14,6 +14,7 @@
 
 #include "nvn_vk.h"
 #include "present_geometry.h"
+#include "nvn_ultrawide.h"
 #include "platform.h"
 
 namespace nx::nvn {
@@ -383,7 +384,8 @@ bool present_pass_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop,
     p.crop[2] = cw / logical_width, p.crop[3] = ch / logical_height;
     bool sideways = r == 1 || r == 3;
     float tw = float(sideways ? g.extent.height : g.extent.width), th = float(sideways ? g.extent.width : g.extent.height);
-    float scale = std::min(tw / cw, th / ch), bw = cw * scale / tw, bh = ch * scale / th;
+    const float display_cw = cw * (src.uw ? uw_factor() : 1.0f);
+    float scale = std::min(tw / display_cw, th / ch), bw = display_cw * scale / tw, bh = ch * scale / th;
     if (!preserve_aspect()) bw = bh = 1;
     p.box[0] = (1 - bw) / 2, p.box[1] = (1 - bh) / 2, p.box[2] = bw, p.box[3] = bh;
     // The touch controls (platform_android_input.cpp), in upright uv; none elsewhere.

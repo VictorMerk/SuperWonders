@@ -17,4 +17,7 @@ namespace nx::launcher {
 // the player presses Play (or at once when the launcher isn't wanted); Quit ends the process.
 void run();
 
+// Generate missing profile resources from the installed game data before boot.
+void prepare_ultrawide_layouts();
+
 }  // namespace nx::launcher

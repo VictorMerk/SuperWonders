@@ -26,6 +26,7 @@ enum Physical : int {
 
 struct Settings {
     int width = 1280, height = 720;
+    int aspect_ratio = 0;  // 0 original, 1 21:9, 2 32:9
     int internal_resolution = 0;  // svc_am.cpp presets: 0 original/dynamic, 720p, 900p, 1080p, 1440p, 2160p, 6 native
     int volume = 100;
     int language = 0;       // menu language: English, Italian, German, French, Spanish, Korean, Japanese, Arabic, Russian, Turkish, Dutch, Simplified Chinese, Traditional Chinese
@@ -67,6 +68,7 @@ enum class GraphicsProfile { Performance, Balanced, Quality };
 enum RestartChange : uint32_t {
     RestartResolution = 1 << 0, RestartTextures = 1 << 1, RestartFiltering = 1 << 2,
     RestartShaders = 1 << 3, RestartLanguage = 1 << 4, RestartPrompts = 1 << 5,
+    RestartAspect = 1 << 6,
 };
 // Startup-only resources compared with the settings actually used to start this game.
 uint32_t restart_changes(const Settings& active, const Settings& requested);

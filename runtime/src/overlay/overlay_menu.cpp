@@ -580,6 +580,15 @@ void video(MenuContext& c, const Labels& l) {
     const int lang = std::clamp(s.language, 0, 12);
     rows::begin("##video", c.height);
     rows::section(kCommon[lang][0]);
+    const char* aspect_names[] = {"16:9 (original)", "21:9", "32:9"};
+    int aspect = std::max(0, s.aspect_ratio);
+    const char* aspect_label = lang == 1 ? "Formato schermo" : "Aspect ratio";
+    const char* aspect_desc = lang == 1 ? "Si applica al prossimo avvio del gioco." : "Takes effect the next time the game starts.";
+    if (rows::choice(aspect_label, &aspect, aspect_names, 3, 0, aspect_desc)) {
+        s.aspect_ratio = aspect;
+        settings_changed(true);
+        ui::notify(aspect_desc);
+    }
     // the window's size: one of four, or the size it has now (dragged) as a fifth
     const char* sizes[5] = {"1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", nullptr};
     char custom[32];
@@ -865,11 +874,11 @@ void draw_menu(MenuContext& c) {
         if (changes) {
             const bool german = s.language == 2;
             std::string pending = german ? "Neustart ausstehend: " : "Restart pending: ";
-            const uint32_t flags[] = {RestartResolution, RestartTextures, RestartFiltering, RestartShaders, RestartLanguage, RestartPrompts};
-            const char* english[] = {"internal resolution", "texture profile", "texture filtering", "shader loading", "game language", "button prompts"};
-            const char* deutsch[] = {"interne Auflösung", "Texturprofil", "Texturfilterung", "Shader-Laden", "Spielsprache", "Tastensymbole"};
+            const uint32_t flags[] = {RestartResolution, RestartTextures, RestartFiltering, RestartShaders, RestartLanguage, RestartPrompts, RestartAspect};
+            const char* english[] = {"internal resolution", "texture profile", "texture filtering", "shader loading", "game language", "button prompts", "aspect ratio"};
+            const char* deutsch[] = {"interne Auflösung", "Texturprofil", "Texturfilterung", "Shader-Laden", "Spielsprache", "Tastensymbole", "Seitenverhältnis"};
             bool first = true;
-            for (int i = 0; i < 6; ++i) if (changes & flags[i]) {
+            for (int i = 0; i < 7; ++i) if (changes & flags[i]) {
                 if (!first) pending += ", ";
                 pending += german ? deutsch[i] : english[i];
                 first = false;

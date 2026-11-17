@@ -307,6 +307,13 @@ class Setup:
                     self.done(step, self.ids()[step])
             at += share
             say(at, "Set up" if at >= 1 else "Setting up")
+        # Generate both profiles once from the installed RomFS and menu mod. Existing
+        # installations are also repaired by the lightweight startup check.
+        try:
+            self.run([self.py, os.path.join(TOOLS, "wonder_uw_prepare.py"), "--data-root", self.data],
+                     0.99, 0.01, "Preparing ultrawide layouts")
+        except SystemExit as e:
+            print(f"warning: {e}; ultrawide layouts will be retried when needed", flush=True)
         say(1.0, f"Your game is set up ({time.time() - t0:.0f} s)")
         return 0
 

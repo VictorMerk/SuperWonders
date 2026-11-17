@@ -197,6 +197,7 @@ struct GpuImage;  // the Vulkan side of a texture (nvn_vk.cpp)
 
 struct Texture : Object {
     uint32_t target = 0, format = 0, flags = 0, levels = 0, samples = 0, depth_stencil_mode = 0;
+    bool uw = false;  // Marks an ultrawide render target; copied with the texture incarnation.
     std::atomic<bool> render_target{false};  // set when SetRenderTargets records this texture
     uint32_t width = 0, height = 0, depth = 0, stride = 0;
     uint64_t pool = 0, offset = 0, storage_size = 0;

@@ -23,6 +23,7 @@
 #endif
 
 #include <nx/runtime.h>
+#include <nx/game.h>
 
 #include "platform.h"
 #include "file_io.h"
@@ -125,8 +126,22 @@ const std::vector<fs::path>& mod_roots() {
     static const std::vector<fs::path> roots = [] {
         std::vector<fs::path> mods, out;
         std::error_code ec;
-        for (auto& e : fs::directory_iterator(data_root() / "mods", ec))
-            if (e.is_directory() && utf8(e.path().filename()).rfind('-', 0) != 0) mods.push_back(e.path());
+        const char* aspect_profile = std::getenv("NX_ASPECT_PROFILE");
+        for (auto& e : fs::directory_iterator(data_root() / "mods", ec)) {
+            if (!e.is_directory()) continue;
+            std::string name = utf8(e.path().filename());
+            const bool disabled = !name.empty() && name[0] == '-';
+            const std::string clean = disabled ? name.substr(1) : name;
+            const bool map32 = clean == "00-uw-map-hud-32-9";
+            const bool screen32 = clean == "00-uw-screen-test";
+            const bool map21 = clean == "00-uw-map-hud-21-9";
+            const bool screen21 = clean == "00-uw-screen-test-21-9";
+            if (aspect_profile && (map32 || screen32 || map21 || screen21)) {
+                const bool selected = ((map32 || screen32) && std::strcmp(aspect_profile, "32:9") == 0) ||
+                                      ((map21 || screen21) && std::strcmp(aspect_profile, "21:9") == 0);
+                if (selected) mods.push_back(e.path());
+            } else if (!disabled) mods.push_back(e.path());
+        }
         std::sort(mods.begin(), mods.end());
         for (const fs::path& m : mods) {
             fs::path found;
@@ -332,6 +347,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
     const uint64_t h = publish(f,std::move(cached));
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     play::file_opened(guest);
+    game::file_opened(guest.c_str());
     c.x[0] = kOk;
 }
 

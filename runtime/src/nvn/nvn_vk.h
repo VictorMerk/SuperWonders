@@ -11,6 +11,7 @@
 namespace nx::nvn {
 
 struct GpuImage {
+    bool uw = false;  // The host image belongs to an ultrawide render target.
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint64_t allocation_size = 0;  // Vulkan allocation size for VRAM diagnostics

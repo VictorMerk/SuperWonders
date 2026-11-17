@@ -99,6 +99,9 @@ int main() {
     requested.keyboard_bindings[CtlA] = 99;
     check(restart_changes(active, requested) == RestartPrompts, "keyboard prompt changes are detected");
     requested = active;
+    requested.aspect_ratio = 1;
+    check(restart_changes(active, requested) == RestartAspect, "ultrawide resources require a restart");
+    requested = active;
     check(restart_changes(active, requested) == 0, "reverting startup settings clears the restart warning");
     std::puts("settings tests passed");
 }

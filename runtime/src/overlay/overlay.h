@@ -29,6 +29,8 @@ struct Host {
 
 bool enabled();  // NX_IMGUI_MENU, default on
 int menu_language();  // selected launcher / in-game menu language, 0..12
+int aspect_ratio();
+void set_aspect_ratio(int ratio);
 void init(const Host& host, const Settings& s);  // before the first frame
 void sync(const Settings& s);                    // the platform changed settings itself (F11, window resize)
 // Launcher actions, on the presenting thread, use the same settings and persistence as F1.

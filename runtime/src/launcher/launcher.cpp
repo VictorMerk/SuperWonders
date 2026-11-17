@@ -903,6 +903,14 @@ void page_files() {
 
 void page_settings() {
     rows::begin("##settings", ImGui::GetContentRegionAvail().y);
+    rows::section(lt(LtSettings));
+    const char* aspect_names[] = {"16:9 (original)", "21:9", "32:9"};
+    const bool italian = overlay::menu_language() == 1;
+    const char* aspect_desc = italian ? "Si applica al prossimo avvio del gioco." : "Takes effect the next time the game starts.";
+    int aspect = overlay::aspect_ratio();
+    if (rows::choice(italian ? "Formato schermo" : "Aspect ratio", &aspect, aspect_names, 3, 0, aspect_desc))
+        overlay::set_aspect_ratio(aspect);
+
     rows::section("Quick graphics presets");
     const char* names[] = {"Performance", "Balanced", "Quality"};
     const char* values[] = {"720p / 60 FPS", "900p / 60 FPS", "1080p / 60 FPS"};
@@ -1246,6 +1254,34 @@ bool wanted(const std::vector<std::string>& args, bool& config_mode) {
 }
 
 }  // namespace
+
+void prepare_ultrawide_layouts() {
+    const char* profile = std::getenv("NX_ASPECT_PROFILE");
+    if (!profile || (std::strcmp(profile, "21:9") != 0 && std::strcmp(profile, "32:9") != 0)) return;
+    const Kit kit = find_kit();
+    fs::path root = u8(kit.script).parent_path();
+    fs::path script = root / "tools" / "wonder_uw_prepare.py";
+    if (!file(script)) script = root / "wonder_uw_prepare.py";
+    if (kit.python.empty() || !file(script)) {
+        log("ultrawide: missing layout preparation tools");
+#if defined(_WIN32)
+        MessageBoxA(nullptr, "Ultrawide setup tools are missing. Repair or reinstall the game-build kit.",
+                    "SuperWonders - Ultrawide setup", MB_OK | MB_ICONERROR);
+#endif
+        plat::exit_process(1);
+    }
+    Job job;
+    job.start({kit.python, "-u", str(script), "--data-root", plat::data_root()});
+    while (job.running) plat::sleep_ns(50'000'000);
+    if (job.result != 0) {
+        log("ultrawide: layout preparation failed (%d)", int(job.result));
+#if defined(_WIN32)
+        MessageBoxA(nullptr, "Could not prepare ultrawide layouts from your game files. See data/nx.log for details.",
+                    "SuperWonders - Ultrawide setup", MB_OK | MB_ICONERROR);
+#endif
+        plat::exit_process(1);
+    }
+}
 
 void run() {
     if (!overlay::enabled()) return;

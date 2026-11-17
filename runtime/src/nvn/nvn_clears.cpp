@@ -16,6 +16,7 @@
 #include <string>
 
 #include "nvn_draw_state.h"
+#include "nvn_ultrawide.h"
 
 namespace nx::nvn {
 
@@ -229,6 +230,10 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
         auto scale_coord = [&](int32_t value) { return int64_t(std::lround(value * img->render_scale)); };
         int64_t x0 = std::max<int64_t>(0, scale_coord(s[0])), y0 = std::max<int64_t>(0, scale_coord(s[1]));
         int64_t x1 = std::min<int64_t>(scale_coord(s[0] + std::max(0, s[2])), full.width);
+        if (img->uw) {
+            x0 = std::max<int64_t>(0, std::lround(double(x0) * uw_factor()));
+            x1 = std::min<int64_t>(std::lround(double(scale_coord(s[0] + std::max(0, s[2]))) * uw_factor()), full.width);
+        }
         int64_t y1 = std::min<int64_t>(scale_coord(s[1] + std::max(0, s[3])), full.height);
         if (x1 <= x0 || y1 <= y0) return;  // nothing of the target inside the scissor
         rect = {{int32_t(x0), int32_t(y0)}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};

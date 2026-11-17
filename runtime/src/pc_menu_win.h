@@ -35,6 +35,7 @@ inline int pc_default_controller_binding(size_t action, int preset) {
 struct PcMenuState {
     int width = 0;
     int height = 0;
+    int aspect_ratio = 0;  // 0 original, 1 21:9, 2 32:9
     int internal_resolution = 0;
     int volume = 100;
     int language = 0;  // English, Italian, German, French

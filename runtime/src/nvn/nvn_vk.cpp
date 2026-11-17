@@ -22,6 +22,7 @@
 
 #include "nvn_vk.h"
 #include "present_geometry.h"
+#include "nvn_ultrawide.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
 #include "nvn_shader_prepare.h"
@@ -1168,6 +1169,7 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
         uint32_t width = in->logical_width ? in->logical_width : in->width;
         uint32_t height = in->logical_height ? in->logical_height : in->height;
         if (valid_picture_crop(crop, width, height)) width = uint32_t(crop[2]), height = uint32_t(crop[3]);
+        if (in->uw) width = uw_widen(width);
         box = fit_picture(width, height, g_sc_extent.width, g_sc_extent.height, preserve_aspect());
         if (box.width != g_sc_extent.width || box.height != g_sc_extent.height) {
             transition(g_cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

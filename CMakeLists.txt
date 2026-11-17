@@ -394,6 +394,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_spirv_unused.cpp
     runtime/src/nvn/nvn_pipeline_async.cpp
     runtime/src/nvn/nvn_spirv_clip.cpp
+    runtime/src/nvn/nvn_ultrawide.cpp
     runtime/src/nvn/nvn_present.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_bc.cpp

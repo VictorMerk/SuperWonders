@@ -31,6 +31,7 @@ std::mutex connection_lock;
 std::atomic<bool> running{false};
 std::mutex input_lock;
 FrameInputs inputs;
+LockstepTiming lockstep_timing;
 fs::path& isolated_user = *new fs::path;
 uint64_t current_epoch = 0, current_seed = 0;
 uint32_t role = 0, count = 0;
@@ -149,14 +150,20 @@ void exchange() {
     plat::PadState local{};
     plat::read_pad(local); play::pad(local);
     ft::input_sample(g_frame);  // includes the following network barrier in diagnostic latency
+    const auto started = plat::monotonic_ns();
     try { inputs = session.load()->exchange(local,0,play::netplay_player_state()); }
     catch (const std::exception& e) {
         running = false;
         end_session(e.what());
     }
-    if (inputs.tick % 600 == 0)
+    lockstep_timing.record(plat::monotonic_ns() - started);
+    if (inputs.tick % 600 == 0) {
         log("lan: synchronized input tick %llu, local player %u of %u, partial player-state hash %llx",
             (unsigned long long)inputs.tick,role+1,count,(unsigned long long)play::netplay_state_hash());
+        const auto stats = lockstep_timing.snapshot();
+        log("lan: input barrier %.2f ms smoothed, %.2f ms peak, %llu waits over 50 ms (not network RTT)",
+            stats.smoothed_ms, stats.peak_ms, (unsigned long long)stats.waits_over_50_ms);
+    }
 }
 }
 namespace {
@@ -198,6 +205,7 @@ void connect_game(const LobbyRequest& request) {
         connection->join(options);
     }
     role=connection->role(); count=connection->players(); current_epoch=connection->epoch(); current_seed=connection->seed();
+    lockstep_timing.reset();
     // Every peer starts with a neutral frame. The UI's confirmation button is not
     // sampled on this background thread and cannot leak into the game's input.
     inputs=connection->exchange({});
@@ -255,5 +263,6 @@ void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange()
 uint64_t seed() { return current_seed; }
 uint64_t epoch() { return current_epoch; }
 uint32_t local_player() { return role; }
+TimingSnapshot timing() { return lockstep_timing.snapshot(); }
 fs::path user_root(const fs::path& data) { return isolated_user.empty() ? data/"user" : isolated_user; }
 }

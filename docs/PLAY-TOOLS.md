@@ -86,6 +86,10 @@ The player (Wonder 1.0.0): the course player object has the vtable `main+0x96e40
 (x, y, z; blocks, y up) at `+0xc00`. The heap is laid out the same in every run, so it is first looked for where it was
 last (course 1-1: `0x503a5c23d8`), else searched for by vtable on a background thread (about 1.5 s for the 2.5 GB heap,
 only in a course or its loading). `NX_PROBE_PLAYER="vt=<hex>,pos=<hex>"` overrides the layout.
+`ptr=<hex>` additionally supplies an explicit previously observed object address for repeatable private fixtures.
+The runtime still checks the vtable before accepting that address and searches normally when the hint is invalid.
+Keep the same probe configuration in both sides of a performance comparison: a heap scan can itself introduce
+page faults and scheduling work. Do not use an unverified address as evidence that the player probe succeeded.
 
 `tools/play/play_report.py <probe.csv>` reports the events, the player's track (start, furthest x, distance) and where
 the player was stuck; `--expect goal` fails a run without the goal.

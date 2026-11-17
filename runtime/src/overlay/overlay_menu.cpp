@@ -752,6 +752,25 @@ void overlay_tab(MenuContext& c) {
     if (!s.metrics_enabled) rows::disable_next();
     if (rows::choice(o[5], &s.overlay_position, kPositions[lang], 4, kDefaults.overlay_position, translated_desc(desc::position, lang)))
         settings_changed(true);
+    rows::section(lang == 2 ? "Schnellauswahl" : "Quick presets");
+    const bool compact = s.metrics_enabled && s.metric_fps && !s.metric_one_percent_low &&
+                         !s.metric_game_speed && !s.metric_frametime_graph && s.overlay_position == 1;
+    if (rows::action(lang == 2 ? "Kompakte FPS-Anzeige" : "Compact FPS counter",
+                     compact ? (lang == 2 ? "Aktiv" : "Active") : (lang == 2 ? "Anwenden" : "Apply"),
+                     lang == 2 ? "Zeigt FPS und Bildzeit oben rechts ohne Diagramm. So bleibt mehr vom Spiel sichtbar. Bei LAN zeigt die Anzeige zusätzlich die gemessene Eingabe-Wartezeit; diese ist kein Netzwerk-Ping." :
+                     "Show FPS and frame time at the top right without the graph, leaving more of the game visible. During LAN play the measured input wait is also shown; it is not network ping.")) {
+        s.metrics_enabled = s.metric_fps = true;
+        s.metric_one_percent_low = s.metric_game_speed = s.metric_frametime_graph = false;
+        s.overlay_position = 1;
+        settings_changed(true);
+    }
+    if (rows::action(lang == 2 ? "Ausführliche Leistungsanzeige" : "Detailed performance panel",
+                     lang == 2 ? "Anwenden" : "Apply",
+                     lang == 2 ? "Aktiviert FPS, 1%-Lows, Spielgeschwindigkeit und das Bildzeit-Diagramm an der gewählten Position. Ändert weder Grafikqualität noch Eingabe- oder Audioeinstellungen." :
+                     "Enable FPS, 1% lows, game speed and the frame-time graph at the selected position. Graphics quality, input and audio settings stay as configured.")) {
+        s.metrics_enabled = s.metric_fps = s.metric_one_percent_low = s.metric_game_speed = s.metric_frametime_graph = true;
+        settings_changed(true);
+    }
     rows::end();
 }
 

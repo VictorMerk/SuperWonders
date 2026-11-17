@@ -453,7 +453,7 @@ void bot_pad(PadState& p, int64_t fr) {
 std::atomic<uint64_t> g_player{0};      // the object, found by the search thread
 // Where it was last: the heap is laid out the same in every run, so a new scene's player object is usually at the same
 // address. Checked every frame (one read) before a search is asked for. Starts at the course 1-1 address.
-uint64_t g_last_player = 0x503a5c23d8;
+std::atomic<uint64_t> g_last_player{0x503a5c23d8};
 bool g_go_armed = false;  // after a course start, until the player first moves (the "go" event)
 std::atomic<bool> g_search_wanted{false};
 std::atomic<uint64_t> g_searches{0};
@@ -472,6 +472,7 @@ Layout layout() {
             if (k == "vt") l.vt = v;
             else if (k == "pos") l.pos = uint32_t(v);
             else if (k == "vel") l.vel = uint32_t(v);
+            else if (k == "ptr") g_last_player.store(v, std::memory_order_relaxed);
         }
     }
     return l;
@@ -769,9 +770,10 @@ void frame() {
     uint64_t player = g_player.load();
     bool valid = false;
     const bool course_scene = g_scene == "course" || (g_scene == "loading" && g_course.rfind("Course", 0) == 0);
-    if (g_layout.vt && !player && course_scene && g_last_player) {
+    const auto last_player = g_last_player.load(std::memory_order_relaxed);
+    if (g_layout.vt && !player && course_scene && last_player) {
         uint64_t vt = 0;
-        if (safe_read(g_last_player, &vt, 8) && vt == g_layout.vt) g_player = player = g_last_player;
+        if (safe_read(last_player, &vt, 8) && vt == g_layout.vt) g_player = player = last_player;
     }
     if (g_layout.vt && player) {
         uint64_t vt = 0;

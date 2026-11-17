@@ -16,6 +16,7 @@
 
 #include "overlay/overlay_internal.h"
 #include "overlay/overlay_ui.h"
+#include "netplay_game.h"
 
 namespace nx::overlay {
 
@@ -122,7 +123,7 @@ void draw_metrics(float height) {
     const Settings& st = g_settings;
     const bool interpolated = g_interpolated.load();
     const double game_target = st.frame_cap > 60 ? double(st.frame_cap) : std::min(double(st.frame_cap),60.0/double(interval));
-    const double target = game_target * (interpolated ? 2.0 : 1.0);
+    const double target = game_target * (interpolated ? std::clamp(st.framegen_multiplier, 2, 8) : 1);
     const float k = std::clamp(height / 1080.0f, 0.5f, 3.0f);
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float m = 16 * k;
@@ -144,8 +145,8 @@ void draw_metrics(float height) {
         constexpr float kScale = 0.74f;
         ImGui::SetWindowFontScale(kScale);
         // green at the target frame rate, amber a little under it, red well under (MangoHud colours its numbers so)
-        const auto rate = [&](double v) {
-            return ImGui::ColorConvertU32ToFloat4(v >= target * 0.95 ? th.good : v >= target * 0.75 ? th.warn : th.bad);
+        const auto rate = [&](double v, double expected) {
+            return ImGui::ColorConvertU32ToFloat4(v >= expected * 0.95 ? th.good : v >= expected * 0.75 ? th.warn : th.bad);
         };
         const ImVec4 name_c = ImGui::ColorConvertU32ToFloat4(th.accent2), plain = ImGui::ColorConvertU32ToFloat4(th.text);
         const auto line = [&](const char* name, const ImVec4& colour, const char* fmt, double v, const char* unit) {
@@ -163,14 +164,23 @@ void draw_metrics(float height) {
             }
         };
         if (ImGui::BeginTable("##m", 2, ImGuiTableFlags_SizingFixedFit)) {
-            if (st.metric_fps) line(interpolated ? "Presented FPS" : "FPS", rate(fps), "%.0f", fps, "");
+            if (st.metric_fps) line(interpolated ? "Presented FPS" : "FPS", rate(fps, target), "%.0f", fps, "");
             if (st.metric_fps && interpolated) {
                 const double game_fps = g_render_fps.load();
-                line("Game FPS", rate(game_fps), "%.0f", game_fps, "");
+                line("Game FPS", rate(game_fps, game_target), "%.0f", game_fps, "");
             }
             if (st.metric_fps && fps > 0) line("Frame", plain, "%.1f", 1000.0 / fps, "ms");
-            if (st.metric_one_percent_low) line("1% low", rate(low), "%.0f", low, "FPS");
+            if (st.metric_one_percent_low) line("1% low", rate(low, target), "%.0f", low, "FPS");
             if (st.metric_game_speed) line("Speed", speed >= 97 ? plain : ImGui::ColorConvertU32ToFloat4(th.warn), "%.0f", speed, "%");
+            if (lan::active()) {
+                const auto wait = lan::timing();
+                if (wait.ticks) {
+                    const bool german = st.language == 2;
+                    line(german ? "LAN Wartezeit" : "LAN input wait",
+                         ImGui::ColorConvertU32ToFloat4(wait.smoothed_ms > 50 ? th.bad : wait.smoothed_ms > 16.7 ? th.warn : th.text),
+                         "%.1f", wait.smoothed_ms, "ms");
+                }
+            }
             ImGui::EndTable();
         }
         if (st.metric_frametime_graph && count > 1) {  // the frame times, 0-50 ms, with lines at 16.7 and 33.3 ms

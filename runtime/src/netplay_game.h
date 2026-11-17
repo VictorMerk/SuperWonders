@@ -1,5 +1,6 @@
 #pragma once
 #include "platform.h"
+#include "netplay_timing.h"
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ void next_frame();
 uint64_t seed();
 uint64_t epoch();
 uint32_t local_player();
+TimingSnapshot timing();
 std::filesystem::path user_root(const std::filesystem::path& data);
 bool start_lobby(LobbyRequest);
 void cancel_lobby();
@@ -37,6 +39,7 @@ inline void next_frame() {}
 inline uint64_t seed() { return 0; }
 inline uint64_t epoch() { return 0; }
 inline uint32_t local_player() { return 0; }
+inline TimingSnapshot timing() { return {}; }
 inline std::filesystem::path user_root(const std::filesystem::path& data) { return data/"user"; }
 inline bool start_lobby(LobbyRequest) { return false; }
 inline void cancel_lobby() {}

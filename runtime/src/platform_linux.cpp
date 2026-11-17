@@ -51,6 +51,7 @@
 #include <nx/runtime.h>
 
 #include "kernel.h"
+#include "netplay_game.h"
 #include "nvn/nvn_vk.h"
 #include "overlay/overlay.h"
 #include "platform.h"
@@ -174,6 +175,7 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { pthread_exit(nullptr); }
 void exit_process(int code) {
+    nx::lan::flush_diagnostics();
     nx::nvn::flush_shader_bundle();
     close_controllers();
     nx::nvn::flush_pipeline_cache();

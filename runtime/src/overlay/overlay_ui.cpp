@@ -426,12 +426,36 @@ void progress_bar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, float alpha) {
     }
 }
 
+static bool playstation_shape(const char* label) {
+    return !std::strcmp(label,"Cross") || !std::strcmp(label,"Circle") ||
+           !std::strcmp(label,"Square") || !std::strcmp(label,"Triangle");
+}
+
+static float badge_width(float h, const char* label) {
+    if (playstation_shape(label)) return h;
+    return std::max(h, body()->CalcTextSizeA(h * 0.62f, FLT_MAX, 0, label).x + h * 0.6f);
+}
+
 float badge(ImDrawList* dl, ImVec2 pos, float h, const char* label, float alpha) {
     ImFont* f = body();
     const float fs = h * 0.62f;
     const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, label);
-    const float w = std::max(h, ts.x + h * 0.6f);
+    const float w = badge_width(h,label);
     dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), fade(theme().text, alpha), h * 0.5f);
+    if (playstation_shape(label)) {
+        const ImVec2 c(pos.x+w*.5f,pos.y+h*.5f);
+        const float r=h*.22f, stroke=std::max(1.0f,h*.065f);
+        const ImU32 ink=fade(theme().panel | IM_COL32_A_MASK,alpha);
+        if (!std::strcmp(label,"Circle")) dl->AddCircle(c,r,ink,24,stroke);
+        else if (!std::strcmp(label,"Square")) dl->AddRect(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,0,0,stroke);
+        else if (!std::strcmp(label,"Triangle"))
+            dl->AddTriangle(ImVec2(c.x,c.y-r),ImVec2(c.x+r,c.y+r),ImVec2(c.x-r,c.y+r),ink,stroke);
+        else {
+            dl->AddLine(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,stroke);
+            dl->AddLine(ImVec2(c.x-r,c.y+r),ImVec2(c.x+r,c.y-r),ink,stroke);
+        }
+        return w;
+    }
     dl->AddText(f, fs, ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), fade(theme().panel | IM_COL32_A_MASK, alpha),
                 label);
     return w;
@@ -441,7 +465,17 @@ void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* input, 
     std::vector<std::string> labels(size_t(n), std::string{});
     std::vector<Hint> resolved(input, input + n);
     const auto settings = overlay::current_settings();
-    const auto kind = plat::controller_kind(0);
+    auto kind = plat::controller_kind(0);
+    // The launcher also accepts a controller assigned after the keyboard slot.
+    // Match the explicit in-game icon preference when one is selected.
+    if (settings.button_icons >= 1 && settings.button_icons <= 4)
+        kind = static_cast<plat::ControllerKind>(settings.button_icons - 1);
+    else if (kind == plat::ControllerKind::Keyboard)
+        for (uint32_t player = 1; player < plat::kPlayerCount; ++player)
+            if (const auto candidate = plat::controller_kind(player); candidate != plat::ControllerKind::Keyboard) {
+                kind = candidate;
+                break;
+            }
     for (int i = 0; i < n; ++i) {
         if (!input[i].badge) continue;
         const char* original = input[i].badge;
@@ -471,8 +505,7 @@ void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* input, 
     for (int i = 0; i < n; ++i) {
         float bw = 0;
         if (list[i].badge) {
-            const ImVec2 ts = f->CalcTextSizeA(h * 0.62f, FLT_MAX, 0, list[i].badge);
-            bw = std::max(h, ts.x + h * 0.6f) + gap;
+            bw = badge_width(h,list[i].badge) + gap;
         }
         total += bw + f->CalcTextSizeA(fs, FLT_MAX, 0, list[i].text).x + (i + 1 < n ? (*list[i].text ? spacing : 0) : 0);
     }

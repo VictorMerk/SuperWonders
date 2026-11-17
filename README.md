@@ -1,7 +1,8 @@
 # SuperWonders — Super Mario Bros. Wonder PC Recompilation
 
 PC fork follow-up: [picture shape, cache checks and settings diagnostics](docs/PC-PREVIEW-2026-11-17-R3.md).
-Upstream synchronization: [reviewed merge through 19c25c4 and integration checks](docs/UPSTREAM-SYNC-2026-11-17.md).
+Upstream synchronization: [reviewed merge through 64bebcc and integration checks](docs/UPSTREAM-SYNC-2026-11-17.md).
+Real-PC LAN follow-up: [reported desync, performance evidence and bounded input traces](docs/LAN-REAL-PC-FOLLOWUP.md).
 Latest test preview: [simpler one-folder setup and corrected Windows controller presets](docs/PC-PREVIEW-2026-11-17-R8.md).
 Graphics validation: [Vulkan synchronization fixes, optional audio prefetch and two-PC LAN testing](docs/PC-PREVIEW-2026-11-17-R7.md).
 Measured loading follow-up: [verified low-VRAM texture conversions](docs/TEXTURE-CONVERSION-CACHE.md).

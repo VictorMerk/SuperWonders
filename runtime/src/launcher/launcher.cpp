@@ -1364,9 +1364,10 @@ void run() {
         if(const auto* code=std::getenv("NX_LAN_CODE")) std::snprintf(g->lan_code,sizeof g->lan_code,"%s",code);
         const auto* address=std::getenv("NX_LAN_ADDRESS");
         if(!address) address=g->lan_mode?"127.0.0.1":"0.0.0.0";
+        std::snprintf(g->lan_address,sizeof g->lan_address,"%s",address);
         if(const auto* port=std::getenv("NX_LAN_PORT")) g->lan_port=std::clamp(std::atoi(port),1,65535);
         if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
-        lan::start_lobby({g->lan_mode==0,address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players)});
+        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players)});
     }
     uint64_t frames = 0;
     test_pad_start();  // (NX_TEST_PAD: a scripted controller, launcher/test_pad.h)

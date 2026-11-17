@@ -1,6 +1,7 @@
 #include "netplay_game.h"
 #include "netplay_session.h"
 #include "netplay_save.h"
+#include "netplay_trace.h"
 #include "controllers.h"
 #include "play.h"
 #include "frametrace.h"
@@ -35,6 +36,17 @@ LockstepTiming lockstep_timing;
 fs::path& isolated_user = *new fs::path;
 uint64_t current_epoch = 0, current_seed = 0;
 uint32_t role = 0, count = 0;
+InputTrace<>& input_trace = *new InputTrace<>;
+std::atomic<bool> trace_started{false};
+void dump_trace() noexcept {
+    if (!trace_started.load()) return;
+    try {
+        const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
+        std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
+        input_trace.write(out,role,current_seed);
+        if (!out) log("lan: could not save the diagnostic input trace");
+    } catch (...) { log("lan: could not save the diagnostic input trace"); }
+}
 struct Lobby {
     std::mutex lock;
     LobbyStatus status;
@@ -46,7 +58,7 @@ void status(LobbyPhase phase,std::string detail,uint16_t port=0) {
 }
 void register_shutdown() {
     static const bool registered=[] {
-        std::atexit([] { std::lock_guard lock(connection_lock); if(auto* connection=session.load()) connection->stop(); });
+        std::atexit([] { std::lock_guard lock(connection_lock); if(auto* connection=session.load()) connection->stop(); dump_trace(); });
         return true;
     }();
 }
@@ -119,6 +131,7 @@ void isolate_client_save(const fs::path& data) {
 }
 [[noreturn]] void end_session(const std::string& reason) {
     log("lan: session ended: %s",reason.c_str());
+    dump_trace();  // headless exit and platform shutdown need not run atexit
     if(plat::headless()) plat::exit_process(2);
     try {
         const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
@@ -150,19 +163,29 @@ void exchange() {
     plat::PadState local{};
     plat::read_pad(local); play::pad(local);
     ft::input_sample(g_frame);  // includes the following network barrier in diagnostic latency
+    TraceEntry entry;
+    entry.tick=inputs.tick+1; entry.frame=g_frame.load(); entry.local=local;
+    entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
     const auto started = plat::monotonic_ns();
-    try { inputs = session.load()->exchange(local,0,play::netplay_player_state()); }
+    try { inputs = session.load()->exchange(local,0,entry.state); }
     catch (const std::exception& e) {
+        entry.wait_ns=plat::monotonic_ns()-started;
+        input_trace.push(entry);
         running = false;
         end_session(e.what());
     }
-    lockstep_timing.record(plat::monotonic_ns() - started);
+    entry.tick=inputs.tick; entry.agreed=inputs; entry.committed=true;
+    entry.wait_ns=plat::monotonic_ns()-started;
+    input_trace.push(entry);
+    lockstep_timing.record(entry.wait_ns);
     if (inputs.tick % 600 == 0) {
         log("lan: synchronized input tick %llu, local player %u of %u, partial player-state hash %llx",
             (unsigned long long)inputs.tick,role+1,count,(unsigned long long)play::netplay_state_hash());
         const auto stats = lockstep_timing.snapshot();
         log("lan: input barrier %.2f ms smoothed, %.2f ms peak, %llu waits over 50 ms (not network RTT)",
             stats.smoothed_ms, stats.peak_ms, (unsigned long long)stats.waits_over_50_ms);
+        if (!entry.state.valid)
+            log("lan: partial position guard unavailable; character choices and world state are not verified");
     }
 }
 }
@@ -209,6 +232,7 @@ void connect_game(const LobbyRequest& request) {
     // Every peer starts with a neutral frame. The UI's confirmation button is not
     // sampled on this background thread and cannot leak into the game's input.
     inputs=connection->exchange({});
+    input_trace.reset(); trace_started=true;
     plat::controller_force_primary(true);
     running=true;
     status(LobbyPhase::Ready,"All players connected. Starting Wonder...");
@@ -241,6 +265,7 @@ bool start_lobby(LobbyRequest request) {
             catch(const std::exception& e) {
                 running=false;
                 { std::lock_guard lock(connection_lock); delete session.exchange(nullptr); }
+                log("lan: lobby failed: %s",e.what());
                 status(LobbyPhase::Failed,e.what());
             }
         }).detach();
@@ -264,5 +289,6 @@ uint64_t seed() { return current_seed; }
 uint64_t epoch() { return current_epoch; }
 uint32_t local_player() { return role; }
 TimingSnapshot timing() { return lockstep_timing.snapshot(); }
+void flush_diagnostics() noexcept { dump_trace(); }
 fs::path user_root(const fs::path& data) { return isolated_user.empty() ? data/"user" : isolated_user; }
 }

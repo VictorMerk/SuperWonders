@@ -42,6 +42,7 @@
 #include <nx/runtime.h>
 
 #include "kernel.h"
+#include "netplay_game.h"
 #include "nvn/nvn_vk.h"
 #include "overlay/overlay.h"
 #include "pc_menu_win.h"
@@ -93,6 +94,7 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
+    nx::lan::flush_diagnostics();
     nx::nvn::flush_shader_bundle();
     close_controllers();
     nx::nvn::flush_pipeline_cache();
@@ -814,7 +816,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
                 return 0;
         }
     }
-    if (overlay::enabled() && overlay::is_open()) {
+    if (overlay::enabled() && overlay::wants_keyboard()) {
         switch (msg) {
             case WM_KEYDOWN:
             case WM_KEYUP:

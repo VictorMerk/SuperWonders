@@ -5,6 +5,12 @@ The reviewed main tip is `19c25c4e5c228720bcefe4823b4ea45d04a86fd1`, including 1
 `ae02698`. A local backup branch, `backup/pre-upstream-20261117-ae02698`, retains that pre-merge state.
 The merge retains upstream ancestry instead of replacing the fork with a downloaded release.
 
+A final refresh found two additional commits, `974a372` and merge `64bebcc7bf42b31d0b3ee83cb04b4dbcf5b5b084`.
+They are included too, for 15 incoming commits in total. This latest main tip corrects language-service responses
+and expands localized overlay font coverage. Its 16-file diff includes five new/updated Noto font subsets and OFL
+notices. The font files have valid SFNT headers, bounded table directories and expected cmap/head tables; the
+font-coverage check passes for 767 required characters. No host executable or dependency download was added.
+
 ## Incoming changes and review
 
 The diff has 45 source/documentation/licence files, with no added host binaries, dependency manifests, Git hooks,
@@ -48,6 +54,12 @@ runtime built and all 30 non-GPU CTest targets passed (12.14 seconds). Coverage 
 cache, shader and file-I/O units; aspect-resource restart tracking; seven literal-path/progress regressions; and
 five synthetic camera/frame-step patch cases. The latter independently decode the ADRP target page and check
 expected instructions, out-of-text rejection, unsupported instruction rejection and untouched SDK modules.
+
+After that language/font merge, the Windows build and all 31 non-GPU CTest targets pass (10.56 seconds), including
+the new settings-service target. The font-coverage check was run separately with the existing bundled Python,
+because the system Python used by CTest lacks FontTools. A second scoped Defender scan of only those 16 new/changed
+files and the updated EXE (10,449,840 bytes total) also reports no threats, exit 0. These checks do not prove native
+glyph appearance, all language flows or GPU/game behavior.
 
 The [setup progress follow-up](SETUP-PROGRESS.md) now identifies reading, analysis and generation, shows actual
 function counts when known, and reserves 99–100% for the final layout preparation rather than jumping backward.

@@ -49,6 +49,18 @@ const unsigned char kNotoMenuKR[] = {
 #embed "../../../third_party/fonts/NotoFallback/NotoSansKR-menu.ttf"
 };
 #endif
+#if __has_embed("../../../third_party/fonts/NotoFallback/NotoSansSC-menu.ttf")
+#define NX_NOTO_MENU_SC 1
+const unsigned char kNotoMenuSC[] = {
+#embed "../../../third_party/fonts/NotoFallback/NotoSansSC-menu.ttf"
+};
+#endif
+#if __has_embed("../../../third_party/fonts/NotoFallback/NotoSans-menu.ttf")
+#define NX_NOTO_MENU_SANS 1
+const unsigned char kNotoMenuSans[] = {
+#embed "../../../third_party/fonts/NotoFallback/NotoSans-menu.ttf"
+};
+#endif
 #if __has_embed("../../../third_party/fonts/NotoFallback/NotoSansArabic-menu.ttf")
 #define NX_NOTO_MENU_ARABIC 1
 const unsigned char kNotoMenuArabic[] = {
@@ -87,6 +99,9 @@ const char kLocalizedGlyphs[] = "ÉÖÜßàáäçèéêíñóöùúüğışАБ�
 
 const char kAdditionalLocalizedGlyphs[] = "简体繁體快速设置视频音频控制性能叠加层窗口输出大小内部解析度全屏窗口置顶游戏音量静音游戏语言重新启动游戏以应用语言按键布局下方右侧帧率上限系统内存清理阈值低显存配置纹理显示画面帧同步升频锐化抗锯齿各向异性过滤垂直同步震动退出菜单语言帧时间图表位置键盘控制器原始动态屏幕原生快速設定影片音訊效能覆蓋層視窗輸出大小內部解析度全螢幕遊戲音量靜音遊戲語言重新啟動遊戲以套用語言按鍵配置影格率上限系統記憶體清理閾值低顯示記憶體設定材質顯示畫面升頻反鋸齒過濾垂直同步震動結束選單語言影格時間圖表鍵盤控制器原始動態螢幕原生";
 const char kLauncherLocalizedGlyphs[] = "开始文件模组更新退出";
+// Korean characters used in the help descriptions as well as the menu labels.
+const char kKoreanHelpGlyphs[] = "가값강계과근꾸끄끕널넘높누느닙단당대된두듬딩록릅린묘미바번범분수습식압약없와유으은의인입있장절접줄중증직질집찢초최축충패할행확환황흐히";
+const char kAdditionalHelpGlyphs[] = "ТЧщёآあえかずせちとどなほぼみめもらりわんギザ不与丢两中为也乱会保個側儲兩关减分切利効卡即压取变可号合后和回围圍圧増壓多够夠失対将將少幀平式強强微応慢或押拡择持换接提換撕擇改数整數斜明是晰替最會板柄染案檔檻次正此毎每毫況消済減渲滑為無状现現电省码确確碼秒稍算節範糊約素細組緣縮繪细缘缩耗脑腦至與节范荷號行裂見認調請變认请调負超足軽較輪较辨边近这进选這通進遅遺邊郭释釋銳門關闭離電需頂高鮮";
 
 const char* const kScriptFonts[] = {
 #if defined(_WIN32)
@@ -219,6 +234,8 @@ void load_fonts() {
     glyph_builder.AddText(kLocalizedGlyphs);
     glyph_builder.AddText(kAdditionalLocalizedGlyphs);
     glyph_builder.AddText(kLauncherLocalizedGlyphs);
+    glyph_builder.AddText(kKoreanHelpGlyphs);
+    glyph_builder.AddText(kAdditionalHelpGlyphs);
     // ImGui keeps this pointer in the font config and consumes it later, when the
     // Vulkan backend builds the atlas on its first NewFrame. Keep it alive beyond
     // this function; a local vector here leaves every merged fallback with a
@@ -226,7 +243,7 @@ void load_fonts() {
     static ImVector<ImWchar> localized_ranges;
     localized_ranges.clear();
     glyph_builder.BuildRanges(&localized_ranges);
-#if defined(NX_NOTO_MENU_JP) || defined(NX_NOTO_MENU_KR) || defined(NX_NOTO_MENU_ARABIC)
+#if defined(NX_NOTO_MENU_JP) || defined(NX_NOTO_MENU_KR) || defined(NX_NOTO_MENU_SC) || defined(NX_NOTO_MENU_SANS) || defined(NX_NOTO_MENU_ARABIC)
     ImFontConfig bundled;
     bundled.MergeMode = true;
     bundled.FontDataOwnedByAtlas = false;  // embedded static data; ImGui copies it into its atlas
@@ -248,6 +265,24 @@ void load_fonts() {
     io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuKR, int(sizeof kNotoMenuKR), kTitleBake, &bundled,
                                    localized_ranges.Data);
     nx::log("overlay: embedded Noto Sans KR glyph fallback");
+#endif
+#ifdef NX_NOTO_MENU_SC
+    bundled.DstFont = g_body;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSC, int(sizeof kNotoMenuSC), kBodyBake, &bundled,
+                                   localized_ranges.Data);
+    bundled.DstFont = g_title;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSC, int(sizeof kNotoMenuSC), kTitleBake, &bundled,
+                                   localized_ranges.Data);
+    nx::log("overlay: embedded Noto Sans SC glyph fallback");
+#endif
+#ifdef NX_NOTO_MENU_SANS
+    bundled.DstFont = g_body;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSans, int(sizeof kNotoMenuSans), kBodyBake, &bundled,
+                                   localized_ranges.Data);
+    bundled.DstFont = g_title;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSans, int(sizeof kNotoMenuSans), kTitleBake, &bundled,
+                                   localized_ranges.Data);
+    nx::log("overlay: embedded Noto Sans glyph fallback");
 #endif
 #ifdef NX_NOTO_MENU_ARABIC
     bundled.DstFont = g_body;

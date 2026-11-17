@@ -367,8 +367,8 @@ GpuImage* latest_overlapping_shadow_image(uint64_t guest, GpuImage* image) {
     return newest;
 }
 
-void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to) {
-    if (img.layout == to) return;
+void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to, bool synchronize) {
+    if (img.layout == to && !synchronize) return;
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;

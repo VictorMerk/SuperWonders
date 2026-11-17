@@ -284,7 +284,7 @@ struct Probe {
     std::vector<uint8_t> a, b;
     std::vector<std::vector<uint8_t>> expected;
     uint32_t factor = 2;
-    bool recorded = false, still = false;
+    bool recorded = false, still = false, cut = false;
 } probe;
 }
 bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
@@ -311,10 +311,17 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         return pixels;
     };
     probe.factor = variant < 3 ? 2 : 2+(variant-3)%7;
-    probe.still = variant >= 10;
+    probe.still = variant >= 10 && variant < 17;
+    probe.cut = variant >= 17;
     probe.a = picture(0); probe.b = picture(probe.still ? 0 : 16);
-    for (uint32_t i = 1; i < probe.factor; ++i)
-        probe.expected.push_back(picture(probe.still ? 0 : 16.0f*float(i)/float(probe.factor)));
+    if (probe.cut) for (size_t at = 0; at < bytes; at += 4) {
+        probe.a[at] = probe.a[at+3] = 255; probe.a[at+1] = probe.a[at+2] = 0;
+        probe.b[at+2] = probe.b[at+3] = 255; probe.b[at] = probe.b[at+1] = 0;
+    }
+    for (uint32_t i = 1; i < probe.factor; ++i) {
+        if (probe.cut) probe.expected.push_back(i * 2 < probe.factor ? probe.a : probe.b);
+        else probe.expected.push_back(picture(probe.still ? 0 : 16.0f*float(i)/float(probe.factor)));
+    }
     const size_t output_bytes = bytes*(probe.factor-1);
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = output_bytes; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -367,16 +374,18 @@ bool framegen_probe_check() {
             const auto& expected = probe.expected[frame];
             const uint8_t* actual = probe.mapped+frame*expected.size();
             double generated = 0, before = 0, after = 0;
+            bool opaque = true;
+            for (size_t i = 3; i < expected.size(); i += 4) opaque = opaque && actual[i] == 255;
             for (size_t i = 0; i < expected.size(); ++i) if (i%4 != 3) {
                 generated += std::abs(int(actual[i])-int(expected[i]));
                 before += std::abs(int(probe.a[i])-int(expected[i]));
                 after += std::abs(int(probe.b[i])-int(expected[i]));
             }
             const double channels = double(expected.size()/4*3);
-            const bool pass = probe.still ? generated==0 : generated < .9*std::min(before,after);
+            const bool pass = opaque && ((probe.still || probe.cut) ? generated==0 : generated < .9*std::min(before,after));
             ok = pass && ok;
             log("framegen probe %ux %ux%u %s %zu/%u: error %.3f, input errors %.3f / %.3f: %s",
-                probe.factor,probe.source.width,probe.source.height,probe.still ? "still" : "moving",
+                probe.factor,probe.source.width,probe.source.height,probe.cut ? "cut" : probe.still ? "still" : "moving",
                 frame+1,probe.factor,generated/channels,before/channels,after/channels,pass ? "PASS" : "FAIL");
         }
     } else log("framegen probe: missing interpolated images: FAIL");

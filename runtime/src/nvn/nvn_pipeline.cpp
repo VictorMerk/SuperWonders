@@ -1199,7 +1199,6 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
     if (writes.empty()) return;
     img.texels = true;
     VkImageLayout back = img.layout;
-    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     bool is3d = img.view_type == VK_IMAGE_VIEW_TYPE_3D;
     for (const auto& w : writes) {
         if (w.level >= img.levels) continue;
@@ -1212,6 +1211,9 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
                               w.level, is3d ? 0 : std::min(w.z, img.layers - 1), is3d ? 1 : std::min(w.d, img.layers)};
         r.imageOffset = {int32_t(w.x), int32_t(w.y), is3d ? int32_t(w.z) : 0};
         r.imageExtent = {w.w, w.h, is3d ? w.d : 1};
+        // Queued CPU texel updates can overlap one another, including in a
+        // single batch. A matching layout does not order those transfer writes.
+        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     }
     if (back != VK_IMAGE_LAYOUT_UNDEFINED) transition(cb, img, back);

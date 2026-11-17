@@ -150,7 +150,7 @@ bool clears_transfer(VkCommandBuffer cb, const Targets& t) {
     for (uint32_t k = 0; k < 9; k++) {
         GpuImage* img = imgs[k];
         if (!img) continue;
-        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // as begin_rendering: rendered images stay GENERAL
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);  // repeated clears still need an execution dependency
         img->rendered = true;
         uint32_t level = std::min<uint32_t>(t.views.level[k], img->levels - 1);
         uint32_t layer = std::min<uint32_t>(t.views.layer[k], img->layers - 1);
@@ -267,13 +267,16 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
         // The pass is smaller than this target (a larger shared depth buffer): clear all of it, outside the pass.
         g_scissor_lost += scissored, g_mask_fallback += masked;
         draw_end_rendering(cb, 4);
-        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);
         VkImageSubresourceRange r{a.aspectMask, std::min<uint32_t>(level, img->levels - 1), 1,
                                   std::min<uint32_t>(color ? t.views.layer[c.n] : t.views.layer[8], img->layers - 1), 1};
         if (color)
             p_vkCmdClearColorImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.color, 1, &r);
         else
             p_vkCmdClearDepthStencilImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.depthStencil, 1, &r);
+        // pass_begin keeps rendered images GENERAL, so it cannot rely on a layout
+        // change to make this transfer write visible to the attachment load.
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);
         return;
     }
     if (masked && mask_clear(cb, t, c.n, c.mask & 0xF, c.f, rect)) {

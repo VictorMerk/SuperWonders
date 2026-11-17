@@ -112,7 +112,8 @@ GpuImage* latest_overlapping_shadow_image(uint64_t texture, GpuImage* image);
 // NX_1D_IMAGES=1 (bisecting, nvn_pipeline.cpp): NVN 1D and 1D-array textures as Vulkan 1D images, the old way. By
 // default they are 2D / 2D-array images of height 1, which the translated shaders (1D sampled as 2D) can view (G8).
 bool vk_1d_images();
-void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to);
+// synchronize also orders repeated accesses when the layout already matches.
+void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to, bool synchronize = false);
 // nvn_present.cpp: the window texture drawn into the swapchain (rotated, fit, alpha 1) instead of blitted.
 bool present_pass_wanted();
 bool present_pass_targets(VkFormat format, const std::vector<VkImage>& images, VkExtent2D extent,

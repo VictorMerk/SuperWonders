@@ -823,7 +823,7 @@ bool framegen_probe() {
     std::lock_guard lock(g_gpu);
     if (!init()) return false;
     bool ok = true;
-    for (uint32_t variant = 0; variant < 17; ++variant) {
+    for (uint32_t variant = 0; variant < 24; ++variant) {
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
@@ -933,6 +933,11 @@ bool counter_clear_probe() {
     texture.memory = reinterpret_cast<uintptr_t>(texels.data()); texture.storage_size = texels.size();
     GpuImage* image = image_of(texture_id);
     if (!image) return false;
+    constexpr uint64_t small_id = 0x7fff00000500ull;
+    auto& small = make<Texture>(small_id);
+    small.target = 1; small.format = 0x25; small.flags = 8;
+    small.width = small.height = 8; small.depth = small.levels = small.samples = 1;
+    if (!image_of(small_id)) return false;
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint8_t* mapped = nullptr;
@@ -947,7 +952,7 @@ bool counter_clear_probe() {
         p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;
     bool ok = true;
-    for (unsigned variant = 0; variant < 7; ++variant) {
+    for (unsigned variant = 0; variant < 9; ++variant) {
         if (!begin(true)) { ok = false; break; }
         draw_begin_submit();
         counters = {}; counters[0] = variant == 5 ? 0x100000000ull : 1;
@@ -981,6 +986,33 @@ bool counter_clear_probe() {
         enable(true);
         Targets targets;
         replay_list(g_cb,targets,list,0);
+        if (variant == 7) {
+            draw_end_rendering(g_cb);
+            // Two overlapping WriteTexels updates in one batch: the later red
+            // pixels must win, even while both copies use TRANSFER_DST.
+            for (bool is_red : {false, true}) {
+                Texture::TexelWrite write{}; write.w = write.h = 16; write.d = 1;
+                write.data.resize(texels.size());
+                for (size_t at = 0; at < write.data.size(); at += 4)
+                    write.data[at + (is_red ? 0 : 2)] = write.data[at + 3] = 255;
+                texture.writes.push_back(std::move(write));
+            }
+            texture.has_writes = true;
+            ensure_contents(g_cb, texture_id);
+            red = true;
+        }
+        if (variant == 8) {
+            draw_end_rendering(g_cb);
+            Targets unequal; unequal.color_count = 2;
+            unequal.colors[0] = texture_id; unequal.colors[1] = small_id;
+            pass_begin(g_cb, unequal);
+            Cmd full_clear{Cmd::ClearColor}; full_clear.mask = 15; full_clear.f[0] = full_clear.f[3] = 1;
+            // A 16x16 clear cannot fit the shared 8x8 render area: this takes
+            // the real transfer-clear fallback, then reloads the GENERAL image.
+            draw_clear(g_cb, unequal, full_clear);
+            pass_begin(g_cb, unequal);
+            red = true;
+        }
         // No CPU-visible timestamp completion while the commands are only encoded.
         bool pass = variant == 5 ? counters[0] == 0x100000000ull : counters[0] == 1;
         draw_end_rendering(g_cb);
@@ -1003,7 +1035,7 @@ bool counter_clear_probe() {
     p_vkDeviceWaitIdle(g_device);
     p_vkUnmapMemory(g_device,memory); p_vkDestroyBuffer(g_device,buffer,nullptr); p_vkFreeMemory(g_device,memory,nullptr);
     pool_unregister(&pool); pool_unregister(&alias);
-    destroy(texture_id); destroy(pool_id); destroy(alias_id); drain_objects();
+    destroy(texture_id); destroy(small_id); destroy(pool_id); destroy(alias_id); drain_objects();
     return ok;
 }
 

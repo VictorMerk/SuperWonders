@@ -453,7 +453,7 @@ bool vk_1d_images() {
 }
 
 void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta) {
-    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
     VkImageSubresourceRange r{img.aspect, 0, img.levels, 0, img.layers};
     if (img.aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
         VkClearColorValue v{};
@@ -501,7 +501,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         r.bufferOffset = u.offset;
         r.imageSubresource = {img.aspect, 0, 0, img.layers};
         r.imageExtent = {img.width, uint32_t(std::min<uint64_t>(rows, img.height)), 1};
-        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         return;
     }
@@ -537,7 +537,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         }
         r.bufferOffset = u.offset;
         if (!copies_fit(t, &r, 1, u.offset, staged, bw, bh, host_bytes)) return clear_image(cb, img);
-        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         return;
     }
@@ -563,7 +563,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
             copies.push_back(r);
             at += uint64_t(levels[k].width) * levels[k].height * slices * tb;
         }
-        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(copies.size()),
                                  copies.data());
         return;
@@ -606,7 +606,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     }
     if (!copies_fit(t, copies.data(), uint32_t(copies.size()), u.offset, staged * scale, bw, bh, host_bytes))
         return clear_image(cb, img);
-    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
     p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(copies.size()),
                              copies.data());
 }

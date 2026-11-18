@@ -11,5 +11,6 @@
   ],
   "cpu_tests_passed": 61,
   "lan_60hz": {"same_pc_loopback":true,"course_reached":true,"independent_inputs":true,"matching_committed_ticks":701,"valid_position_pairs":0,"forced_shutdowns":0},
+  "lan_30hz_buffered": {"same_pc_loopback":true,"buffered_frames":1,"course_reached":true,"matching_committed_ticks":1401,"valid_position_pairs":0,"minimum_ticks":3000,"exit_codes":[0,0],"forced_shutdowns":0},
   "limitations": ["Not physical scanout or whole-game performance", "Includes integrated AMD changes", "Not full-world or physical LAN synchronization certification", "Native Bellabel payload not established", "Older re-entry deswizzle fault not proven fixed"]
 }

@@ -25,6 +25,8 @@ Two native 60 Hz two-process loopback runs reached the first course. The latest 
 
 ## Remaining limits
 
-These are same-PC loopback checks, not a physical multi-PC LAN test. Matching input traces do not establish matching RNG, actors, world state or positions. Scheduling spikes remain. The 30 Hz buffered check is documented separately when complete; its initial connected run did not reach the course and is not a gameplay pass.
+The corrected 30 Hz / one-buffered-frame run also reached the course on both peers (minimum 3,000 ticks), matched 1,401 committed input ticks, and exited normally on both sides without forced shutdown or fatal logs. Timing adoption was confirmed in both native logs. The first 30 Hz attempt used the wrong scripted input timing and did not reach the course; it is not counted as a gameplay pass. The optional rate was tested without changing the user's defaults.
+
+These are same-PC loopback checks, not a physical multi-PC LAN test. Matching input traces do not establish matching RNG, actors, world state or positions. Scheduling spikes remain. The installed candidate is the native-tested `2f97c38` source snapshot. Later integration of main's pipeline-cache polling change is CPU-tested separately; that does not retroactively extend the native comparison's scope.
 
 The supplied package's inspected executable is Product.120 using NVN/Maxwell. Native Switch 2/Bellabel payload support remains unestablished. The older first-clear/re-entry deswizzle fault has not been proven fixed; successful one-seed first clears and saved-course reloads do not close that issue. Full-game perfection is not claimed.

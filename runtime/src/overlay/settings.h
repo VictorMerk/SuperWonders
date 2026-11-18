@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include "keyboard_defaults.h"
 
 namespace nx::overlay {
 
@@ -54,7 +55,7 @@ struct Settings {
     int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
     int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
     bool pipeline_skip_draws = false;  // opt-in: hide draws while new pipelines compile (can cause flicker)
-    std::array<int, kControlCount> keyboard_bindings{};
+    std::array<int, kControlCount> keyboard_bindings=input::recommended_keyboard_bindings();
     std::array<int, kControlCount> controller_bindings{};
     uint32_t controller_custom_mask = 0;  // bit per action: controller_bindings[action] instead of the preset
 };

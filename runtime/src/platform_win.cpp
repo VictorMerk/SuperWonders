@@ -391,6 +391,7 @@ static void save_pc_settings() {
          << "\nalways_on_top=" << g_pc_settings.always_on_top << "\nlanguage=" << g_pc_settings.language
          << "\ngame_language=" << g_pc_settings.game_language
          << "\ngame_language_version=2"
+         << "\nkeyboard_layout_version=1"
          << "\nmemory_limit_gb=" << g_pc_settings.memory_limit_gb
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
          << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
@@ -423,6 +424,7 @@ static void load_pc_settings() {
     std::ifstream file(data_root() + "/pc-settings.ini");
     std::string line;
     int game_language_version = 0;
+    int keyboard_layout_version = 0;
     while (std::getline(file, line)) {
         int value = 0;
         if (std::sscanf(line.c_str(), "width=%d", &value) == 1 && value >= 640 && value <= 7680) g_pc_settings.width = value;
@@ -438,6 +440,7 @@ static void load_pc_settings() {
             g_pc_settings.game_language = std::clamp(value, 0, 11);
         else if (std::sscanf(line.c_str(), "game_language_version=%d", &value) == 1)
             game_language_version = value;
+        else if (std::sscanf(line.c_str(), "keyboard_layout_version=%d", &value) == 1) keyboard_layout_version = value;
         else if (std::sscanf(line.c_str(), "memory_limit_gb=%d", &value) == 1) g_pc_settings.memory_limit_gb = std::clamp(value, 2, 32);
         else if (std::sscanf(line.c_str(), "low_vram_profile=%d", &value) == 1) g_pc_settings.low_vram_profile = value != 0;
         else if (std::sscanf(line.c_str(), "keyboard_separate_player=%d", &value) == 1)
@@ -496,6 +499,7 @@ static void load_pc_settings() {
                 g_pc_settings.controller_bindings[size_t(index)] = binding;
         }
     }
+    input::migrate_keyboard_defaults(g_pc_settings.keyboard_bindings,keyboard_layout_version,input::KeyboardCodes::Windows);
     if (game_language_version < 2 && (g_pc_settings.game_language == 8 || g_pc_settings.game_language == 10))
         g_pc_settings.game_language = 0;
     if (g_pc_settings.aspect_ratio >= 0) {

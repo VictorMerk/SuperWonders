@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <windows.h>
+#include "keyboard_defaults.h"
 
 namespace nx::plat {
 
@@ -69,10 +70,7 @@ struct PcMenuState {
     bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16
     int rumble = 100;          // overlay menu: rumble strength, percent
-    std::array<int, kPcControlCount> keyboard_bindings = {
-        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_BACK, 'M', 'N',
-        VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN,
-    };
+    std::array<int, kPcControlCount> keyboard_bindings = input::recommended_keyboard_bindings(input::KeyboardCodes::Windows);
     std::array<int, kPcControlCount> controller_bindings{};
     uint32_t controller_custom_mask = 0;
 };

@@ -322,15 +322,15 @@ static void sample_input() {
         if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP]) p.ly = kStickMax, p.buttons |= kUp;
         if (k[SDL_SCANCODE_S] || k[SDL_SCANCODE_DOWN]) p.ly = -kStickMax, p.buttons |= kDown;
         if (k[SDL_SCANCODE_SPACE]) p.buttons |= kA;
-        if (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]) p.buttons |= kB;
-        if (k[SDL_SCANCODE_J]) p.buttons |= kX;
-        if (k[SDL_SCANCODE_K]) p.buttons |= kY;
+        if (k[SDL_SCANCODE_J]) p.buttons |= kB;
+        if (k[SDL_SCANCODE_LCTRL] || k[SDL_SCANCODE_RCTRL]) p.buttons |= kX;
+        if (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]) p.buttons |= kY;
         if (k[SDL_SCANCODE_Q]) p.buttons |= kL;
         if (k[SDL_SCANCODE_E]) p.buttons |= kR;
         if (k[SDL_SCANCODE_Z]) p.buttons |= kZL;
         if (k[SDL_SCANCODE_C]) p.buttons |= kZR;
         if (k[SDL_SCANCODE_RETURN]) p.buttons |= kPlus;
-        if (k[SDL_SCANCODE_ESCAPE]) p.buttons |= kMinus;
+        if (k[SDL_SCANCODE_BACKSPACE]) p.buttons |= kMinus;
     }
     std::lock_guard lk(g_pad_lock);
     g_pad = p;

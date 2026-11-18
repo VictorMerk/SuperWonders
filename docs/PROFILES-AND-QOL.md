@@ -41,3 +41,21 @@ Update manifests reject player-owned paths, including data, saves, profiles, bac
 `profile_account_test` verifies that guest IPC receives the selected nickname while retaining the legacy UID and profile layout. `profiles_test` covers legacy path compatibility, profile separation, UTF-8/name validation, corrupt selection fallback, Windows data locking, restore content, pre-restore preservation, incomplete/outside backup rejection, and usability settings persistence. `save_backup_test` covers separate backup copies and preservation of active saves. `update_core_test` covers protected player-data paths in manifests. `netplay_lobby_test` exercises the lobby with the profile-root integration.
 
 `tools/perf/run_qol_ui.ps1 -Runtime <build-directory> -Output <new-directory>` acquires the machine-wide reservation, uses its own synthetic data roots and runtime copies, captures native launcher/settings at 1280 x 720 and 640 x 360, profiles at both sizes, the co-op dialog, and live window resizing. It also checks fullscreen/reduced-motion settings and uses a virtual controller to select the second profile. Resize validation requires captures at all three requested image dimensions; a process exiting successfully alone is insufficient. It stops only its own process if a foreign game starts. Test hooks `NX_PROFILE_MANAGER_TOUR` and `NX_QOL_RESIZE_TOUR` are opt-in QA only and must not be set in a delivered launch environment.
+
+## Recommended keyboard layout
+
+| Action | Keys |
+| --- | --- |
+| Move / crouch / look up | WASD or arrow keys |
+| Jump / confirm (A) | Space |
+| Alternate jump / in-game back (B) | J |
+| Sprint / grab / throw (Y) | Shift (either side) |
+| Alternate sprint (X) | Ctrl (either side) |
+| L / R | Q / E |
+| ZL / ZR | Z / C |
+| Pause / Plus | Enter |
+| Minus | Backspace |
+| Stick clicks | M / N |
+| PC settings | Esc or F1 |
+
+Use **Controls > Recommended keyboard layout** to apply this preset. The old untouched Space/Shift/J/K preset migrates automatically; custom layouts are preserved. New settings files record the keyboard layout version so deliberately customized legacy bindings are not migrated repeatedly. Restart the game after changing bindings to refresh its button prompts. Keyboard navigation of the PC launcher/settings continues to use Enter, Esc and arrows.

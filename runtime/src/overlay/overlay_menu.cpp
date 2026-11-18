@@ -754,6 +754,11 @@ void controls(MenuContext& c, const Labels& l) {
         }
     }
     rows::section(kHeaders[lang][0]);
+    if(rows::action("Recommended keyboard layout","Space jump / Shift run",
+        "Wonder defaults: WASD or arrows move; Space jumps/confirms; Shift runs; J is alternate jump and Ctrl alternate run; Q/E are L/R; Z/C are ZL/ZR; Enter pauses; Backspace is Minus; Esc/F1 opens PC settings. Applies keyboard bindings immediately; restart to refresh in-game key prompts. Controller bindings are preserved.")) {
+        s.keyboard_bindings=input::recommended_keyboard_bindings();c.capture_action=-1;
+        settings_changed(true);ui::notify("Keyboard layout applied: Space jumps, Shift runs. Restart to refresh game prompts.");
+    }
     for (size_t a = 0; a < kControlCount; ++a) {
         char id[48];
         std::snprintf(id, sizeof id, "%s###key%zu", kActions[a], a);

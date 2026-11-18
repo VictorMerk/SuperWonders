@@ -62,10 +62,10 @@ Read the private handoff for this machine's existing CMake/compiler paths. Do no
 $env:PATH = (Resolve-Path '../.tools/llvm-mingw-20261104-ucrt-x86_64/bin').Path + ';' + $env:PATH
 & '../.tools/cmake-4.5.0-windows-x86_64/bin/cmake.exe' --build private/build-native --parallel 2
 & '../.tools/cmake-4.5.0-windows-x86_64/bin/ctest.exe' --test-dir private/build-native `
-    -E 'warp32_gpu|astc_gpu' --output-on-failure
+    -LE gpu --output-on-failure
 ```
 
-That existing build directory belongs to the ongoing LAN work; other tasks should use an isolated build directory. The exclusion above avoids the two standalone GPU targets; native GPU probes and real game tests also require a reservation. Preserve complete log files and use new evidence/output names. Do not label an interrupted, cleanup-failed or metadata-incomplete run as passing.
+That existing build directory belongs to the ongoing LAN work; other tasks should use an isolated build directory. The label exclusion above avoids all standalone GPU targets, including the NaN/min/max shader regression; native GPU probes and real game tests also require a reservation. Preserve complete log files and use new evidence/output names. Do not label an interrupted, cleanup-failed or metadata-incomplete run as passing.
 
 ## GitHub
 

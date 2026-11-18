@@ -19,6 +19,11 @@ int main() {
     { std::ofstream out(nx::host_path(file), std::ios::binary); out << "event-resource"; check(bool(out), "create long Unicode resource"); }
     check(fs::is_regular_file(nx::host_path(file)), "metadata finds long resource");
     check(fs::file_size(nx::host_path(file)) == 14, "long resource metadata size");
+    // Guest RomFS paths use '/', even after joining onto an already extended Windows mount root.
+    auto joined = nx::host_path(root) / fs::path(u8"guest/path/resource-\u00e4.bgyml");
+    fs::create_directories(nx::host_path(joined).parent_path());
+    { std::ofstream out(nx::host_path(joined)); out << "joined"; }
+    check(fs::is_regular_file(nx::host_path(joined)), "guest separators normalized after extended-root join");
 #if defined(_WIN32)
     FILE* stream = _wfopen(nx::host_path(file).c_str(), L"rb");
 #else

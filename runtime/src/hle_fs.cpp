@@ -176,7 +176,7 @@ std::vector<fs::path> mod_paths(const std::string& guest) {
     std::vector<fs::path> v;
     auto [mnt, rest] = split(guest);
     if (g_rom_mounts.count(mnt))
-        for (const fs::path& r : mod_roots()) v.push_back(r / fs::u8path(rest));
+        for (const fs::path& r : mod_roots()) v.push_back(host_path(r / fs::u8path(rest)));
     return v;
 }
 
@@ -192,7 +192,7 @@ fs::path resolve(const std::string& guest) {
             if (logged.insert(rest).second) log("mods: %s from %s", rest.c_str(), utf8(m).c_str());
             return m;
         }
-    return it->second / fs::u8path(rest);
+    return host_path(it->second / fs::u8path(rest));
 }
 
 void mount(const std::string& name, const fs::path& p) {

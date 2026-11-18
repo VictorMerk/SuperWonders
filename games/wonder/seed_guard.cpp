@@ -30,6 +30,7 @@
 #include <nx/runtime.h>
 
 #include "platform.h"
+#include "version.h"
 
 namespace nx::nvn {
 void hold_frame_cap(int fps);
@@ -68,7 +69,7 @@ Hook g_hit_update = {"IsHitInfoRepOut update", 0x16d87b4,
                      {0xa9be7bfd, 0xf9000bf3, 0x910003fd, 0xaa0003f3, 0x94000008, 0xb9401a68, 0x52b00009, 0x33007509},
                      hit_update};
 
-constexpr uint64_t kRigidBodyOnOffVtable = 0x33326b8;
+uint64_t g_rigid_body_vtable = 0x33326b8;
 bool g_hold_mode = false;               // NX_SEED_GUARD=60
 std::atomic<bool> g_landed{false};      // the seed has touched down since its appearance began
 std::atomic<uint64_t> g_kept{0};        // checks answered "touching" by the guard, this appearance
@@ -79,7 +80,7 @@ std::atomic<uint64_t> g_since_ns{0};  // when the hold began
 
 // The node's actor when it switches "Target" on a Wonder Seed, else 0.
 uint64_t seed_actor(uint64_t node) {
-    if (ld<uint64_t>(node) != g_main + kRigidBodyOnOffVtable) return 0;
+    if (ld<uint64_t>(node) != g_main + g_rigid_body_vtable) return 0;
     const uint64_t name_at = ld<uint64_t>(node + 0x40) & ~3ull;
     const char* body = name_at ? reinterpret_cast<const char*>(ld<uint64_t>(name_at)) : nullptr;
     if (!body || std::strcmp(body, "Target") != 0) return 0;
@@ -170,6 +171,19 @@ void seed_guard_init() {
         return;
     }
     g_main = game_lib().main->base;
+    if (source_version() == Version::Product120) {
+        // Unique body-switch implementations and their sole vtable reference;
+        // hit-check helper matches the original instruction/register structure.
+        // The original full eight-word signatures below remain mandatory.
+        g_off.offset = 0x2dfb70;
+        g_on.offset = 0x4d4c28;
+        g_hit_enter.offset = 0x17fd50c;
+        g_hit_update.offset = 0x17fd544;
+        g_rigid_body_vtable = 0x34bbc88;
+    } else if (source_version() != Version::Original100) {
+        log("wonder: source build is unknown; no version-specific Wonder Seed guard installed");
+        return;
+    }
     g_hold_mode = e && std::strcmp(e, "60") == 0;
     const bool ok = install(g_off) && install(g_on) && (g_hold_mode || (install(g_hit_enter) && install(g_hit_update)));
     if (ok)

@@ -59,6 +59,10 @@ HWND g_window = nullptr;
 void boot();
 }  // namespace nx
 
+namespace nx::nvn {
+void log_upload_fault_context();
+}
+
 namespace nx::plat {
 
 // ---- memory ---------------------------------------------------------------------------------------------------
@@ -1309,6 +1313,7 @@ LONG WINAPI crash_handler(EXCEPTION_POINTERS* e) {
     uint64_t info = r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0;
     nx::log("CRASH: exception %08lx at %s (tools/symbolize.py for the exe), data address %llx", r->ExceptionCode,
             host_where(uint64_t(r->ExceptionAddress)).c_str(), (unsigned long long)info);
+    nx::nvn::log_upload_fault_context();
     host_backtrace(*e->ContextRecord);
     dump_guest(nx::current_cpu());
     return EXCEPTION_EXECUTE_HANDLER;

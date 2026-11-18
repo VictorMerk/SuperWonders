@@ -332,6 +332,8 @@ void seed_guard_tick(uint64_t now_ns);
 }
 
 void game::after_init() {
+    const auto* source = game_lib().main;
+    log("wonder: source NSO build %s", source && source->build_id ? source->build_id : "unknown");
     init_frame_step();
     trace_screen_globals();
     install_wide_probe();

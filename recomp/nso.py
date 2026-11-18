@@ -59,6 +59,7 @@ class Module:
     fini_array: list = field(default_factory=list)
     eh_frame_hdr: tuple = (0, 0)
     frame_step_offset: int = 0  # optional runtime-owned page reserved by game-specific patches
+    build_id: str = ""  # identity from the original NSO header, before patching
 
     def u32(self, addr):
         return struct.unpack_from("<I", self.image, addr)[0]
@@ -102,6 +103,7 @@ def load(path, name=None):
         ro=(segs[1][0], len(segs[1][1])),
         data=(segs[2][0], len(segs[2][1])),
         bss=(data_end, bss_size),
+        build_id=raw[0x40:0x60].hex(),
     )
     _parse_mod0(m)
     return m

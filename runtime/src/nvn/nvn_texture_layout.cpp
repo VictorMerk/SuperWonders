@@ -9,6 +9,7 @@
 // 64-byte aligned in width and block-aligned in height. Pre-tiled data (BNTX) is laid out the same way, so the
 // sizes must not come out smaller than the real driver's.
 #include <algorithm>
+#include <cstring>
 
 #include "nvn.h"
 
@@ -16,7 +17,7 @@ namespace nx::nvn {
 
 namespace {
 
-constexpr uint64_t kFormatTable = 0xd34198;  // in sdk (SDK 16.2)
+constexpr uint64_t kFormatTable = 0xd34198;  // original Wonder SDK
 constexpr uint32_t kFormatCount = 0xd0;
 
 struct FormatInfo {
@@ -24,14 +25,31 @@ struct FormatInfo {
 };
 
 FormatInfo format_info(uint32_t format) {
-    static uint64_t sdk = [] {
+    static uint64_t table = [] {
         uint64_t loader = find_symbol("nvnBootstrapLoader");
         const LoadedModule* m = module_at(loader);
-        return m ? m->base : 0;
+        if (!m) return uint64_t(0);
+        // Product.120's SDK retains the identical complete format table at a new address.
+        // Reading the old address interpreted unrelated data as block geometry and underallocated pools.
+        const char* id = m->info->build_id;
+        uint64_t offset = id && std::strcmp(id,
+            "e4bd58cac28cf13a08fb417aa013cdcb3f9622af000000000000000000000000") == 0
+            ? 0xd351a8 : kFormatTable;
+        if (offset > m->size || kFormatCount * 0x30ull > m->size - offset)
+            fatal("NVN format table lies outside the loaded SDK");
+        // Check representative uncompressed, BC and ASTC entries before any pool size uses the table.
+        for (uint32_t format : {0x25u, 0x49u, 0x87u}) {
+            const uint32_t* entry = reinterpret_cast<const uint32_t*>(m->base + offset + format * 0x30ull);
+            const uint32_t expected_block = format == 0x25 ? 0x101 : 0x404;
+            const uint32_t expected_bytes = format == 0x25 ? 4 : format == 0x49 ? 8 : 16;
+            if ((entry[2] & 0xFFFF) != expected_block || (entry[4] & 0xFF) != expected_bytes)
+                fatal("Unsupported NVN SDK format table (source %s)", id ? id : "unknown");
+        }
+        return m->base + offset;
     }();
     FormatInfo f;
-    if (!sdk || format >= kFormatCount) return f;
-    const uint32_t* e = reinterpret_cast<const uint32_t*>(sdk + kFormatTable + uint64_t(format) * 0x30);
+    if (!table || format >= kFormatCount) return f;
+    const uint32_t* e = reinterpret_cast<const uint32_t*>(table + uint64_t(format) * 0x30);
     uint32_t bw = e[2] & 0xFF, bh = (e[2] >> 8) & 0xFF, bytes = e[4] & 0xFF;
     if (bw && bh && bytes) f = {bw, bh, bytes};
     return f;

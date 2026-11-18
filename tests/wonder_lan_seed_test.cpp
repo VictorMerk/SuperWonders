@@ -18,5 +18,16 @@ int main() {
     }
     check(streams.size()==std::size(seed::sites),"tested constructors use distinct low-32-bit random seeds");
     check(!seed::find(0xe16ac) && !seed::find(0xe18f8),"framework timing is never redirected");
+    streams.clear();
+    for(const auto& site:seed::table(true)) {
+        check(seed::find(site.call+4,true)==&site,"Product.120 selects its exact RNG call");
+        check(!seed::find(site.call+4,false),"Product.120 calls never use the 1.0.0 table");
+        check(!seed::find(site.call,true) && !seed::find(site.call+8,true),"Product.120 timer neighbours stay real");
+        auto changed=site.words;changed[0]^=1;
+        check(seed::verified(site,site.words) && !seed::verified(site,changed),"Product.120 full signature required");
+        streams.insert(uint32_t(seed::value(42,site)));
+    }
+    check(streams.size()==seed::table(true).size(),"Product.120 constructors use distinct session streams");
+    for(const auto& site:seed::sites) check(!seed::find(site.call+4,true),"1.0.0 calls never use the Product.120 table");
     std::puts("Wonder LAN RNG: exact selectors, version rejection, session seeds and timer exclusion passed");
 }

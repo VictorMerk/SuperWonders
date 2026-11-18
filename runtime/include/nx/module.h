@@ -44,6 +44,7 @@ struct ModuleInfo {
     const uint64_t* fini_array;
     size_t fini_count;
     uint64_t frame_step_offset;  // optional aligned runtime-owned data page; 0 when unused
+    const char* build_id = nullptr;  // original NSO identity; version-specific hooks must check it
 };
 
 constexpr uint32_t R_AARCH64_ABS64 = 257;

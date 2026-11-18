@@ -90,6 +90,11 @@ class SetupPaths(unittest.TestCase):
         events = []
         worker = SimpleNamespace(stdout=iter([]), wait=lambda: 0)
         def child(*args, **kwargs):
+            # A successful real generator writes the verdict the builder now
+            # requires. Keep the mocked process faithful to that contract.
+            generated = Path(args[0][5])
+            generated.mkdir(parents=True, exist_ok=True)
+            (generated / "report.txt").write_text("functions 10, handled 100, unhandled 0\n", encoding="utf-8")
             worker.stdout = iter(["phase read\n", "phase analyze\n", "phase emit\n", "  emitted 5/10 functions\n"])
             return worker
         kit = SimpleNamespace(root=str(self.root))

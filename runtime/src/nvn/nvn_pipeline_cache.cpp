@@ -13,6 +13,7 @@
 #include "nvn_pipeline_async.h"
 #include "nvn_vk.h"
 #include "pipeline_cache_data.h"
+#include "pipeline_cache_progress.h"
 #include "file_io.h"
 #include "platform.h"
 #include "frametrace.h"
@@ -25,7 +26,7 @@ namespace {
 
 VkPipelineCache g_cache = VK_NULL_HANDLE;
 bool g_tried = false;
-std::atomic<bool> g_cache_dirty{false};
+PipelineCacheProgress g_cache_progress;
 size_t g_saved_size = 0;
 std::string g_path;
 uint64_t g_pipelines = 0, g_pipeline_ns = 0, g_astc = 0, g_astc_ns = 0;
@@ -33,39 +34,62 @@ uint64_t g_pipelines = 0, g_pipeline_ns = 0, g_astc = 0, g_astc_ns = 0;
 void save_pipeline_cache_at_exit() { pipeline_cache_save(true); }
 
 std::atomic<bool> g_cache_saving{false};
+bool cache_trace() {
+    static const bool enabled = std::getenv("NX_PIPELINE_CACHE_TRACE") != nullptr;
+    return enabled;
+}
 
 // On the background writer (periodic saves) or, at shutdown, on the caller after the writer is idle.
 void write_pipeline_cache(bool force) {
-    // Cleared first: a pipeline created while the data is read marks it dirty again for the next save.
-    g_cache_dirty.store(false, std::memory_order_release);
+    const uint64_t started = plat::monotonic_ns();
+    if (force) log("shutdown: querying driver pipeline cache size");
+    // Only this revision is acknowledged; mutations during the read still owe a later save.
+    const uint64_t revision = g_cache_progress.revision();
     size_t n = 0;
-    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return note_pipeline_cache_changed();
+    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return g_cache_progress.failed();
+    if (cache_trace()) log("cache export: query revision %llu, %zu bytes, %.3f ms", (unsigned long long)revision, n,
+                           double(plat::monotonic_ns() - started) / 1e6);
+    if (force) log("shutdown: driver cache size %zu bytes (%.1f ms)", n,
+                   double(plat::monotonic_ns() - started) / 1e6);
     // Vulkan drivers generally grow the serialized cache as new entries are added. Avoid rewriting a large cache
     // every few seconds when its serialized size is unchanged; the explicit shutdown flush forces same-size updates.
-    if (!force && n <= g_saved_size) return note_pipeline_cache_changed();  // still owed: the shutdown save writes it
+    if (!force && n <= g_saved_size) return g_cache_progress.not_grown(revision);  // still owed at shutdown
     std::vector<uint8_t> data;
     if (!pipeline_cache_snapshot([](size_t* size, void* bytes) {
             return p_vkGetPipelineCacheData(vk_device(), g_cache, size, bytes);
-        }, data, n)) return note_pipeline_cache_changed();
+        }, data, n)) return g_cache_progress.failed();
     n = data.size();
+    if (force) log("shutdown: driver cache snapshot ready (%.1f ms); writing file",
+                   double(plat::monotonic_ns() - started) / 1e6);
     CacheFile pending(g_path);
     if (FILE* f = plat::fopen_utf8(pending.path(), "wb")) {
         bool ok = std::fwrite(data.data(), 1, n, f) == n;
         ok = std::fclose(f) == 0 && ok;
         if (ok && pending.commit()) {
             g_saved_size = n;
+            g_cache_progress.saved(revision);
             log("nvn/vk: pipeline cache saved (%zu bytes)%s", n, force ? " at shutdown" : "");
             return;
         }
     }
-    note_pipeline_cache_changed();  // not written: try again next time
+    g_cache_progress.failed();  // not written: try again next time
 }
 
 void save_pipeline_cache(bool force) {
-    if (!g_cache || !g_cache_dirty.load(std::memory_order_acquire)) return;
+    if (!g_cache) return;
     if (force) {
+        const uint64_t started = plat::monotonic_ns();
+        log("shutdown: waiting for background cache writes");
         wait_background_writes();
-        write_pipeline_cache(true);
+        log("shutdown: background cache writes complete (%.1f ms)",
+            double(plat::monotonic_ns() - started) / 1e6);
+        if (g_cache_progress.dirty()) write_pipeline_cache(true);
+        return;
+    }
+    if (!g_cache_progress.periodic_due()) {
+        if (cache_trace() && g_cache_progress.dirty())
+            log("cache export: unchanged revision %llu; periodic query skipped, shutdown save still owed",
+                (unsigned long long)g_cache_progress.revision());
         return;
     }
     if (g_cache_saving.exchange(true)) return;  // the last one is still being written
@@ -121,7 +145,7 @@ VkPipelineCache pipeline_cache() {
 
 void pipeline_cache_save(bool force) { save_pipeline_cache(force); }
 
-void note_pipeline_cache_changed() { g_cache_dirty.store(true, std::memory_order_release); }
+void note_pipeline_cache_changed() { g_cache_progress.changed(); }
 void note_pipeline_created(uint64_t ns) {
     note_pipeline_cache_changed();
     g_pipelines++, g_pipeline_ns += ns;

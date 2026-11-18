@@ -35,6 +35,9 @@ struct Settings {
     int memory_limit_gb = 8;
     bool keyboard_separate_player = false;
     int button_icons = 0;  // Auto, Keyboard, Nintendo, Xbox, PlayStation; applies at startup
+    bool keyboard_actions = true;
+    int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
+    int keyboard_standee_key = input::default_standee_key();
     int controller_preset = 1;  // 1 Nintendo positions (the default, as on the Switch: A on the right), 0 Xbox / DualSense
     bool muted = false, fullscreen = false, always_on_top = false;
     bool metrics_enabled = false, low_vram_profile = false;

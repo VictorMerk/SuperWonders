@@ -14,7 +14,8 @@ uint32_t restart_changes(const Settings& active, const Settings& requested) {
     if (active.anisotropy != requested.anisotropy) changes |= RestartFiltering;
     if (active.shader_bundle != requested.shader_bundle) changes |= RestartShaders;
     if (active.game_language != requested.game_language) changes |= RestartLanguage;
-    if (active.button_icons != requested.button_icons || active.keyboard_bindings != requested.keyboard_bindings)
+    if (active.button_icons != requested.button_icons || active.keyboard_bindings != requested.keyboard_bindings ||
+        active.keyboard_actions != requested.keyboard_actions || active.keyboard_game_layout != requested.keyboard_game_layout)
         changes |= RestartPrompts;
     for (size_t action = 0; action < kControlCount; ++action)
         if (controller_binding(active, action) != controller_binding(requested, action)) changes |= RestartPrompts;
@@ -60,6 +61,7 @@ bool load_settings(const std::string& path, Settings& s) {
     std::string line;
     int game_language_version = 0;
     int keyboard_layout_version = 0;
+    bool keyboard_mode_present=false,keyboard_keys_present=false;
     while (std::getline(file, line)) {
         int v = 0;
         unsigned u = 0;
@@ -76,6 +78,9 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "game_language=%d", &v) == 1) s.game_language = std::clamp(v, 0, 11);
         else if (std::sscanf(l, "game_language_version=%d", &v) == 1) game_language_version = v;
         else if (std::sscanf(l, "keyboard_layout_version=%d", &v) == 1) keyboard_layout_version = v;
+        else if (std::sscanf(l, "keyboard_actions=%d", &v) == 1) {s.keyboard_actions=v!=0;keyboard_mode_present=true;}
+        else if (std::sscanf(l, "keyboard_game_layout=%d", &v) == 1) s.keyboard_game_layout=std::clamp(v,0,1);
+        else if (std::sscanf(l, "keyboard_standee=%d", &v) == 1 && v>=0 && v<=511) s.keyboard_standee_key=v;
         else if (std::sscanf(l, "memory_limit_gb=%d", &v) == 1) s.memory_limit_gb = std::clamp(v, 2, 32);
         else if (std::sscanf(l, "low_vram_profile=%d", &v) == 1) s.low_vram_profile = v != 0;
         else if (std::sscanf(l, "keyboard_separate_player=%d", &v) == 1) s.keyboard_separate_player = v != 0;
@@ -108,7 +113,7 @@ bool load_settings(const std::string& path, Settings& s) {
             int index = -1, binding = -1;
             if (std::sscanf(l, "keyboard_%d=%d", &index, &binding) == 2 && index >= 0 && index < int(kControlCount) &&
                 binding >= 0 && binding <= 511)
-                s.keyboard_bindings[size_t(index)] = index == int(CtlMinus) && binding ==
+                keyboard_keys_present=true, s.keyboard_bindings[size_t(index)] = index == int(CtlMinus) && binding ==
 #if defined(_WIN32)
                     27 ? 8 : binding;  // Esc is reserved for settings; game Minus moves to Backspace.
 #else
@@ -119,7 +124,9 @@ bool load_settings(const std::string& path, Settings& s) {
                 s.controller_bindings[size_t(index)] = binding;
         }
     }
-    input::migrate_keyboard_defaults(s.keyboard_bindings,keyboard_layout_version);
+    const bool migrated=input::migrate_keyboard_defaults(s.keyboard_bindings,keyboard_layout_version);
+    if(!keyboard_mode_present && keyboard_keys_present)
+        s.keyboard_actions=migrated || s.keyboard_bindings==input::recommended_keyboard_bindings();
     // Before version 2, IDs 8 and 10 were Arabic and Turkish. They are no
     // longer selectable game languages; do not reinterpret saved values as Dutch/Chinese.
     if (game_language_version < 2 && (s.game_language == 8 || s.game_language == 10)) s.game_language = 0;
@@ -134,7 +141,9 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\ninternal_resolution=" << s.internal_resolution << "\nmuted=" << s.muted << "\nfullscreen=" << s.fullscreen
       << "\nalways_on_top=" << s.always_on_top << "\nlanguage=" << s.language << "\ngame_language=" << s.game_language
       << "\ngame_language_version=2"
-      << "\nkeyboard_layout_version=1"
+      << "\nkeyboard_layout_version=2"
+      << "\nkeyboard_actions=" << s.keyboard_actions << "\nkeyboard_game_layout=" << s.keyboard_game_layout
+      << "\nkeyboard_standee=" << s.keyboard_standee_key
       << "\nmemory_limit_gb=" << s.memory_limit_gb << "\nlow_vram_profile=" << s.low_vram_profile
       << "\nkeyboard_separate_player=" << s.keyboard_separate_player << "\nbutton_icons=" << s.button_icons << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
       << "\nmetric_fps=" << s.metric_fps << "\nmetric_one_percent_low=" << s.metric_one_percent_low

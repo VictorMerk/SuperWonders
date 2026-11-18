@@ -42,20 +42,30 @@ Update manifests reject player-owned paths, including data, saves, profiles, bac
 
 `tools/perf/run_qol_ui.ps1 -Runtime <build-directory> -Output <new-directory>` acquires the machine-wide reservation, uses its own synthetic data roots and runtime copies, captures native launcher/settings at 1280 x 720 and 640 x 360, profiles at both sizes, the co-op dialog, and live window resizing. It also checks fullscreen/reduced-motion settings and uses a virtual controller to select the second profile. Resize validation requires captures at all three requested image dimensions; a process exiting successfully alone is insufficient. It stops only its own process if a foreign game starts. Test hooks `NX_PROFILE_MANAGER_TOUR` and `NX_QOL_RESIZE_TOUR` are opt-in QA only and must not be set in a delivered launch environment.
 
-## Recommended keyboard layout
+## Dedicated PC gameplay actions
 
-| Action | Keys |
+**Controls > Keyboard controls > Dedicated PC actions** provides named, remappable actions:
+
+| Action | Default key |
 | --- | --- |
-| Move / crouch / look up | WASD or arrow keys |
-| Jump / confirm (A) | Space |
-| Alternate jump / in-game back (B) | J |
-| Sprint / grab / throw (Y) | Shift (either side) |
-| Alternate sprint (X) | Ctrl (either side) |
-| L / R | Q / E |
-| ZL / ZR | Z / C |
-| Pause / Plus | Enter |
-| Minus | Backspace |
-| Stick clicks | M / N |
+| Move / crouch / look up or enter | WASD |
+| Jump / swim | Space |
+| Sprint / grab / throw | Shift (either side) |
+| Spin / badge ability | E |
+| Ground pound | Ctrl (either side) |
+| Use stored item / confirm | F |
+| Greet / emote | Q |
+| Place standee | V |
+| Pause | Enter |
+| Badges / map menu | Backspace |
 | PC settings | Esc or F1 |
 
-Use **Controls > Recommended keyboard layout** to apply this preset. The old untouched Space/Shift/J/K preset migrates automatically; custom layouts are preserved. New settings files record the keyboard layout version so deliberately customized legacy bindings are not migrated repeatedly. Restart the game after changing bindings to refresh its button prompts. Keyboard navigation of the PC launcher/settings continues to use Enter, Esc and arrows.
+Ground pound sends Down and ZL together, covering Wonder's ground-pound settings. Standee briefly crouches before pressing use, so a single tap supplies the combination; stand on the ground where the game allows a standee. These shortcuts translate keyboard input, not game physics or ability rules. Sprint/grab/throw remain one contextual game action. Optional original shoulder/stick inputs are under **Advanced keyboard bindings**; L defaults to Z, duplicate ZR spin and stick clicks are unbound.
+
+Match **Wonder's game layout** to the game's own **Dash and Jump Controls** setting: standard B jump/Y dash, or alternate A jump/B dash. The PC action keys stay consistent. This selector does not change a save or gamepad bindings. Prompts use the matching keyboard actions, including the alternate face-button layout and shared R/ZR spin key. Restart after changing keys/layout to refresh game prompts.
+
+Select an action and press its new key; Delete unbinds it and Esc cancels capture. Movement uses the assigned keys, including analog movement; action mode has no hidden fixed WASD/arrow aliases. PC launcher/settings navigation continues to use Enter, Esc and arrows.
+
+**Reset keyboard layout** restores the selected mode's defaults. **Legacy Switch buttons** retains direct button mapping without the PC combinations. Existing custom layouts stay in legacy mode, unchanged. Only complete untouched old presets (including the first versioned PC preset) migrate automatically to the corrected actions. Settings record layout version 2 and the chosen mode, so deliberate saved custom/legacy bindings remain intact. Windows and Linux support the action menu; macOS's existing fixed keyboard path uses the standard action defaults.
+
+`keyboard_actions_test` checks actual B-jump/Y-dash masks, dedicated combinations and standee sequencing, both game layouts, movement, rebinding, unbound keys and settings migration. `keyboard_defaults_test` checks defaults, modifier aliases and custom preservation. `button_font_test` checks action-aware prompt mapping. These CPU checks do not replace native course testing.

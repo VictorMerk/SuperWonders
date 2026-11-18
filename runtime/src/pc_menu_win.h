@@ -44,6 +44,9 @@ struct PcMenuState {
     int memory_limit_gb = 8;  // Process private-commit guard; not a dedicated VRAM budget
     bool keyboard_separate_player = false;
     int button_icons = 0;
+    bool keyboard_actions = true;
+    int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
+    int keyboard_standee_key = input::default_standee_key(input::KeyboardCodes::Windows);
     int controller_preset = 0;  // Xbox / DualSense, Nintendo
     bool muted = false;
     bool fullscreen = false;

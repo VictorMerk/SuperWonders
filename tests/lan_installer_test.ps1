@@ -41,4 +41,19 @@ if(!$rejected -or (Test-Path "$kit2/LAN-Performance-R5")){throw 'Wrong warm-cach
 Copy-Item "$data/game/wonder_game.dll" "$warm/game/wonder_game.dll" -Force
 $null=& "$package/Install-LAN-Update.ps1" -GameRoot $kit2 -ShaderCacheRoot $warm
 if([IO.File]::ReadAllText("$kit2/LAN-Performance-R5/data/spirv.journal") -ne 'verified warm journal'){throw 'Verified QA cache was not retained'}
-[ordered]@{success=$true;checks=@('reject wrong game code before mutation','retain both shader cache files','persist 30Hz and overlap defaults','set performance options','preserve original runtime and save','create expected user junction','reject mismatched warm cache','retain verified QA cache');fixture=$base} | ConvertTo-Json
+# Recompiled libraries for the same supported game may share an identical shader catalogue.
+$kit3=Join-Path $base 'kit-compatible';New-Item -ItemType Directory "$kit3/data/game" | Out-Null
+Copy-Item "$data/game/wonder_game.dll" "$kit3/data/game/wonder_game.dll"
+[IO.File]::WriteAllText("$kit3/wonder-launcher.exe",'original runtime')
+[IO.File]::WriteAllText("$kit3/data/shader_programs.bin",'matching catalogue')
+[IO.File]::WriteAllText("$warm/game/wonder_game.dll",'compatible recompiled game')
+$info.compatible_game_sha256+=@((Get-FileHash "$warm/game/wonder_game.dll").Hash.ToLowerInvariant())
+$info | ConvertTo-Json -Depth 4 | Set-Content "$package/BUILD-INFO.json" -Encoding UTF8
+[IO.File]::WriteAllText("$warm/shader_programs.bin",'different catalogue')
+$rejected=$false
+try{& "$package/Install-LAN-Update.ps1" -GameRoot $kit3 -ShaderCacheRoot $warm | Out-Null}catch{if($_ -notmatch 'catalogue differs'){throw};$rejected=$true}
+if(!$rejected -or (Test-Path "$kit3/LAN-Performance-R5")){throw 'Mismatched compatible-build catalogue accepted'}
+Copy-Item "$kit3/data/shader_programs.bin" "$warm/shader_programs.bin" -Force
+$null=& "$package/Install-LAN-Update.ps1" -GameRoot $kit3 -ShaderCacheRoot $warm
+if([IO.File]::ReadAllText("$kit3/LAN-Performance-R5/data/spirv.journal") -ne 'verified warm journal'){throw 'Matching compatible-build cache was not retained'}
+[ordered]@{success=$true;checks=@('reject wrong game code before mutation','retain both shader cache files','persist 30Hz and overlap defaults','set performance options','preserve original runtime and save','create expected user junction','reject mismatched warm cache','retain verified QA cache','reject differing shader catalogue','reuse matching catalogue across supported compiled libraries');fixture=$base} | ConvertTo-Json

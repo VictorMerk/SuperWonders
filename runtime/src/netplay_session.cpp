@@ -196,7 +196,8 @@ struct Session::Impl {
         if(config.players<2||config.players>kPlayers||config.probe_warmup>60||
            (config.frame_rate!=30 && config.frame_rate!=60)||config.input_lead>1||
            config.timeout<std::chrono::milliseconds(100)||config.timeout>std::chrono::minutes(5)||
-           config.frame_timeout<std::chrono::milliseconds(100)||config.frame_timeout>std::chrono::seconds(30))
+           config.frame_timeout<std::chrono::milliseconds(100)||config.frame_timeout>std::chrono::seconds(30)||
+           config.startup_timeout<std::chrono::milliseconds(100)||config.startup_timeout>std::chrono::minutes(15))
             throw std::runtime_error("Invalid LAN room settings");
         options=config; runtime=sockets(); started=true; count=config.players;
     }
@@ -392,7 +393,7 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
     // Tick 0 is the lobby's neutral exchange; tick 1 may wait while the other
     // PC loads modules and warms shaders. Only use the short deadline once
     // both games have reached their first complete framework frame.
-    const auto until=Clock::now()+(s.tick<2?s.options.timeout:s.options.frame_timeout);
+    const auto until=Clock::now()+(s.tick<2?s.options.startup_timeout:s.options.frame_timeout);
     try {
         FrameInputs frame; frame.tick=s.tick; frame.players=s.count; frame.state_hash=hash;
         frame.state=state;

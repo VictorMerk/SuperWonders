@@ -448,6 +448,7 @@ struct State {
     bool lan_open = false, lan_request_open = false;
     int lan_mode = 0, lan_port = 27846, lan_players = 2;
     char lan_address[64] = "", lan_code[65] = "";
+    bool lan_pipeline = false;
     std::vector<std::string> lan_addresses;
     std::string lan_error;
     Job job;
@@ -658,6 +659,8 @@ void draw_lan(float w,float h,float k) {
     ImGui::SetNextItemWidth(420*k); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
     if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
     ImGui::TextWrapped("Share the address, port and exact pairing code with the other players privately.");
+    ImGui::Checkbox("Overlap LAN networking (experimental)",&g->lan_pipeline);
+    ImGui::TextWrapped("Buffers one extra input frame to overlap networking with gameplay. All PCs must select the same mode. This is not zero-latency input.");
     ImGui::Separator();
     ImGui::TextWrapped("Host progress is saved normally. Joining uses a separate session copy of the host's save and preserves your own save.");
     ImGui::TextWrapped("The game starts when all players connect. Each PC uses its primary gamepad or keyboard. Choose the matching player count in Wonder.");
@@ -666,7 +669,7 @@ void draw_lan(float w,float h,float k) {
     if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
         g->lan_error.clear();
         lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
-            uint16_t(g->lan_port),uint8_t(g->lan_players)});
+            uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
     }
     if(!valid) ImGui::EndDisabled();
     ImGui::EndDisabled();
@@ -1365,9 +1368,10 @@ void run() {
         const auto* address=std::getenv("NX_LAN_ADDRESS");
         if(!address) address=g->lan_mode?"127.0.0.1":"0.0.0.0";
         std::snprintf(g->lan_address,sizeof g->lan_address,"%s",address);
+        if(const auto* pipeline=std::getenv("NX_LAN_PIPELINE")) g->lan_pipeline=std::strcmp(pipeline,"1")==0;
         if(const auto* port=std::getenv("NX_LAN_PORT")) g->lan_port=std::clamp(std::atoi(port),1,65535);
         if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
-        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players)});
+        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
     }
     uint64_t frames = 0;
     test_pad_start();  // (NX_TEST_PAD: a scripted controller, launcher/test_pad.h)

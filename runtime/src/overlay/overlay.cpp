@@ -413,6 +413,16 @@ void ensure_context() {
 }
 
 ImDrawData* build_frame(uint32_t w, uint32_t h) {
+    // Unattended shutdown regression: use the same render-thread exit path as
+    // the menu button, without depending on the current navigation focus.
+    static const uint64_t quit_frame=[] {
+        const auto* value=std::getenv("NX_TEST_QUIT_FRAME");
+        return value?std::strtoull(value,nullptr,10):uint64_t(0);
+    }();
+    if (quit_frame && g_frame.load()>=quit_frame) {
+        log("overlay: scripted render-thread shutdown at frame %llu",(unsigned long long)g_frame.load());
+        plat::exit_process(0);
+    }
     ImGuiIO& io = ImGui::GetIO();
     static uint64_t last_ns = 0;
     uint64_t now = plat::monotonic_ns();

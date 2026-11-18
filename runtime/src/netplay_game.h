@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace nx::lan {
+using TickSeedFilter=uint64_t(*)(uint64_t caller,uint64_t real_tick);
 enum class LobbyPhase { Idle, Preparing, Waiting, Ready, Failed };
 struct LobbyStatus { LobbyPhase phase = LobbyPhase::Idle; std::string detail; uint16_t listening_port = 0; };
 struct LobbyRequest {
@@ -13,6 +14,7 @@ struct LobbyRequest {
     std::string address = "127.0.0.1", code;
     uint16_t port = 27846;
     uint8_t players = 2;
+    bool pipeline = false;
 };
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 // Development opt-in. Transport success alone does not establish simulation sync.
@@ -26,6 +28,8 @@ uint64_t epoch();
 uint32_t local_player();
 TimingSnapshot timing();
 void flush_diagnostics() noexcept;
+void set_tick_seed_filter(TickSeedFilter);
+uint64_t guest_tick(uint64_t caller,uint64_t real_tick);
 std::filesystem::path user_root(const std::filesystem::path& data);
 bool start_lobby(LobbyRequest);
 void cancel_lobby();
@@ -42,6 +46,8 @@ inline uint64_t epoch() { return 0; }
 inline uint32_t local_player() { return 0; }
 inline TimingSnapshot timing() { return {}; }
 inline void flush_diagnostics() noexcept {}
+inline void set_tick_seed_filter(TickSeedFilter) {}
+inline uint64_t guest_tick(uint64_t,uint64_t real_tick) { return real_tick; }
 inline std::filesystem::path user_root(const std::filesystem::path& data) { return data/"user"; }
 inline bool start_lobby(LobbyRequest) { return false; }
 inline void cancel_lobby() {}

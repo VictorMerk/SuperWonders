@@ -19,7 +19,8 @@ This does not expand the LAN guard: it still samples the primary player, not the
 
 The underlying LAN protocol and frame barrier are unchanged by these diagnostics. A fresh two-instance route on
 the exact r7 runtime (`6b72279`) used Mario and Blue Toad with independent host movement/jumping and guest jumping,
-pause/continue and normal session exit. The partial primary-player comparison matched 2,042 valid samples with
+pause/continue, a normal host menu quit and guest termination after socket disconnect 10054. This did not verify a
+normal menu quit on both peers. The partial primary-player comparison matched 2,042 valid samples with
 zero position difference. This does not check every actor or full world state. Physical-PC testing remains pending.
 
 ![Independent Blue Toad jump beside Mario with the compact LAN panel](images/pc-preview-lan-two-characters.png)

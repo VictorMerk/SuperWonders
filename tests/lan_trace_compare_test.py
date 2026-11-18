@@ -40,6 +40,10 @@ class Comparison(unittest.TestCase):
         result = trace.compare({7: row(state_valid="1", x="nan")}, {7: row(state_valid="1")})
         self.assertIn("x", result["first_difference"]["fields"])
 
+    def test_different_input_lead_is_not_silently_aligned(self):
+        result = trace.compare({7: row(input_lead="0")}, {7: row(input_lead="1")})
+        self.assertIn("input_lead", result["first_difference"]["fields"])
+
 
 if __name__ == "__main__":
     unittest.main()

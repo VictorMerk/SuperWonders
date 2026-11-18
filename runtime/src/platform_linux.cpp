@@ -175,6 +175,8 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { pthread_exit(nullptr); }
 void exit_process(int code) {
+    static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
+    if (exiting.test_and_set()) for (;;) ::pause();
     nx::lan::flush_diagnostics();
     nx::nvn::flush_shader_bundle();
     close_controllers();

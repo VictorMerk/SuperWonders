@@ -1,0 +1,34 @@
+{
+  "scope": "Two independent native instances on loopback, shared RX 570, existing 16:9 game fixture; no whole-world or physical-network performance certification.",
+  "comparison": {
+    "overlapping_ticks": 4095,
+    "committed_pairs": 4095,
+    "valid_position_pairs": 2043,
+    "first_difference": null,
+    "limitation": "Inputs and one detected position only; character IDs, RNG, actors and world state are not verified.",
+    "exchange_wait_ms": [
+      {
+        "mean": 2.7339821044921875,
+        "p95": 16.4449,
+        "peak": 173.3764
+      },
+      {
+        "mean": 7.04216142578125,
+        "p95": 18.08,
+        "peak": 75.1834
+      }
+    ]
+  },
+  "exit": {
+    "course_route_reached": true,
+    "host_exit": 0,
+    "guest_exit": 2,
+    "input_mode": "one-frame pipeline"
+  },
+  "render_thread_exit_probe": {
+    "shutdown_probe_frame_reached": true,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "input_mode": "one-frame pipeline"
+  }
+}

@@ -131,6 +131,11 @@ void input_sample(uint64_t frame) {
     auto& sample = g_input_samples[frame%g_input_samples.size()];
     if (sample.frame != frame) sample = {frame,plat::monotonic_ns()};
 }
+void input_sample_at(uint64_t frame, uint64_t sampled_ns) {
+    if (!enabled() || !sampled_ns) return;
+    std::lock_guard lock(g_input_lock);
+    g_input_samples[frame%g_input_samples.size()]={frame,sampled_ns};
+}
 uint64_t input_sample_time(uint64_t frame) {
     if (!enabled()) return 0;
     std::lock_guard lock(g_input_lock);

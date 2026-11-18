@@ -1,5 +1,6 @@
 #include "netplay_session.h"
 #include "netplay_save.h"
+#include "netplay_pipeline.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -28,7 +29,21 @@ static nx::lan::SessionOptions options(uint8_t count) {
     out.epoch=1700000000; out.seed=0x123456789abcdef;
     out.timeout=std::chrono::seconds(5); return out;
 }
-static void roundtrip(uint8_t count) {
+static void exchange_route(nx::lan::Session& session,uint8_t count,uint8_t role,bool overlap) {
+    using namespace nx::lan;
+    if (!overlap) {
+        for(uint64_t tick=0;tick<64;++tick) verify(session.exchange(pad(role,tick),tick+1),count,tick);
+        return;
+    }
+    OneAhead<uint64_t,FrameInputs> pipeline([&](uint64_t tick) { return session.exchange(pad(role,tick),tick+1); },[&] { session.stop(); });
+    for(uint64_t tick=0;tick<64;++tick) {
+        const auto previous=pipeline.submit(tick);
+        if (tick==0) check(!previous,"pipelined session has an explicit neutral lead-in");
+        else { check(previous.has_value(),"pipelined input is available in exact order"); verify(*previous,count,tick-1); }
+    }
+    verify(*pipeline.receive(),count,63);
+}
+static void roundtrip(uint8_t count,bool overlap=false) {
     using namespace nx::lan;
     Session host; auto config=options(count);
     std::promise<uint16_t> listening; auto port=listening.get_future();
@@ -37,7 +52,7 @@ static void roundtrip(uint8_t count) {
     std::thread server([&] {
         try {
             host.host(config,[&](uint16_t number) { listening.set_value(number); });
-            for(uint64_t tick=0;tick<64;++tick) verify(host.exchange(pad(0,tick),tick+1),count,tick);
+            exchange_route(host,count,0,overlap);
         } catch(const std::exception& e) { error(e); }
     });
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"host begins listening");
@@ -55,7 +70,7 @@ static void roundtrip(uint8_t count) {
             Session client; client.join(config);
             check(client.players()==count&&client.role()>0&&client.role()<count,"client assigned an independent slot");
             check(client.epoch()==config.epoch&&client.seed()==config.seed,"all peers share the session clock origin and seed");
-            for(uint64_t tick=0;tick<64;++tick) verify(client.exchange(pad(client.role(),tick),tick+1),count,tick);
+            exchange_route(client,count,client.role(),overlap);
         } catch(const std::exception& e) { error(e); }
     });
     for(auto& client:clients) client.join(); server.join();
@@ -130,6 +145,6 @@ static void save_transfer() {
     server.join(); check(host_ok&&client_ok&&installed,"host-save transfer starts a session with matching state");
 }
 int main() {
-    roundtrip(2); roundtrip(4); divergence(); divergence(true); cancellation(); save_transfer();
-    std::puts("native LAN TCP: 2/4 peers, authentication, matching saves, shared inputs, divergence and cancellation passed");
+    roundtrip(2); roundtrip(4); roundtrip(2,true); roundtrip(4,true); divergence(); divergence(true); cancellation(); save_transfer();
+    std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

@@ -11,7 +11,7 @@
 static std::string data;
 namespace nx {
 std::atomic<uint64_t> g_frame{0};
-namespace ft { void input_sample(uint64_t) {} }
+namespace ft { void input_sample(uint64_t) {} void input_sample_at(uint64_t,uint64_t) {} }
 void log(const char*,...) {}
 void fatal(const char*,...) { std::abort(); }
 namespace game { const Info kInfo={"wonder","test",0,"test","",0}; }
@@ -20,6 +20,7 @@ std::string data_root() { return data; }
 uint64_t monotonic_ns() { return uint64_t(std::chrono::steady_clock::now().time_since_epoch().count()); }
 void read_pad(PadState&) {}
 void controller_force_primary(bool) {}
+void sleep_ns(int64_t ns) { std::this_thread::sleep_for(std::chrono::nanoseconds(ns)); }
 bool headless() { return true; }
 void exit_process(int) { std::abort(); }
 }

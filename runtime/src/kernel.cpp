@@ -17,6 +17,7 @@
 
 #include "kernel_state.h"
 #include "platform.h"
+#include "netplay_game.h"
 
 namespace nx {
 
@@ -112,7 +113,7 @@ static void hle_get_system_tick(CPU& c) {
         }
         t->last_tick_call = plat::monotonic_ns();
     }
-    c.x[0] = system_tick();
+    c.x[0] = lan::guest_tick(c.x[30],system_tick());
 }
 NX_HLE("_ZN2nn2os13GetSystemTickEv", hle_get_system_tick);
 

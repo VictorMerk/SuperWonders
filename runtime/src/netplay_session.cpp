@@ -268,7 +268,7 @@ void Session::host(const SessionOptions& options,const std::function<void(uint16
                    (hello.payload.size()!=64 && !(hello.payload.size()==65 && hello.payload.back()==1)) ||
                    !std::equal(options.build.begin(),options.build.end(),hello.payload.begin()) ||
                    (!transfer && !std::equal(options.save.begin(),options.save.end(),hello.payload.begin()+32)))
-                    throw std::runtime_error("LAN build or save differs");
+                    throw std::runtime_error("LAN build, input mode or save differs");
                 std::vector<uint8_t> welcome{role,s.count,0,0,0,0,0,0};
                 welcome[2]=transfer?1:0;
                 append64(welcome,s.common_epoch); append64(welcome,s.common_seed);

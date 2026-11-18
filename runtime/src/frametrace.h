@@ -50,6 +50,8 @@ public:
 // Diagnostic proxy only: first HID sample for a game frame -> host present.
 // Excludes device polling and the display's scanout/pixel response.
 void input_sample(uint64_t game_frame);
+// Buffered LAN inputs retain the original sampling time when applied later.
+void input_sample_at(uint64_t game_frame, uint64_t sampled_ns);
 uint64_t input_sample_time(uint64_t game_frame);
 // The game's present (nvnQueuePresentTexture, on the game's thread): replay_wait_ns is the time it waited for the
 // replay of an earlier frame (at most two queued), pace_ns the time it waited for the vsync pacing.

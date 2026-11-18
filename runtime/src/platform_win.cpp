@@ -94,10 +94,16 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
+    static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
+    if (exiting.test_and_set()) for (;;) Sleep(INFINITE);
     nx::lan::flush_diagnostics();
+    nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
+    nx::log("shutdown: shader bundle flushed");
     close_controllers();
+    nx::log("shutdown: controllers closed");
     nx::nvn::flush_pipeline_cache();
+    nx::log("shutdown: pipeline cache flush completed");
     std::fflush(nullptr);  // includes replay/probe logs; ExitProcess does not run C stdio shutdown.
     ExitProcess(UINT(code));
 }
@@ -882,8 +888,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         }
         case WM_CLOSE:
             log("window closed");
-            nx::nvn::flush_pipeline_cache();
-            ExitProcess(0);
+            exit_process(0);
+            return 0;
         case WM_KEYDOWN:
             if ((w == VK_F1 || w == VK_ESCAPE) && !(l & (1ll << 30))) {
                 if (overlay::enabled())

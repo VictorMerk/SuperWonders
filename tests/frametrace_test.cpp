@@ -32,6 +32,10 @@ int main() {
     check(input_sample_time(7)==100000000,"repeat HID reads retain the first sample");
     now = 103000000; input_sample(8);
     check(input_sample_time(7)==100000000 && input_sample_time(9)==0,"frame IDs remain distinct");
+    input_sample_at(9,90000000);
+    check(input_sample_time(9)==90000000,"buffered inputs retain their real sampling age");
+    input_sample_at(9,0);
+    check(input_sample_time(9)==90000000,"neutral lead-in does not invent a sample timestamp");
     now = 104000000;
     { CallTimer timer(TimedCall::Logging); now = 106000000; }
     { CallTimer timer(TimedCall::Logging); now = 107000000; }

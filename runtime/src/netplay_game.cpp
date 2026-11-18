@@ -2,6 +2,7 @@
 #include "netplay_session.h"
 #include "netplay_save.h"
 #include "netplay_trace.h"
+#include "netplay_pipeline.h"
 #include "controllers.h"
 #include "play.h"
 #include "frametrace.h"
@@ -30,6 +31,8 @@ namespace fs = std::filesystem;
 std::atomic<Session*> session{nullptr};  // live gameplay connection remains valid until process shutdown
 std::mutex connection_lock;
 std::atomic<bool> running{false};
+std::atomic<bool> stopping{false};
+constinit std::atomic<TickSeedFilter> tick_seed_filter{nullptr};
 std::mutex input_lock;
 FrameInputs inputs;
 LockstepTiming lockstep_timing;
@@ -38,12 +41,19 @@ uint64_t current_epoch = 0, current_seed = 0;
 uint32_t role = 0, count = 0;
 InputTrace<>& input_trace = *new InputTrace<>;
 std::atomic<bool> trace_started{false};
+struct RecordedExchange { FrameInputs inputs; uint64_t sampled_ns, partial_hash; bool position_valid; };
+using ExchangePipeline=OneAhead<TraceEntry,RecordedExchange>;
+ExchangePipeline* exchange_pipeline=nullptr;
+uint64_t scheduled_tick=1;
+std::atomic<bool> use_pipeline{false};
+bool pipeline_enabled() { return use_pipeline.load(); }
+
 void dump_trace() noexcept {
     if (!trace_started.load()) return;
     try {
         const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
         std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
-        input_trace.write(out,role,current_seed);
+        input_trace.write(out,role,current_seed,pipeline_enabled()?1:0);
         if (!out) log("lan: could not save the diagnostic input trace");
     } catch (...) { log("lan: could not save the diagnostic input trace"); }
 }
@@ -58,7 +68,7 @@ void status(LobbyPhase phase,std::string detail,uint16_t port=0) {
 }
 void register_shutdown() {
     static const bool registered=[] {
-        std::atexit([] { std::lock_guard lock(connection_lock); if(auto* connection=session.load()) connection->stop(); dump_trace(); });
+        std::atexit([] { flush_diagnostics(); });
         return true;
     }();
 }
@@ -102,6 +112,8 @@ Fingerprint fingerprint(const fs::path& data) {
     {
         constexpr char revision[] = "Wonder lockstep development 1; " NX_VERSION_STRING;
         uc_sha256_update(&hash,revision,sizeof revision);
+        const uint8_t input_lead=pipeline_enabled()?1:0;
+        uc_sha256_update(&hash,&input_lead,sizeof input_lead);
         hash_file(hash,data/"analysis"/"main.bin"); hash_file(hash,data/"analysis"/"sdk.bin");
         hash_file(hash,data/"game"/"build-id.txt");
         hash_tree(hash,data/"mods",1ull<<30);
@@ -130,6 +142,9 @@ void isolate_client_save(const fs::path& data) {
     throw std::runtime_error("Could not create an isolated LAN client profile");
 }
 [[noreturn]] void end_session(const std::string& reason) {
+    // A voluntary process shutdown already owns cleanup. Cancelling its pending
+    // input exchange must not launch another cleanup or write a spurious error.
+    if (stopping.load()) for (;;) plat::sleep_ns(1'000'000'000);
     log("lan: session ended: %s",reason.c_str());
     dump_trace();  // headless exit and platform shutdown need not run atexit
     if(plat::headless()) plat::exit_process(2);
@@ -159,32 +174,46 @@ void isolate_client_save(const fs::path& data) {
 #endif
     plat::exit_process(0);
 }
-void exchange() {
-    plat::PadState local{};
-    plat::read_pad(local); play::pad(local);
-    ft::input_sample(g_frame);  // includes the following network barrier in diagnostic latency
-    TraceEntry entry;
-    entry.tick=inputs.tick+1; entry.frame=g_frame.load(); entry.local=local;
-    entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
-    const auto started = plat::monotonic_ns();
-    try { inputs = session.load()->exchange(local,0,entry.state); }
-    catch (const std::exception& e) {
+RecordedExchange perform_exchange(TraceEntry entry) {
+    const auto started=plat::monotonic_ns();
+    FrameInputs agreed;
+    try { agreed=session.load()->exchange(entry.local,0,entry.state); }
+    catch (...) {
         entry.wait_ns=plat::monotonic_ns()-started;
         input_trace.push(entry);
-        running = false;
-        end_session(e.what());
+        throw;
     }
-    entry.tick=inputs.tick; entry.agreed=inputs; entry.committed=true;
+    entry.tick=agreed.tick; entry.agreed=agreed; entry.committed=true;
     entry.wait_ns=plat::monotonic_ns()-started;
     input_trace.push(entry);
-    lockstep_timing.record(entry.wait_ns);
+    return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid};
+}
+void exchange() {
+    TraceEntry entry;
+    plat::read_pad(entry.local); play::pad(entry.local);
+    entry.sampled_ns=plat::monotonic_ns();
+    entry.tick=scheduled_tick++; entry.frame=g_frame.load();
+    entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
+    const auto started=plat::monotonic_ns();
+    std::optional<RecordedExchange> completed;
+    try {
+        if (exchange_pipeline) completed=exchange_pipeline->submit(entry);
+        else completed=perform_exchange(entry);
+    } catch (const std::exception& e) {
+        running=false;
+        end_session(e.what());
+    }
+    lockstep_timing.record(plat::monotonic_ns()-started);
+    if (!completed) return;  // explicit additional neutral frame for the one-frame lead
+    inputs=completed->inputs;
+    ft::input_sample_at(g_frame,completed->sampled_ns);
     if (inputs.tick % 600 == 0) {
         log("lan: synchronized input tick %llu, local player %u of %u, partial player-state hash %llx",
-            (unsigned long long)inputs.tick,role+1,count,(unsigned long long)play::netplay_state_hash());
-        const auto stats = lockstep_timing.snapshot();
+            (unsigned long long)inputs.tick,role+1,count,(unsigned long long)completed->partial_hash);
+        const auto stats=lockstep_timing.snapshot();
         log("lan: input barrier %.2f ms smoothed, %.2f ms peak, %llu waits over 50 ms (not network RTT)",
-            stats.smoothed_ms, stats.peak_ms, (unsigned long long)stats.waits_over_50_ms);
-        if (!entry.state.valid)
+            stats.smoothed_ms,stats.peak_ms,(unsigned long long)stats.waits_over_50_ms);
+        if (!completed->position_valid)
             log("lan: partial position guard unavailable; character choices and world state are not verified");
     }
 }
@@ -192,6 +221,7 @@ void exchange() {
 namespace {
 void connect_game(const LobbyRequest& request) {
     if (std::string(game::kInfo.id)!="wonder") throw std::runtime_error("Native LAN currently supports Wonder only");
+    use_pipeline=request.pipeline || value("NX_LAN_PIPELINE")=="1";
     const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
     isolated_user.clear();
     SessionOptions options;
@@ -233,6 +263,12 @@ void connect_game(const LobbyRequest& request) {
     // sampled on this background thread and cannot leak into the game's input.
     inputs=connection->exchange({});
     input_trace.reset(); trace_started=true;
+    scheduled_tick=inputs.tick+1;
+    if (pipeline_enabled()) {
+        exchange_pipeline=new ExchangePipeline(perform_exchange,[] { if(auto* connection=session.load()) connection->stop(); });
+        log("lan: experimental one-frame input lead; network exchange overlaps simulation; not zero input latency");
+    }
+
     plat::controller_force_primary(true);
     running=true;
     status(LobbyPhase::Ready,"All players connected. Starting Wonder...");
@@ -279,6 +315,11 @@ void cancel_lobby() {
 }
 LobbyStatus lobby_status() { std::lock_guard lock(lobby().lock); return lobby().status; }
 bool active() { return running.load(); }
+void set_tick_seed_filter(TickSeedFilter filter) { tick_seed_filter.store(filter,std::memory_order_release); }
+uint64_t guest_tick(uint64_t caller,uint64_t real_tick) {
+    if (active()) if (auto filter=tick_seed_filter.load(std::memory_order_acquire)) return filter(caller,real_tick);
+    return real_tick;
+}
 bool connected(uint32_t player) { return active() && player<count; }
 plat::PadState pad(uint32_t player) {
     std::lock_guard guard(input_lock);
@@ -289,6 +330,12 @@ uint64_t seed() { return current_seed; }
 uint64_t epoch() { return current_epoch; }
 uint32_t local_player() { return role; }
 TimingSnapshot timing() { return lockstep_timing.snapshot(); }
-void flush_diagnostics() noexcept { dump_trace(); }
+void flush_diagnostics() noexcept {
+    stopping=true; running=false;
+    std::lock_guard guard(connection_lock);
+    if (auto* connection=session.load()) connection->stop();
+    if (exchange_pipeline) exchange_pipeline->stop();
+    dump_trace();
+}
 fs::path user_root(const fs::path& data) { return isolated_user.empty() ? data/"user" : isolated_user; }
 }

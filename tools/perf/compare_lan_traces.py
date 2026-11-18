@@ -40,6 +40,8 @@ def compare(left, right):
             report["committed_pairs"] += 1
             fields += ["players", *PAD_FIELDS]
         differences = {key: [a[key], b[key]] for key in fields if a[key] != b[key]}
+        if a.get("input_lead", "0") != b.get("input_lead", "0"):
+            differences["input_lead"] = [a.get("input_lead", "0"), b.get("input_lead", "0")]
         if a["state_valid"] == b["state_valid"] == "1":
             report["valid_position_pairs"] += 1
             if a["scene"] != b["scene"]:
@@ -50,10 +52,10 @@ def compare(left, right):
                     differences[axis] = [a[axis], b[axis]]
         if differences and report["first_difference"] is None:
             report["first_difference"] = {"tick": tick, "fields": differences}
-    report["wait_ms"] = []
+    report["exchange_wait_ms"] = []
     for rows in (left, right):
         waits = sorted(int(row["wait_ns"]) / 1e6 for row in rows.values())
-        report["wait_ms"].append({"mean": sum(waits) / len(waits),
+        report["exchange_wait_ms"].append({"mean": sum(waits) / len(waits),
                                   "p95": waits[min(len(waits) - 1, int(len(waits) * .95))],
                                   "peak": waits[-1]})
     return report

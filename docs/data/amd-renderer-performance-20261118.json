@@ -1,0 +1,503 @@
+{
+  "device": "Radeon RX 570 Series",
+  "scope": "Windows; GPU and CPU operations are not whole-game FPS",
+  "gpu_probe": {
+    "case_order": [
+      0,
+      1,
+      2,
+      3,
+      10,
+      17,
+      5,
+      12,
+      19,
+      9,
+      16,
+      23
+    ],
+    "dimensions": [
+      1920,
+      1080
+    ],
+    "sample_order": "ABBAAB",
+    "validation": false,
+    "includes": "two captures, interpolation and output readback",
+    "comparisons": [
+      {
+        "candidate": "combined",
+        "factor": 2,
+        "scene": "cut",
+        "baseline_ms": 15.483,
+        "candidate_ms": 12.612,
+        "reduction_pct": 18.542918039139703,
+        "baseline_samples": [
+          15.545,
+          15.307,
+          15.483
+        ],
+        "candidate_samples": [
+          12.612,
+          12.623,
+          12.363
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 2,
+        "scene": "moving",
+        "baseline_ms": 7.741,
+        "candidate_ms": 7.133,
+        "reduction_pct": 7.854282392455751,
+        "baseline_samples": [
+          7.72,
+          7.751,
+          7.741
+        ],
+        "candidate_samples": [
+          7.142,
+          7.133,
+          7.104
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 2,
+        "scene": "still",
+        "baseline_ms": 11.386,
+        "candidate_ms": 11.158,
+        "reduction_pct": 2.002459160372385,
+        "baseline_samples": [
+          11.543,
+          11.219,
+          11.386
+        ],
+        "candidate_samples": [
+          10.925,
+          11.158,
+          11.372
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 4,
+        "scene": "cut",
+        "baseline_ms": 18.75,
+        "candidate_ms": 16.174,
+        "reduction_pct": 13.738666666666667,
+        "baseline_samples": [
+          18.75,
+          19.19,
+          17.67
+        ],
+        "candidate_samples": [
+          16.307,
+          16.168,
+          16.174
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 4,
+        "scene": "moving",
+        "baseline_ms": 10.031,
+        "candidate_ms": 9.731,
+        "reduction_pct": 2.990728740903207,
+        "baseline_samples": [
+          10.031,
+          10.22,
+          9.602
+        ],
+        "candidate_samples": [
+          9.731,
+          9.352,
+          9.748
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 4,
+        "scene": "still",
+        "baseline_ms": 13.296,
+        "candidate_ms": 13.03,
+        "reduction_pct": 2.0006016847172083,
+        "baseline_samples": [
+          13.169,
+          13.359,
+          13.296
+        ],
+        "candidate_samples": [
+          13.03,
+          12.829,
+          13.063
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 8,
+        "scene": "cut",
+        "baseline_ms": 25.286,
+        "candidate_ms": 22.3,
+        "reduction_pct": 11.80890611405521,
+        "baseline_samples": [
+          25.286,
+          25.076,
+          25.451
+        ],
+        "candidate_samples": [
+          22.3,
+          22.175,
+          22.4
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 8,
+        "scene": "moving",
+        "baseline_ms": 13.037,
+        "candidate_ms": 12.626,
+        "reduction_pct": 3.1525657743345965,
+        "baseline_samples": [
+          13.029,
+          13.316,
+          13.037
+        ],
+        "candidate_samples": [
+          12.626,
+          12.626,
+          12.725
+        ]
+      },
+      {
+        "candidate": "combined",
+        "factor": 8,
+        "scene": "still",
+        "baseline_ms": 14.993,
+        "candidate_ms": 14.717,
+        "reduction_pct": 1.8408590675648622,
+        "baseline_samples": [
+          14.993,
+          15.175,
+          14.492
+        ],
+        "candidate_samples": [
+          14.83,
+          14.717,
+          14.618
+        ]
+      }
+    ]
+  },
+  "writeback_cpu": {
+    "source": "GPU-filled coherent uncached mapping",
+    "memory_type_flags": 6,
+    "bytes_processed_per_sample": 8388608,
+    "sample_order": "ABBAABBA",
+    "comparisons": [
+      {
+        "pattern": 0,
+        "bytes": 256,
+        "old_ms": 168.30455,
+        "new_ms": 84.0392,
+        "speedup": 2.0026910061019145,
+        "old_samples": [
+          168.233,
+          168.3761,
+          167.9601,
+          169.5339
+        ],
+        "new_samples": [
+          84.0642,
+          84.0142,
+          84.1785,
+          83.9329
+        ]
+      },
+      {
+        "pattern": 0,
+        "bytes": 4096,
+        "old_ms": 120.46505,
+        "new_ms": 62.3992,
+        "speedup": 1.9305543981333095,
+        "old_samples": [
+          120.3116,
+          120.3165,
+          120.7156,
+          120.6136
+        ],
+        "new_samples": [
+          62.5465,
+          62.7832,
+          62.2519,
+          61.5466
+        ]
+      },
+      {
+        "pattern": 0,
+        "bytes": 65536,
+        "old_ms": 120.59215,
+        "new_ms": 59.700450000000004,
+        "speedup": 2.019953785942987,
+        "old_samples": [
+          120.9167,
+          120.7838,
+          120.1755,
+          120.4005
+        ],
+        "new_samples": [
+          59.9744,
+          59.9076,
+          59.4933,
+          59.436
+        ]
+      },
+      {
+        "pattern": 0,
+        "bytes": 1048576,
+        "old_ms": 120.3604,
+        "new_ms": 59.8456,
+        "speedup": 2.011182108626198,
+        "old_samples": [
+          120.4375,
+          120.1833,
+          120.2833,
+          121.2026
+        ],
+        "new_samples": [
+          59.4544,
+          59.5243,
+          60.1669,
+          60.3187
+        ]
+      },
+      {
+        "pattern": 1,
+        "bytes": 256,
+        "old_ms": 199.64665,
+        "new_ms": 84.00935000000001,
+        "speedup": 2.3764813083305603,
+        "old_samples": [
+          199.7747,
+          199.6299,
+          199.6634,
+          199.4795
+        ],
+        "new_samples": [
+          83.9452,
+          83.9543,
+          84.0644,
+          84.7876
+        ]
+      },
+      {
+        "pattern": 1,
+        "bytes": 4096,
+        "old_ms": 120.66465,
+        "new_ms": 61.9895,
+        "speedup": 1.9465336871566958,
+        "old_samples": [
+          121.5287,
+          120.6002,
+          120.1868,
+          120.7291
+        ],
+        "new_samples": [
+          62.3095,
+          62.2189,
+          61.574,
+          61.7601
+        ]
+      },
+      {
+        "pattern": 1,
+        "bytes": 65536,
+        "old_ms": 118.3792,
+        "new_ms": 59.104749999999996,
+        "speedup": 2.002871173636637,
+        "old_samples": [
+          119.6737,
+          117.4066,
+          117.5963,
+          119.1621
+        ],
+        "new_samples": [
+          60.4454,
+          59.0529,
+          58.8124,
+          59.1566
+        ]
+      },
+      {
+        "pattern": 1,
+        "bytes": 1048576,
+        "old_ms": 118.9713,
+        "new_ms": 59.73935,
+        "speedup": 1.991506435875181,
+        "old_samples": [
+          118.527,
+          119.4156,
+          119.7138,
+          118.5024
+        ],
+        "new_samples": [
+          59.2895,
+          59.771,
+          60.1162,
+          59.7077
+        ]
+      },
+      {
+        "pattern": 2,
+        "bytes": 256,
+        "old_ms": 842.13905,
+        "new_ms": 84.0247,
+        "speedup": 10.022517783461293,
+        "old_samples": [
+          842.297,
+          841.884,
+          842.1204,
+          842.1577
+        ],
+        "new_samples": [
+          84.0004,
+          84.049,
+          83.937,
+          84.1675
+        ]
+      },
+      {
+        "pattern": 2,
+        "bytes": 4096,
+        "old_ms": 601.93175,
+        "new_ms": 62.6903,
+        "speedup": 9.601672826577635,
+        "old_samples": [
+          602.2548,
+          602.5002,
+          601.6087,
+          601.3235
+        ],
+        "new_samples": [
+          62.7266,
+          62.6939,
+          62.6867,
+          61.9896
+        ]
+      },
+      {
+        "pattern": 2,
+        "bytes": 65536,
+        "old_ms": 594.6460999999999,
+        "new_ms": 60.24095,
+        "speedup": 9.871127530359331,
+        "old_samples": [
+          594.5834,
+          593.701,
+          595.8121,
+          594.7088
+        ],
+        "new_samples": [
+          60.1963,
+          60.2147,
+          60.2672,
+          60.2893
+        ]
+      },
+      {
+        "pattern": 2,
+        "bytes": 1048576,
+        "old_ms": 607.05565,
+        "new_ms": 61.05545,
+        "speedup": 9.942693895467153,
+        "old_samples": [
+          606.6525,
+          610.1574,
+          607.4588,
+          595.7702
+        ],
+        "new_samples": [
+          62.3561,
+          61.7477,
+          60.3391,
+          60.3632
+        ]
+      }
+    ]
+  },
+  "course": {
+    "scene": "Course004_Course",
+    "relative_frames": [
+      200,
+      1100
+    ],
+    "settings": {
+      "width": 1920,
+      "height": 1080,
+      "internal_resolution": 0,
+      "low_vram_profile": 0,
+      "framegen_multiplier": 2
+    },
+    "runs": [
+      {
+        "label": "course-a1",
+        "frames": 900,
+        "average_original_fps": 58.25,
+        "low1_fps": 51.82,
+        "p99_ms": 18.5,
+        "over_50_ms": 0,
+        "skipped": 0.0
+      },
+      {
+        "label": "course-b1",
+        "frames": 900,
+        "average_original_fps": 58.38,
+        "low1_fps": 55.68,
+        "p99_ms": 17.69,
+        "over_50_ms": 0,
+        "skipped": 0.0
+      },
+      {
+        "label": "course-b2",
+        "frames": 900,
+        "average_original_fps": 58.17,
+        "low1_fps": 41.56,
+        "p99_ms": 18.22,
+        "over_50_ms": 1,
+        "skipped": 0.0
+      },
+      {
+        "label": "course-a2",
+        "frames": 900,
+        "average_original_fps": 58.06,
+        "low1_fps": 46.86,
+        "p99_ms": 20.47,
+        "over_50_ms": 0,
+        "skipped": 0.0
+      }
+    ],
+    "conclusion": "No established average-FPS or overall hitch-rate gain; one candidate interval remains unexplained."
+  },
+  "normal_endurance": {
+    "course_seconds": 1200,
+    "normal_exit": true,
+    "private_peak_gib": 5.054088592529297,
+    "last_ten_minutes_private_min_gib": 5.041046142578125,
+    "last_ten_minutes_private_max_gib": 5.054088592529297,
+    "errors": {
+      "device_lost": 0,
+      "gpu_hung": 0,
+      "allocation_failure": 0,
+      "pipeline_failure": 0
+    }
+  },
+  "validation_endurance": {
+    "course_seconds": 900,
+    "normal_exit": true,
+    "layer_loaded": true,
+    "validation_errors": 0
+  },
+  "cpu_suite": {
+    "main_tests_passed": 51,
+    "r8_targeted_tests_passed": 3
+  }
+}

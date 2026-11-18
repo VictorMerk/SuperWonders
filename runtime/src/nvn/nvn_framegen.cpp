@@ -356,6 +356,17 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         log("framegen probe pattern: %s%s",pattern,probe.compare_only ? " (opaque readback only; compare against reference hashes)" : "");
     auto picture = [&](float shift) {
         std::vector<uint8_t> pixels(bytes);
+        // Exact integer horizontal shifts need no interpolation. Keep the QA
+        // generator cheap enough that broad shader comparisons spend their time
+        // on the GPU checks rather than millions of redundant host round calls.
+        if (!diagonal && !hud && !occlusion && shift == std::floor(shift)) {
+            const int dx = int(shift);
+            for (uint32_t y=0;y<height;++y) for (uint32_t x=0;x<width;++x) {
+                const auto c = colour(int(x)-dx,y);
+                std::memcpy(pixels.data()+(size_t(y)*width+x)*4,c.data(),4);
+            }
+            return pixels;
+        }
         const int left = occlusion ? int(width/3)+int(std::lround(shift*2)) : 0;
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
             const float source = float(x)-shift*(fractional ? .84375f : 1.0f);

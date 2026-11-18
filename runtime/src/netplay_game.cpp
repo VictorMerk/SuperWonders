@@ -1,5 +1,6 @@
 #include "profiles.h"
 #include "netplay_game.h"
+#include "netplay_content.h"
 #include "netplay_session.h"
 #include "netplay_save.h"
 #include "netplay_trace.h"
@@ -80,56 +81,17 @@ void register_shutdown() {
 std::string value(const char* name, const char* fallback = "") {
     const auto* e = std::getenv(name); return e ? e : fallback;
 }
-void hash_file(UcSha256& hash, const fs::path& path) {
-    std::ifstream in(path,std::ios::binary);
-    if (!in) throw std::runtime_error("Could not read LAN compatibility data");
-    std::array<char,65536> block{};
-    while (in) {
-        in.read(block.data(),block.size());
-        if (in.gcount()) uc_sha256_update(&hash,block.data(),size_t(in.gcount()));
-    }
-    if (!in.eof()) throw std::runtime_error("Reading LAN compatibility data failed");
-}
-void hash_tree(UcSha256& hash, const fs::path& root, uint64_t limit) {
-    if (!fs::exists(root)) return;
-    std::vector<fs::path> files;
-    uint64_t total = 0;
-    for (const auto& entry : fs::recursive_directory_iterator(root)) {
-        if (entry.is_symlink()) throw std::runtime_error("LAN compatibility folders cannot contain symbolic links");
-        if (!entry.is_regular_file()) continue;
-        const auto size = entry.file_size();
-        if (size > limit-total || files.size() >= 65536) throw std::runtime_error("LAN compatibility data exceeds the supported limit");
-        total += size; files.push_back(fs::relative(entry.path(),root));
-    }
-    std::sort(files.begin(),files.end());
-    for (const auto& file : files) {
-        const auto name = file.generic_u8string();
-        // Include canonical path and length boundaries, never filesystem metadata.
-        std::array<uint8_t,16> sizes{};
-        uint64_t n = name.size(), size = fs::file_size(root/file);
-        for (int i=0;i<8;++i) { sizes[i]=uint8_t(n); n>>=8; sizes[i+8]=uint8_t(size); size>>=8; }
-        uc_sha256_update(&hash,sizes.data(),sizes.size());
-        uc_sha256_update(&hash,name.data(),name.size()); hash_file(hash,root/file);
-    }
-}
 Fingerprint fingerprint(const fs::path& data) {
-    UcSha256 hash; uc_sha256_init(&hash);
-    {
-        constexpr char revision[] = "Wonder lockstep development 2; " NX_VERSION_STRING;
-        uc_sha256_update(&hash,revision,sizeof revision);
-        hash_file(hash,data/"analysis"/"main.bin"); hash_file(hash,data/"analysis"/"sdk.bin");
-        hash_file(hash,data/"game"/"build-id.txt");
-        hash_tree(hash,data/"mods",1ull<<30);
 #if defined(_WIN32)
-        std::wstring executable(32768,L'\0');
-        const auto n=GetModuleFileNameW(nullptr,executable.data(),DWORD(executable.size()));
-        if(!n || n>=executable.size()) throw std::runtime_error("Could not identify the LAN runtime build");
-        executable.resize(n); hash_file(hash,fs::path(executable));
+    std::wstring executable(32768,L'\0');
+    const auto n=GetModuleFileNameW(nullptr,executable.data(),DWORD(executable.size()));
+    if(!n || n>=executable.size()) throw std::runtime_error("Could not identify the LAN runtime build");
+    executable.resize(n);
+    const auto runtime=fs::path(executable);
 #else
-        hash_file(hash,fs::read_symlink("/proc/self/exe"));
+    const auto runtime=fs::read_symlink("/proc/self/exe");
 #endif
-    }
-    Fingerprint result{}; uc_sha256_final(&hash,result.data()); return result;
+    return content_fingerprint(data,runtime,NX_VERSION_STRING,value("NX_ASPECT_PROFILE"));
 }
 void isolate_client_save(const fs::path& data) {
     const auto sessions = data/"lan-sessions";

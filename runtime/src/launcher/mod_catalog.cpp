@@ -1,4 +1,5 @@
 #include "mod_catalog.h"
+#include "mod_overlay.h"
 #include <algorithm>
 #include <map>
 #if defined(_WIN32)
@@ -45,15 +46,8 @@ std::vector<ModInfo> inspect_mods(const fs::path& root) {
     for (auto& m : mods) {
         if (!m.issue.empty()) continue;
         const auto dir = root/fs::u8path(m.on ? m.name : "-"+m.name);
-        ec.clear();
-        for (fs::recursive_directory_iterator it(dir,ec), end; !ec && it != end; it.increment(ec)) {
-            if (++visited > 100000) { m.issue = "Inspection limit reached; report may be incomplete."; break; }
-            if (it.depth() >= 3 || link(*it)) it.disable_recursion_pending();
-            if (!link(*it) && it->is_directory(ec) && key(text(it->path().filename())) == "romfs") {
-                m.romfs = it->path(); break;
-            }
-        }
-        if (ec) { m.issue = "Could not inspect folder: "+ec.message(); continue; }
+        try { m.romfs=nx::mods::find_romfs(dir); }
+        catch(const std::exception& error) { m.issue=error.what(); continue; }
         if (m.romfs.empty()) {
             if (m.issue.empty()) m.issue = "No romfs folder found: this mod will not load.";
             continue;

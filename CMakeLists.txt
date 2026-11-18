@@ -124,9 +124,20 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(spirv_nan_test tests/spirv_nan_test.cpp)
     target_include_directories(spirv_nan_test PRIVATE runtime/src/nvn)
     add_test(NAME spirv_nan COMMAND spirv_nan_test)
-    add_executable(mod_catalog_test tests/mod_catalog_test.cpp runtime/src/launcher/mod_catalog.cpp)
+    add_executable(mod_catalog_test tests/mod_catalog_test.cpp runtime/src/launcher/mod_catalog.cpp runtime/src/mod_overlay.cpp)
     target_include_directories(mod_catalog_test PRIVATE runtime/src)
     add_test(NAME mod_catalog COMMAND mod_catalog_test)
+    add_executable(mod_overlay_test tests/mod_overlay_test.cpp runtime/src/mod_overlay.cpp)
+    target_include_directories(mod_overlay_test PRIVATE runtime/src)
+    add_test(NAME mod_overlay COMMAND mod_overlay_test)
+    add_executable(player_probe_layout_test tests/player_probe_layout_test.cpp)
+    target_include_directories(player_probe_layout_test PRIVATE runtime/src)
+    add_test(NAME player_probe_layout COMMAND player_probe_layout_test)
+    add_executable(mod_lookup_bench EXCLUDE_FROM_ALL tools/perf/mod_lookup_bench.cpp runtime/src/mod_overlay.cpp)
+    target_include_directories(mod_lookup_bench PRIVATE runtime/src)
+    add_executable(netplay_content_test tests/netplay_content_test.cpp runtime/src/netplay_content.cpp runtime/src/mod_overlay.cpp runtime/src/launcher/update_crypto.c)
+    target_include_directories(netplay_content_test PRIVATE runtime/src)
+    add_test(NAME netplay_content COMMAND netplay_content_test)
     add_executable(game_source_test tests/game_source_test.cpp runtime/src/launcher/game_source.cpp)
     target_include_directories(game_source_test PRIVATE runtime/src)
     add_test(NAME game_source COMMAND game_source_test)
@@ -235,7 +246,7 @@ if(NX_TESTS AND NOT ANDROID)
         if(WIN32)
             target_link_libraries(netplay_latency_bench PRIVATE ws2_32)
         endif()
-        add_executable(netplay_lobby_test tests/netplay_lobby_test.cpp runtime/src/profiles.cpp runtime/src/netplay_game.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
+        add_executable(netplay_lobby_test runtime/src/netplay_content.cpp runtime/src/mod_overlay.cpp tests/netplay_lobby_test.cpp runtime/src/profiles.cpp runtime/src/netplay_game.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
         target_include_directories(netplay_lobby_test PRIVATE runtime/include runtime/src)
         target_compile_definitions(netplay_lobby_test PRIVATE NX_VERSION_STRING="test")
         if(WIN32)
@@ -431,6 +442,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/svc_misc.cpp
     runtime/src/svc_time.cpp
     runtime/src/svc_process.cpp
+    runtime/src/mod_overlay.cpp
     runtime/src/hle_fs.cpp
     runtime/src/stream_cache.cpp
     runtime/src/svc_account.cpp
@@ -541,7 +553,7 @@ set_source_files_properties(runtime/src/overlay/overlay_vk.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_VULKAN_NO_PROTOTYPES")
 file(GLOB NX_GAME_SOURCES CONFIGURE_DEPENDS "${NX_GAME_DIR}/*.cpp")
 if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-    list(APPEND NX_RUNTIME_SOURCES runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/netplay_game.cpp)
+    list(APPEND NX_RUNTIME_SOURCES runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/netplay_game.cpp runtime/src/netplay_content.cpp)
     if(NOT NX_GAME_LIBRARY)
         list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/update_crypto.c)
     endif()

@@ -10,6 +10,7 @@
 // of a segment count from its anchor, and a segment only starts when its anchor happens.
 #include "play.h"
 #include "netplay_probe.h"
+#include "player_probe_layout.h"
 #include "netplay_game.h"
 #include "resident_scan.h"
 
@@ -394,10 +395,7 @@ void init() {
 // The player object is found by its vtable (the main module sits at a fixed address, so its vtables do too) and the
 // position read at a fixed offset in it. Found once with the scanner below (docs/PLAY-TOOLS.md, "Finding the
 // player"); NX_PROBE_PLAYER="vt=<hex>,pos=<hex>[,vel=<hex>]" overrides the built-in layout for another version.
-struct Layout {
-    uint64_t vt = 0;
-    uint32_t pos = 0, vel = 0;
-};
+using Layout=PlayerProbeLayout;
 Layout g_layout;
 
 // The player's track for the bot: x and y of the last frames (valid ones only), newest at g_track_n - 1.
@@ -466,7 +464,11 @@ Layout layout() {
     // Built in, for Wonder 1.0.0 (found with tools/play/routes/scan-player.frames, docs/PLAY-TOOLS.md): the course
     // player object has the vtable main+0x96e400 (one live object; player 2's slot is another class) and its
     // position (x, y, z; blocks, y up) at +0xc00.
-    Layout l{kModuleBase + 0x96e400, 0xc00, 0};
+    const auto* module=module_at(kModuleBase);
+    const auto* identity=module && module->info?module->info->build_id:nullptr;
+    Layout l=verified_player_layout(identity?identity:"",kModuleBase);
+    if(!l.vt && !std::getenv("NX_PROBE_PLAYER"))
+        log("play: no verified player-position layout for this source; input synchronization remains available");
     if (const char* e = std::getenv("NX_PROBE_PLAYER")) {
         for (const std::string& kv : split(e, ',')) {
             size_t eq = kv.find('=');

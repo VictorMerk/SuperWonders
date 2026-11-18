@@ -1,0 +1,15 @@
+{
+  "scope": "RX 570, 720p, FG 2x, 60 Hz cap; hidden-presented original-picture cadence; one idle course scene, seconds 60-110",
+  "order": "ABBA",
+  "baseline": "previous verified 955a914 runtime",
+  "candidate_base": "0bc82cf plus mod/LAN/library changes; position-probe override disabled for both performance builds",
+  "runs": [
+    {"label":"A1","original_rate":52.27,"low_1_percent":27.40,"p50_ms":17.40,"p99_ms":24.45,"max_ms":167.12},
+    {"label":"B1","original_rate":54.53,"low_1_percent":34.70,"p50_ms":17.08,"p99_ms":24.76,"max_ms":53.21},
+    {"label":"B2","original_rate":54.44,"low_1_percent":37.36,"p50_ms":17.07,"p99_ms":23.63,"max_ms":38.10},
+    {"label":"A2","original_rate":52.43,"low_1_percent":30.54,"p50_ms":17.36,"p99_ms":23.07,"max_ms":204.32}
+  ],
+  "cpu_tests_passed": 61,
+  "lan_60hz": {"same_pc_loopback":true,"course_reached":true,"independent_inputs":true,"matching_committed_ticks":701,"valid_position_pairs":0,"forced_shutdowns":0},
+  "limitations": ["Not physical scanout or whole-game performance", "Includes integrated AMD changes", "Not full-world or physical LAN synchronization certification", "Native Bellabel payload not established", "Older re-entry deswizzle fault not proven fixed"]
+}

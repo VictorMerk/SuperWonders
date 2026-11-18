@@ -14,7 +14,8 @@ param(
     [ValidateRange(0,3600)][int]$ThreadDumpAtSeconds=0,
     [switch]$TraceFiles,
     [string]$ContentPython='',
-    [string]$QuitFile=''
+    [string]$QuitFile='',
+    [string]$LeaseId=''
 )
 # A real native-game smoke test, distinct from the library GUI's unit tests.
 # Use only a task-owned fixture: gameplay can update that fixture's saves.
@@ -31,7 +32,17 @@ $contentPythonPath=if($ContentPython){(Resolve-Path -LiteralPath $ContentPython)
 $quitFilePath=if($QuitFile){[IO.Path]::GetFullPath($QuitFile)}else{''}
 if($quitFilePath -and (Test-Path -LiteralPath $quitFilePath)){throw 'Choose a new quit-request path; an existing marker would stop the test immediately.'}
 $reservation=Join-Path $PSScriptRoot 'game_test_reservation.ps1'
-$claim=& $reservation -Action Acquire -Task 'Wonder source-version native smoke' -Workspace $PSScriptRoot -OwnerPid $PID | ConvertFrom-Json
+$releaseLease=!$LeaseId
+if($LeaseId) {
+    $state=& $reservation -Action Status | ConvertFrom-Json
+    $ownerStarted=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+    if(!$state.lease -or $state.lease.lease_id -ne $LeaseId -or $state.lease.owner_pid -ne $PID -or $state.lease.owner_started_utc -ne $ownerStarted) {
+        throw 'A shared smoke lease must belong to this PowerShell process and match its start time.'
+    }
+    $claim=[pscustomobject]@{state='acquired';lease=$state.lease}
+} else {
+    $claim=& $reservation -Action Acquire -Task 'Wonder source-version native smoke' -Workspace $PSScriptRoot -OwnerPid $PID | ConvertFrom-Json
+}
 if($claim.state -ne 'acquired'){Write-Output ($claim|ConvertTo-Json -Compress -Depth 5);exit 75}
 $game=$null;$started=$false
 try {
@@ -108,6 +119,7 @@ try {
         validation_enabled=[bool]$layerPath;
         audio_bytes=$audioBytes;audio_required=[bool]$RequireAudio;
         audio_checked=[bool]$contentPythonPath;non_silent_audio_observed=$audioPassed;
+        physical_controllers_excluded=$true;
         content_checked=[bool]$contentPythonPath;nonflat_content_observed=$contentPassed;
         validation_errors=[regex]::Matches($log,'Validation Error:').Count;
         scope='native process/capture/audio/shutdown smoke; navigation, visual correctness and edition contents need separate inspection'
@@ -120,6 +132,6 @@ try {
         if($started -and !$game.HasExited){$game.Kill();$game.WaitForExit()}
         if($game){$game.Dispose()}
     } finally {
-        & $reservation -Action Release -LeaseId $claim.lease.lease_id
+        if($releaseLease){& $reservation -Action Release -LeaseId $claim.lease.lease_id}
     }
 }

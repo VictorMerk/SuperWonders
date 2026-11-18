@@ -44,7 +44,7 @@ def save_config(path, config):
     temporary.replace(path)
 
 
-def launch_spec(config, key):
+def launch_spec(config, key, *, configure=False):
     entry = config['editions'][key]
     if not entry['executable'] or not entry['data_root']:
         raise ValueError('Choose this edition’s prepared runtime and game-data folder first.')
@@ -60,10 +60,21 @@ def launch_spec(config, key):
     for other_key, other in config['editions'].items():
         if other_key != key and other['data_root'] and Path(other['data_root']).resolve() == root:
             raise ValueError('The two editions need separate game-data folders to preserve their saves and caches.')
-    env = {k: v for k, v in os.environ.items()
-           if not k.upper().startswith('NX_TEST_') and k.upper() not in ('NX_GAMELIB', 'NX_DATA_ROOT')}
+    def inherited(name):
+        name = name.upper()
+        transient = ('NX_TEST_', 'NX_INPUT', 'NX_PROBE', 'NX_DUMP', 'NX_TRACE',
+                     'NX_LAN_', 'NX_PLAY_', 'NX_FRAMEGEN_PROBE')
+        return not (name.startswith(transient) or
+                    name in ('NX_GAMELIB', 'NX_DATA_ROOT', 'NX_HEADLESS', 'NX_HEADLESS_PRESENT',
+                             'NX_NO_LAUNCHER', 'NX_LOG', 'NX_FRAMETRACE', 'NX_AUDIO_DUMP') or
+                    (name.startswith('NX_') and name.endswith('_TOUR')))
+    env = {k: v for k, v in os.environ.items() if inherited(k)}
     env['NX_DATA_ROOT'] = str(root)
-    return [str(executable)], str(executable.parent), env
+    if configure:
+        launcher = executable.with_name('wonder-launcher.exe')
+        if os.name == 'nt' and launcher.is_file():
+            executable = launcher
+    return [str(executable)] + (['--config'] if configure else []), str(executable.parent), env
 
 
 def main():
@@ -76,8 +87,8 @@ def main():
 
     window = tk.Tk()
     window.title('SuperWonders • Library')
-    window.geometry('860x570')
-    window.minsize(760, 540)
+    window.geometry('860x650')
+    window.minsize(760, 620)
     bg, panel, text, quiet, accent = '#132822', '#203c32', '#f6f0dc', '#b4c5b5', '#f3bd54'
     window.configure(bg=bg)
     try:
@@ -86,7 +97,7 @@ def main():
         messagebox.showerror('Cannot read Wonder library', str(e), parent=window)
         window.destroy()
         return 2
-    running, status, buttons = {}, {}, {}
+    running, status, buttons, manage_buttons = {}, {}, {}, {}
     body = tk.Frame(window, bg=bg, padx=30, pady=24)
     body.pack(fill='both', expand=True)
     tk.Label(body, text='SUPERWONDERS', font=('Segoe UI', 11, 'bold'), fg=accent, bg=bg).pack(anchor='w')
@@ -101,6 +112,7 @@ def main():
         status[key].set('Running' if live else 'Runtime configured' if ready else 'Choose a prepared game installation')
         buttons[key].configure(state='normal' if ready and not live else 'disabled',
                                text='Running…' if live else 'Play')
+        manage_buttons[key].configure(state='normal' if ready and not live else 'disabled')
 
     def configure(key):
         executable = filedialog.askopenfilename(parent=window, title='Choose the runtime for ' + SLOTS[key][1],
@@ -121,14 +133,14 @@ def main():
             messagebox.showerror('Cannot configure this edition', str(e), parent=window)
         refresh(key)
 
-    def play(key):
+    def play(key, configure=False):
         # One game at a time from this library, without stopping an existing process.
         if any(process.poll() is None for process in running.values()):
             messagebox.showinfo('Wonder is running', 'Close the current game before starting another edition.',
                                 parent=window)
             return
         try:
-            argv, cwd, env = launch_spec(config, key)
+            argv, cwd, env = launch_spec(config, key, configure=configure)
             running[key] = subprocess.Popen(argv, cwd=cwd, env=env)
         except (OSError, ValueError) as e:
             messagebox.showerror('Could not start Wonder', str(e), parent=window)
@@ -146,6 +158,10 @@ def main():
         buttons[key] = tk.Button(actions, text='Play', command=lambda k=key: play(k), bg=accent, fg=bg,
             activebackground='#ffd582', relief='flat', width=12, pady=5, font=('Segoe UI', 11, 'bold'))
         buttons[key].pack()
+        manage_buttons[key] = tk.Button(actions, text='LAN, mods & settings',
+            command=lambda k=key: play(k, configure=True), relief='flat', bg=panel, fg=text,
+            activebackground=panel, activeforeground=accent, font=('Segoe UI', 9), pady=5)
+        manage_buttons[key].pack(pady=(4, 0))
         tk.Button(actions, text='Choose installation', command=lambda k=key: configure(k), relief='flat',
             bg=panel, fg=quiet, activebackground=panel, activeforeground=text, font=('Segoe UI', 9)).pack(pady=(6, 0))
         refresh(key)

@@ -28,6 +28,16 @@ int main() {
         nx::nvn::copy_changed_words(guest.data()+1,upload.data()+1,before->data(),n);
         require(std::all_of(guest.begin(),guest.end(),[](auto v){return v==0xa5;}),"unchanged GPU output overwrote later guest writes");
     }
+    // Scratch uploads must preserve missing-source zero semantics and never
+    // leave the descriptor's padded tail carrying older ring contents.
+    for (size_t n=0;n<=4097;++n) for (bool present:{false,true}) {
+        std::vector<uint8_t> source(n+4,0x5a), actual(n+64,0xcd), expected=actual;
+        const size_t padded=n+32;
+        std::memset(expected.data()+1,0,padded);
+        if (present && n) std::memcpy(expected.data()+1,source.data()+1,n);
+        nx::nvn::initialize_upload(actual.data()+1,present ? source.data()+1 : nullptr,n,padded);
+        require(actual==expected,"scratch upload differs from full-zero-then-copy semantics");
+    }
     struct Region { size_t size; };
     std::vector<uint8_t> bytes(8192);
     std::map<const uint8_t*,Region> regions;

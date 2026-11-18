@@ -1,5 +1,5 @@
 {
-  "runtime_sha256": "52d92290e247bd3a6938bf8a4977854a65af7718f73da06bc8032f811eb36660",
+  "runtime_sha256": "62b298e3a3965cf7f3878cf62e3d2aa6f247f8319750147d1f061246b4991230",
   "runtime_interface": 1,
   "protocol": 4,
   "scope": "Two instances on one RX570; physical follow-up pending",
@@ -34,7 +34,31 @@
     "first_difference": null,
     "runtime_sha256": "bc8a12b33dbc67190085819f72bf5da10d5606a7445b9e080ee2eb9dc927478a"
   },
-  "captured_intro": "pending GPU reservation on final runtime with extended-path resource support",
+  "captured_intro": {
+    "status": "passed local two-instance follow-up",
+    "runtime_sha256": "52d92290e247bd3a6938bf8a4977854a65af7718f73da06bc8032f811eb36660",
+    "characters": [
+      "Mario",
+      "Daisy"
+    ],
+    "target_frames": 12000,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "committed_pairs": 4096,
+    "available_position_pairs": 1094,
+    "first_difference": null,
+    "post_transition_gameplay_nonflat_both": true,
+    "world_map_visible_both": true,
+    "scope": "scripted/menu-guided pads on one RX570; partial positions only"
+  },
   "physical_lan": "pending temporary access restart",
-  "limitation": "Inputs and one heuristic player position only. These tests do not certify actor identity, whole-world synchronization, physical-network performance or all rendering."
+  "limitation": "Inputs and one heuristic player position only. These tests do not certify actor identity, whole-world synchronization, physical-network performance or all rendering.",
+  "startup_loading_deadline": {
+    "slow_host_passed": true,
+    "slow_client_passed": true,
+    "lobby_timeout_ms": 500,
+    "startup_timeout_ms": 2000,
+    "loading_delay_ms": 750,
+    "established_stall_timeout_ms": 150
+  }
 }

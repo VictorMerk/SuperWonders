@@ -22,6 +22,8 @@ struct SessionOptions {
     // Lobby/save transfer can take minutes; an established game must detect a
     // silent peer separately rather than appearing frozen for that whole time.
     std::chrono::milliseconds frame_timeout{10000};
+    // Shader preparation can outlast the lobby wait before the first game frame.
+    std::chrono::milliseconds startup_timeout{600000};
     std::function<bool()> idle;  // false cancels; no session mutation from this callback
 };
 // TCP transports authenticated, ordered inputs. The caller supplies one local

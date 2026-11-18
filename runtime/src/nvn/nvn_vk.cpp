@@ -845,6 +845,10 @@ bool framegen_probe() {
     if (!init()) return false;
     bool ok = true;
     for (uint32_t variant : variants) {
+        // Each prior case was submitted, waited for and read back below. Reuse
+        // the same staging bytes, as gpu_submit does, rather than measuring
+        // different fresh upload-buffer regions for each scene/factor.
+        if (!async_gpu()) g_upload_used = 0;
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);

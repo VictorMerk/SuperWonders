@@ -1462,10 +1462,17 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
+    uint64_t pace_requested_ns = 0, pace_actual_ns = 0;
     if (display_count > 1) {
         const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/uint64_t(display_count);
         const uint64_t now = plat::monotonic_ns();
-        if (target > now) plat::sleep_ns(target-now);
+        if (target > now) {
+            // Only diagnostic traces read a clock after the wait. Keep pacing
+            // behaviour unchanged while exposing oversleep/scheduling stalls.
+            pace_requested_ns = target-now;
+            plat::sleep_ns(pace_requested_ns);
+            if (ft::enabled()) pace_actual_ns = plat::monotonic_ns()-now;
+        }
     }
     const uint64_t present_from = plat::monotonic_ns();
     r = p_vkQueuePresentKHR(g_queue, &pi);
@@ -1473,7 +1480,7 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
     if (display+1 == display_count) last_original_ns = plat::monotonic_ns();
     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
     const FrameTimes totals = frame_times();
-    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count);
+    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count,pace_requested_ns,pace_actual_ns);
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
     bool remake = r == VK_ERROR_OUT_OF_DATE_KHR;

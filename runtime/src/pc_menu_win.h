@@ -47,7 +47,8 @@ struct PcMenuState {
     bool keyboard_actions = true;
     int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
     int keyboard_standee_key = input::default_standee_key(input::KeyboardCodes::Windows);
-    int controller_preset = 0;  // Xbox / DualSense, Nintendo
+    int controller_artwork = 0; // 0 automatic, 1..9 artwork model
+    int controller_preset = 1;  // Xbox / DualSense, Nintendo
     bool muted = false;
     bool fullscreen = false;
     bool always_on_top = false;

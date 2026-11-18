@@ -38,6 +38,7 @@ struct Settings {
     bool keyboard_actions = true;
     int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
     int keyboard_standee_key = input::default_standee_key();
+    int controller_artwork = 0; // 0 automatic, 1..9 artwork model
     int controller_preset = 1;  // 1 Nintendo positions (the default, as on the Switch: A on the right), 0 Xbox / DualSense
     bool muted = false, fullscreen = false, always_on_top = false;
     bool metrics_enabled = false, low_vram_profile = false;
@@ -67,6 +68,8 @@ struct Settings {
 int default_controller_binding(size_t action, int preset);
 // The physical button an action is bound to now.
 int controller_binding(const Settings& s, size_t action);
+// Assign one physical button, swapping conflicts without changing unrelated actions.
+bool assign_controller_button(Settings& settings, size_t action, int physical);
 
 enum class GraphicsProfile { Performance, Balanced, Quality };
 enum RestartChange : uint32_t {

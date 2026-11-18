@@ -140,6 +140,7 @@ def write_table(path, m, an, e, name, base):
         out.write(f"    symbols, {len(m.symbols)},\n")
         out.write(f"    init_array, {len(m.init_array)}, fini_array, {len(m.fini_array)},\n")
         out.write(f"    {getattr(m, 'frame_step_offset', 0):#x},\n")
+        out.write(f"    {cstr(getattr(m, 'build_id', ''))},\n")
         out.write("};\n")
 
 

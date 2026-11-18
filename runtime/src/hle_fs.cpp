@@ -27,6 +27,7 @@
 
 #include "platform.h"
 #include "file_io.h"
+#include "host_path.h"
 #include "stream_cache.h"
 #include <optional>
 #include "frametrace.h"
@@ -108,7 +109,7 @@ struct Dir {
 std::vector<std::pair<uint64_t, Dir>> g_dirs;
 uint64_t g_next = 1;
 
-fs::path data_root() { return fs::u8path(plat::data_root()); }
+fs::path data_root() { return host_path(fs::u8path(plat::data_root())); }
 
 std::string utf8(const fs::path& p) {
     auto s = p.u8string();
@@ -175,7 +176,7 @@ std::vector<fs::path> mod_paths(const std::string& guest) {
     std::vector<fs::path> v;
     auto [mnt, rest] = split(guest);
     if (g_rom_mounts.count(mnt))
-        for (const fs::path& r : mod_roots()) v.push_back(r / fs::u8path(rest));
+        for (const fs::path& r : mod_roots()) v.push_back(host_path(r / fs::u8path(rest)));
     return v;
 }
 
@@ -191,7 +192,7 @@ fs::path resolve(const std::string& guest) {
             if (logged.insert(rest).second) log("mods: %s from %s", rest.c_str(), utf8(m).c_str());
             return m;
         }
-    return it->second / fs::u8path(rest);
+    return host_path(it->second / fs::u8path(rest));
 }
 
 void mount(const std::string& name, const fs::path& p) {
@@ -371,7 +372,8 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
     const int64_t length = file_io::size(file->f);
     if (length < 0) { c.x[0] = kTargetNotFound; return; }
     st<int64_t>(c.x[0],length);
-    if (g_trace) log("fs: size %s = %lld", file->path.c_str(),(long long)length);
+    if (g_trace || (trace_fs() && file->path.find("ResourceSizeTable.") != std::string::npos))
+        log("fs: size %s = %lld", file->path.c_str(),(long long)length);
     c.x[0] = kOk;
 }
 
@@ -404,7 +406,8 @@ uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
         }
     }
     uint64_t ms = read_ns / 1'000'000;
-    if (g_trace) log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
+    if (g_trace || (trace_fs() && file.path.find("ResourceSizeTable.") != std::string::npos))
+        log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
                      (unsigned long long)n);
     if (trace_fs() && file.path.find(".bwav") != std::string::npos) {  // streamed audio: is it being consumed?
         static std::mutex m;

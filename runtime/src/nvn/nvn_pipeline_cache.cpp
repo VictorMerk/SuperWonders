@@ -36,10 +36,14 @@ std::atomic<bool> g_cache_saving{false};
 
 // On the background writer (periodic saves) or, at shutdown, on the caller after the writer is idle.
 void write_pipeline_cache(bool force) {
+    const uint64_t started = plat::monotonic_ns();
+    if (force) log("shutdown: querying driver pipeline cache size");
     // Cleared first: a pipeline created while the data is read marks it dirty again for the next save.
     g_cache_dirty.store(false, std::memory_order_release);
     size_t n = 0;
     if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return note_pipeline_cache_changed();
+    if (force) log("shutdown: driver cache size %zu bytes (%.1f ms)", n,
+                   double(plat::monotonic_ns() - started) / 1e6);
     // Vulkan drivers generally grow the serialized cache as new entries are added. Avoid rewriting a large cache
     // every few seconds when its serialized size is unchanged; the explicit shutdown flush forces same-size updates.
     if (!force && n <= g_saved_size) return note_pipeline_cache_changed();  // still owed: the shutdown save writes it
@@ -48,6 +52,8 @@ void write_pipeline_cache(bool force) {
             return p_vkGetPipelineCacheData(vk_device(), g_cache, size, bytes);
         }, data, n)) return note_pipeline_cache_changed();
     n = data.size();
+    if (force) log("shutdown: driver cache snapshot ready (%.1f ms); writing file",
+                   double(plat::monotonic_ns() - started) / 1e6);
     CacheFile pending(g_path);
     if (FILE* f = plat::fopen_utf8(pending.path(), "wb")) {
         bool ok = std::fwrite(data.data(), 1, n, f) == n;
@@ -64,7 +70,11 @@ void write_pipeline_cache(bool force) {
 void save_pipeline_cache(bool force) {
     if (!g_cache || !g_cache_dirty.load(std::memory_order_acquire)) return;
     if (force) {
+        const uint64_t started = plat::monotonic_ns();
+        log("shutdown: waiting for background cache writes");
         wait_background_writes();
+        log("shutdown: background cache writes complete (%.1f ms)",
+            double(plat::monotonic_ns() - started) / 1e6);
         write_pipeline_cache(true);
         return;
     }

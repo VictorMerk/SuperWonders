@@ -1,5 +1,6 @@
 #include "netplay_session.h"
 #include "netplay_save.h"
+#include "netplay_probe.h"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -120,8 +121,11 @@ struct Session::Impl {
     Socket listener;
     std::array<Socket,kPlayers> peers;
     SessionOptions options;
+    std::array<PositionProbeGuard,kPlayers> position_probes;
+    std::atomic<bool> probe_ready{false};
     Nonce nonce{};
     uint8_t local_role=0,count=0;
+    uint8_t common_rate=60,common_lead=0;
     uint64_t tick=0,common_epoch=0,common_seed=0;
     std::atomic<bool> stopped{false};
     bool started=false,ready=false;
@@ -189,7 +193,11 @@ struct Session::Impl {
     }
     void begin(const SessionOptions& config) {
         if(started) throw std::runtime_error("Create a new LAN session before reconnecting");
-        if(config.players<2||config.players>kPlayers||config.timeout<std::chrono::milliseconds(100)||config.timeout>std::chrono::minutes(5))
+        if(config.players<2||config.players>kPlayers||config.probe_warmup>60||
+           (config.frame_rate!=30 && config.frame_rate!=60)||config.input_lead>1||
+           config.timeout<std::chrono::milliseconds(100)||config.timeout>std::chrono::minutes(5)||
+           config.frame_timeout<std::chrono::milliseconds(100)||config.frame_timeout>std::chrono::seconds(30)||
+           config.startup_timeout<std::chrono::milliseconds(100)||config.startup_timeout>std::chrono::minutes(15))
             throw std::runtime_error("Invalid LAN room settings");
         options=config; runtime=sockets(); started=true; count=config.players;
     }
@@ -204,6 +212,9 @@ uint8_t Session::role() const { return impl->local_role; }
 uint8_t Session::players() const { return impl->count; }
 uint64_t Session::epoch() const { return impl->common_epoch; }
 uint64_t Session::seed() const { return impl->common_seed; }
+bool Session::position_probe_ready() const { return impl->probe_ready.load(); }
+uint8_t Session::frame_rate() const { return impl->common_rate; }
+uint8_t Session::input_lead() const { return impl->common_lead; }
 std::vector<std::string> local_addresses() {
     const auto runtime=sockets();
     char name[256]{};
@@ -230,6 +241,7 @@ void Session::host(const SessionOptions& options,const std::function<void(uint16
         if (options.allow_save_transfer && (options.initial_save.empty() || options.initial_save.size()>kMaxSaveBytes || digest(options.initial_save)!=options.save))
             throw std::runtime_error("Invalid host session-save snapshot");
         s.local_role=0; s.nonce=random_nonce();
+        s.common_rate=options.frame_rate; s.common_lead=options.input_lead;
         s.common_epoch=options.epoch?options.epoch:uint64_t(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
         s.common_seed=options.seed?options.seed:number(s.nonce,0);
         s.listener.reset(::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));
@@ -271,6 +283,7 @@ void Session::host(const SessionOptions& options,const std::function<void(uint16
                     throw std::runtime_error("LAN build, input mode or save differs");
                 std::vector<uint8_t> welcome{role,s.count,0,0,0,0,0,0};
                 welcome[2]=transfer?1:0;
+                welcome[3]=s.common_rate; welcome[4]=s.common_lead;
                 append64(welcome,s.common_epoch); append64(welcome,s.common_seed);
                 welcome.insert(welcome.end(),hello.session.begin(),hello.session.end());
                 welcome.insert(welcome.end(),options.build.begin(),options.build.end());
@@ -312,9 +325,16 @@ void Session::join(const SessionOptions& options) {
         if(::connect(s.peers[0].get(),reinterpret_cast<const sockaddr*>(&a),sizeof a)) {
             if(!pending(socket_error())) fail_socket("connect");
             for(;;) {
-                s.wait(s.peers[0].get(),true,until);
-                fd_set writable; FD_ZERO(&writable); FD_SET(s.peers[0].get(),&writable); timeval now{0,0};
-                if(select(int(s.peers[0].get()+1),nullptr,&writable,nullptr,&now)>0) break;
+                s.check(until);
+                fd_set writable,failed;
+                FD_ZERO(&writable); FD_SET(s.peers[0].get(),&writable);
+                FD_ZERO(&failed); FD_SET(s.peers[0].get(),&failed);
+                timeval timeout{0,20'000};
+                // Winsock reports a refused nonblocking connect in exceptfds,
+                // rather than writefds. Check SO_ERROR for either completion.
+                const int result=select(int(s.peers[0].get()+1),nullptr,&writable,&failed,&timeout);
+                if(result<0 && !pending(socket_error())) fail_socket("connect wait");
+                if(result>0) break;
             }
             int error=0;
 #if defined(_WIN32)
@@ -338,8 +358,11 @@ void Session::join(const SessionOptions& options) {
             throw std::runtime_error("LAN host settings or pairing response do not match");
         if(welcome.payload[2]>1 || (welcome.payload[2] && !options.allow_save_transfer)) throw std::runtime_error("Unsupported LAN save transfer");
         if(options.allow_save_transfer && !welcome.payload[2]) throw std::runtime_error("LAN host does not support an isolated session-save transfer");
-        for(size_t i=3;i<8;++i) if(welcome.payload[i]) throw std::runtime_error("Invalid LAN welcome flags");
+        if ((welcome.payload[3]!=30 && welcome.payload[3]!=60) || welcome.payload[4]>1)
+            throw std::runtime_error("Unsupported LAN simulation target or input buffer");
+        for(size_t i=5;i<8;++i) if(welcome.payload[i]) throw std::runtime_error("Invalid LAN welcome flags");
         s.nonce=welcome.session; s.local_role=welcome.payload[0]; s.count=welcome.payload[1];
+        s.common_rate=welcome.payload[3]; s.common_lead=welcome.payload[4];
         s.common_epoch=number(welcome.payload,8); s.common_seed=number(welcome.payload,16);
         if(welcome.payload[2]) {
             if(!options.install_save) throw std::runtime_error("An isolated client save destination is required");
@@ -364,23 +387,31 @@ void Session::join(const SessionOptions& options) {
     } catch(...) { s.interrupt(); throw; }
 }
 
-FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const PlayerState& state) {
+FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const PlayerState& state,uint64_t work) {
     auto& s=*impl; std::lock_guard lock(s.io);
     if(!s.ready||s.stopped) throw std::runtime_error("LAN session is not connected");
-    const auto until=s.deadline();
+    // Tick 0 is the lobby's neutral exchange; tick 1 may wait while the other
+    // PC loads modules and warms shaders. Only use the short deadline once
+    // both games have reached their first complete framework frame.
+    const auto until=Clock::now()+(s.tick<2?s.options.startup_timeout:s.options.frame_timeout);
     try {
         FrameInputs frame; frame.tick=s.tick; frame.players=s.count; frame.state_hash=hash;
         frame.state=state;
         if(s.local_role==0) {
             frame.pads[0]=local;
+            frame.frame_work_ns[0]=work;
             for(uint8_t role=1;role<s.count;++role) {
                 const auto p=s.expected(s.peers[role].get(),Message::Input,role,s.tick,until);
-                uint64_t peer_hash=0; PlayerState peer_state; frame.pads[role]=decode_input(p.payload,peer_hash,&peer_state);
-                if((hash&&peer_hash&&hash!=peer_hash) || !compatible_state(state,peer_state)) {
+                uint64_t peer_hash=0; PlayerState peer_state;
+                frame.pads[role]=decode_input(p.payload,peer_hash,&peer_state,&frame.frame_work_ns[role]);
+                if((hash&&peer_hash&&hash!=peer_hash) || !s.position_probes[role].observe(state,peer_state,s.options.probe_warmup)) {
                     for(uint8_t i=1;i<s.count;++i) s.send(s.peers[i].get(),s.message(Message::Reject,0,s.tick),until);
                     throw std::runtime_error("LAN simulation diverged; restart from the same session state");
                 }
             }
+            bool verified=true;
+            for(uint8_t role=1;role<s.count;++role) verified=verified && s.position_probes[role].ready();
+            s.probe_ready=verified;
             const auto commit=s.message(Message::Commit,0,s.tick,encode_commit(frame));
             for(uint8_t role=1;role<s.count;++role) s.send(s.peers[role].get(),commit,until);
             for(uint8_t role=1;role<s.count;++role) {
@@ -388,10 +419,11 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
                     throw std::runtime_error("Invalid LAN acknowledgement");
             }
         } else {
-            s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state)),until);
+            s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state,work)),until);
             const auto commit=s.expected(s.peers[0].get(),Message::Commit,0,s.tick,until);
             frame=decode_commit(commit.payload); frame.tick=s.tick;
-            if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !compatible_state(state,frame.state)) throw std::runtime_error("LAN simulation state mismatch");
+            if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !s.position_probes[0].observe(state,frame.state,s.options.probe_warmup)) throw std::runtime_error("LAN simulation state mismatch");
+            s.probe_ready=s.position_probes[0].ready();
             s.send(s.peers[0].get(),s.message(Message::Ack,s.local_role,s.tick),until);
         }
         ++s.tick; return frame;

@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -174,12 +175,33 @@ void draw_metrics(float height) {
             if (st.metric_one_percent_low) line("1% low", rate(low, target), "%.0f", low, "FPS");
             if (st.metric_game_speed) line("Speed", speed >= 97 ? plain : ImGui::ColorConvertU32ToFloat4(th.warn), "%.0f", speed, "%");
             if (lan::active()) {
+                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0);
+                ImGui::TextDisabled("%s",st.language==2?"Positionscheck":"Position check");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextDisabled("%s",lan::player_probe_ready()?(st.language==2?"teilweise":"partial"):(st.language==2?"ausstehend":"pending"));
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("One player only; pending means no agreeing baseline. Other actors and world state are not verified.");
                 const auto wait = lan::timing();
+                const double budget=1000.0/double(lan::simulation_rate());
                 if (wait.ticks) {
                     const bool german = st.language == 2;
                     line(german ? "LAN Wartezeit" : "LAN input wait",
-                         ImGui::ColorConvertU32ToFloat4(wait.smoothed_ms > 50 ? th.bad : wait.smoothed_ms > 16.7 ? th.warn : th.text),
+                         ImGui::ColorConvertU32ToFloat4(wait.smoothed_ms > 50 ? th.bad : wait.smoothed_ms > budget ? th.warn : th.text),
                          "%.1f", wait.smoothed_ms, "ms");
+                }
+                const bool detailed=st.metric_frametime_graph || st.metric_game_speed || st.metric_one_percent_low;
+                uint32_t slowest=0;
+                double worst=0;
+                for(uint32_t player=0;player<4;++player) {
+                    const auto peer=lan::peer_timing(player);
+                    if(peer.samples && peer.smoothed_ms>worst) { worst=peer.smoothed_ms; slowest=player; }
+                }
+                for(uint32_t player=0;player<4;++player) {
+                    if(!detailed && player!=slowest) continue;
+                    const auto peer=lan::peer_timing(player);
+                    if(!peer.samples) continue;
+                    char label[32]; std::snprintf(label,sizeof label,st.language==2?"PC %u ohne LAN":"PC %u outside LAN",player+1);
+                    line(label,ImGui::ColorConvertU32ToFloat4(peer.smoothed_ms>budget*1.5?th.bad:peer.smoothed_ms>budget*1.1?th.warn:th.text),
+                         "%.1f",peer.smoothed_ms,"ms");
                 }
             }
             ImGui::EndTable();
@@ -423,6 +445,20 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     if (quit_frame && g_frame.load()>=quit_frame) {
         log("overlay: scripted render-thread shutdown at frame %llu",(unsigned long long)g_frame.load());
         plat::exit_process(0);
+    }
+    // An actively reviewed run can request the same clean shutdown after its scenario completes.
+    static const char* quit_file=std::getenv("NX_TEST_QUIT_FILE");
+    static uint64_t next_quit_check=0;
+    if (quit_file && *quit_file) {
+        const auto now=plat::monotonic_ns();
+        if (now>=next_quit_check) {
+            next_quit_check=now+250'000'000;
+            if (FILE* request=plat::fopen_utf8(quit_file,"rb")) {
+                std::fclose(request);
+                log("overlay: scripted render-thread shutdown by request at frame %llu",(unsigned long long)g_frame.load());
+                plat::exit_process(0);
+            }
+        }
     }
     ImGuiIO& io = ImGui::GetIO();
     static uint64_t last_ns = 0;

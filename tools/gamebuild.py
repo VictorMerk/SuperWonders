@@ -192,6 +192,19 @@ def recompile(kit, exefs, gen, done_before, share):
         if p.wait():
             sys.stderr.write("".join(log[-40:]))
             raise SystemExit(f"error: recompiling {name} failed (exit {p.returncode})")
+        # Keep coverage after work cleanup and refuse a library that would reach
+        # an unimplemented CPU instruction. A successful C++ compile alone is not
+        # evidence that a new executable version was fully lifted.
+        report_path = os.path.join(gen, name, "report.txt")
+        with open(report_path, encoding="utf-8") as report_file:
+            report = report_file.read()
+        report_dest = os.path.join(os.path.dirname(os.path.dirname(gen)), f"recomp-{name}-report.txt")
+        with open(report_dest, "w", encoding="utf-8") as report_file:
+            report_file.write(report)
+        coverage = re.search(r"\bunhandled (\d+)", report)
+        if not coverage or int(coverage.group(1)):
+            raise SystemExit(f"error: {name} has unhandled CPU instructions; inspect {report_dest}")
+        print(f"{name} coverage: {report.splitlines()[0]}", flush=True)
         progress(start + part, f"Recompiled {name}")
 
 

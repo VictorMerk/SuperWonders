@@ -490,7 +490,9 @@ void set_preserve_aspect(bool preserve) { g_preserve_aspect.store(preserve, std:
 bool preserve_aspect() { return g_preserve_aspect.load(std::memory_order_relaxed); }
 
 void flush_pipeline_cache() {
+    log("shutdown: acquiring GPU cache lock");
     std::lock_guard<std::recursive_mutex> lock(g_gpu);
+    log("shutdown: GPU cache lock acquired");
     if (!g_device) return;
     // The GPU lock prevents concurrent pipeline creation while Vulkan serializes the cache.
     pipeline_cache_save(true);
@@ -855,6 +857,10 @@ bool framegen_probe() {
     if (!init()) return false;
     bool ok = true;
     for (uint32_t variant : variants) {
+        // Each prior case was submitted, waited for and read back below. Reuse
+        // the same staging bytes, as gpu_submit does, rather than measuring
+        // different fresh upload-buffer regions for each scene/factor.
+        if (!async_gpu()) g_upload_used = 0;
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
@@ -1031,7 +1037,7 @@ bool pipeline_draw_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,fixture.buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&fixture.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,fixture.buffer,fixture.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,fixture.memory,0,2*bytes,0,reinterpret_cast<void**>(&fixture.mapped)) != VK_SUCCESS) return false;
@@ -1169,7 +1175,7 @@ bool counter_clear_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;

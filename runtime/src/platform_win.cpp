@@ -1,6 +1,7 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
 #include "file_io.h"
+#include "host_path.h"
 #include "keyboard_actions.h"
 #include <algorithm>
 #include <array>
@@ -28,13 +29,13 @@
 #define _WIN32_WINNT 0x0A00
 #endif
 #include <windows.h>
+#include "user_data_lock.h"
 #include <windowsx.h>
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <xaudio2.h>
 #include <xinput.h>
 #include <SDL3/SDL.h>
-#include "user_data_lock.h"
 
 #define VK_NO_PROTOTYPES
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -59,6 +60,10 @@ namespace nx {
 HWND g_window = nullptr;
 void boot();
 }  // namespace nx
+
+namespace nx::nvn {
+void log_upload_fault_context();
+}
 
 namespace nx::plat {
 
@@ -97,7 +102,11 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
     static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
-    if (exiting.test_and_set()) for (;;) Sleep(INFINITE);
+    if (exiting.test_and_set()) {
+        nx::log("shutdown: concurrent exit request on thread %lu; cleanup already owned", GetCurrentThreadId());
+        for (;;) Sleep(INFINITE);
+    }
+    nx::log("shutdown: begin code %d on thread %lu", code, GetCurrentThreadId());
     nx::lan::flush_diagnostics();
     nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
@@ -194,7 +203,7 @@ uint64_t monotonic_ns() {
 // ---- files and output -----------------------------------------------------------------------------------------
 
 FILE* fopen_utf8(const std::string& path, const char* mode) {
-    std::wstring wp = std::filesystem::u8path(path).wstring();
+    std::wstring wp = host_path(std::filesystem::u8path(path)).wstring();
     std::wstring wm(mode, mode + std::strlen(mode));
     return _wfopen(wp.c_str(), wm.c_str());
 }
@@ -265,6 +274,7 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.keyboard_separate_player = s.keyboard_separate_player;
     o.keyboard_actions=s.keyboard_actions;o.keyboard_game_layout=s.keyboard_game_layout;o.keyboard_standee_key=s.keyboard_standee_key;
     o.button_icons = s.button_icons;
+    o.controller_artwork=s.controller_artwork;
     o.controller_preset = s.controller_preset, o.muted = s.muted, o.fullscreen = s.fullscreen;
     o.always_on_top = s.always_on_top, o.metrics_enabled = s.metrics_enabled, o.low_vram_profile = s.low_vram_profile;
     o.metric_fps = s.metric_fps, o.metric_one_percent_low = s.metric_one_percent_low;
@@ -292,6 +302,7 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.keyboard_separate_player = o.keyboard_separate_player;
     s.keyboard_actions=o.keyboard_actions;s.keyboard_game_layout=o.keyboard_game_layout;s.keyboard_standee_key=o.keyboard_standee_key;
     s.button_icons = o.button_icons;
+    s.controller_artwork=o.controller_artwork;
     s.controller_preset = o.controller_preset, s.muted = o.muted, s.fullscreen = o.fullscreen;
     s.always_on_top = o.always_on_top, s.metrics_enabled = o.metrics_enabled, s.low_vram_profile = o.low_vram_profile;
     s.metric_fps = o.metric_fps, s.metric_one_percent_low = o.metric_one_percent_low;
@@ -406,6 +417,7 @@ static void save_pc_settings() {
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
          << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
          << "\nbutton_icons=" << g_pc_settings.button_icons
+         << "\ncontroller_artwork=" << g_pc_settings.controller_artwork
          << "\ncontroller_preset=" << g_pc_settings.controller_preset
          << "\nmetrics_enabled=" << g_pc_settings.metrics_enabled << "\nmetric_fps=" << g_pc_settings.metric_fps
          << "\nmetric_one_percent_low=" << g_pc_settings.metric_one_percent_low
@@ -462,6 +474,7 @@ static void load_pc_settings() {
             g_pc_settings.keyboard_separate_player = value != 0;
         else if (std::sscanf(line.c_str(), "button_icons=%d", &value) == 1)
             g_pc_settings.button_icons = std::clamp(value, 0, 4);
+        else if (std::sscanf(line.c_str(), "controller_artwork=%d", &value) == 1) g_pc_settings.controller_artwork=std::clamp(value,0,9);
         else if (std::sscanf(line.c_str(), "controller_preset=%d", &value) == 1)
             g_pc_settings.controller_preset = std::clamp(value, 0, 2);
         else if (std::sscanf(line.c_str(), "metrics_enabled=%d", &value) == 1) g_pc_settings.metrics_enabled = value != 0;
@@ -1119,7 +1132,7 @@ void read_pad(PadState& p) {
         const int source = g_controller_bindings[action].load(std::memory_order_relaxed);
         if (source >= 0 && source < int(physical.size()) && physical[size_t(source)]) nav.buttons |= kPadActionBits[action];
     }
-    const bool menu_open = pc_menu_open() || (overlay::enabled() && overlay::is_open());
+    const bool menu_open = pc_menu_open() || (overlay::enabled() && overlay::wants_keyboard());
     static thread_local input::KeyboardActionState keyboard_state;
     if(menu_open || !g_window || GetForegroundWindow()!=g_window)keyboard_state={};
     if (pc_menu_open()) {
@@ -1155,7 +1168,7 @@ void read_pad(PadState& p) {
         view.buttons |= p.buttons;
         const bool had = view.buttons != 0;
         overlay::filter_pad(view);  // Minus + Plus toggles; while open the menu takes the pad
-        if (overlay::is_open() || (had && view.buttons == 0)) p = {};
+        if (overlay::wants_keyboard() || (had && view.buttons == 0)) p = {};
     }
 }
 
@@ -1339,6 +1352,7 @@ LONG WINAPI crash_handler(EXCEPTION_POINTERS* e) {
     uint64_t info = r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0;
     nx::log("CRASH: exception %08lx at %s (tools/symbolize.py for the exe), data address %llx", r->ExceptionCode,
             host_where(uint64_t(r->ExceptionAddress)).c_str(), (unsigned long long)info);
+    nx::nvn::log_upload_fault_context();
     host_backtrace(*e->ContextRecord);
     dump_guest(nx::current_cpu());
     return EXCEPTION_EXECUTE_HANDLER;
@@ -1363,7 +1377,14 @@ int main() {
         try {
             const auto parent=DWORD(std::stoul(arg.substr(18)));
             if(parent!=GetCurrentProcessId()) if(auto process=OpenProcess(SYNCHRONIZE,FALSE,parent)) {
-                WaitForSingleObject(process,10000);CloseHandle(process);
+                // A large driver cache can take longer than ten seconds to serialize.
+                // Never continue into data/log initialization while that owner is alive.
+                const auto waited=WaitForSingleObject(process,180000);
+                CloseHandle(process);
+                if(waited!=WAIT_OBJECT_0) {
+                    std::fprintf(stderr,"The previous SuperWonders session is still closing; reopen the launcher after it finishes.\n");
+                    return 2;
+                }
             }
         } catch(...) {}
     }

@@ -14,8 +14,20 @@ inline constexpr Site sites[] = {
     {0xfcde24,{0x944102f3,0x4a407808,0x52912ca9,0x72ad80e9,0x320003ea,0x321f03eb,0x1b092908,0x320007ec}},
     {0x1735b70,{0x942363a0,0x4a407808,0x52912ca9,0x72ad80e9,0x320003ea,0x321f03eb,0x1b092908,0x320007ec}},
 };
-inline const Site* find(uint64_t return_offset) {
-    for (const auto& site:sites) if (return_offset==site.call+4) return &site;
+// Product.120: each containing function matches the original's normalized
+// instruction/register structure, and all five BLs resolve to GetSystemTick.
+inline constexpr Site sites_120[] = {
+    {0x44b3e8,{0x9473a486,0x4a407811,0x52912ca9,0x72ad80e9,0x320003eb,0x321f03ec,0xf904767f,0x1b092e2b}},
+    {0x5a99a0,{0x946e2b18,0x4a407808,0x52912ca9,0x72ad80e9,0x320003ea,0x321f03eb,0x1b092908,0x320007ec}},
+    {0xa4d6c4,{0x945b9bcf,0xaa1f03e8,0x52800029,0xb9000260,0x4a40780a,0xf109b91f,0x1b147d4a,0x8b0a010a}},
+    {0xfde524,{0x94455837,0x4a407808,0x52912ca9,0x72ad80e9,0x320003ea,0x321f03eb,0x1b092908,0x320007ec}},
+    {0x185acc0,{0x94236650,0x4a407808,0x52912ca9,0x72ad80e9,0x320003ea,0x321f03eb,0x1b092908,0x320007ec}},
+};
+inline std::span<const Site> table(bool product120=false) {
+    return product120 ? std::span<const Site>(sites_120) : std::span<const Site>(sites);
+}
+inline const Site* find(uint64_t return_offset,bool product120=false) {
+    for (const auto& site:table(product120)) if (return_offset==site.call+4) return &site;
     return nullptr;
 }
 inline bool verified(const Site& site,std::span<const uint32_t> actual) {

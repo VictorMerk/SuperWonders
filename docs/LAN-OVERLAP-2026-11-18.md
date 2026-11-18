@@ -8,11 +8,27 @@ r8 exchanges input synchronously after the complete Wonder framework frame. Netw
 
 The earlier same-PC r7 test logs already contained sub-60 FPS intervals, including about 45–52 FPS. They were functional input/partial-position tests, not proof of smooth two-PC play. Their successful assertions must not be presented as a performance gate. Similarly, the old teardown was a normal host menu quit followed by the guest detecting socket disconnect 10054; it was not a normal menu quit on both peers.
 
-## Experimental one-frame overlap
+## One-frame overlap
 
 `OneAhead` uses one persistent transport worker and at most one outstanding exchange. The simulation consumes the previous exchange while the next exchange runs. Startup has one additional neutral frame. Inputs remain ordered and authenticated; there is no predicted input or rollback.
 
-The launcher offers **Overlap LAN networking (experimental)**, off by default. At this stage both PCs must select the same mode; the mode participates in the compatibility fingerprint. `NX_LAN_PIPELINE=1` is the unattended-test equivalent. It is a tradeoff: one extra buffered input frame can hide transport waits, but can increase input age on an already fast link. It is not zero input latency. Frame traces retain the original sampling timestamp when buffered inputs are applied, rather than restarting the latency clock after waiting.
+The launcher offers **Overlap LAN networking (experimental)**, off by default. Protocol 4 authenticates the host's input-buffer choice and 30/60 Hz simulation target; joining PCs adopt both automatically, even if their local preferences differ. `NX_LAN_PIPELINE=1` is the unattended-test equivalent. One extra buffered input frame can hide transport waits, but can increase input age on an already fast link. Frame traces retain the original sampling timestamp when buffered inputs are applied, rather than restarting the latency clock after waiting. Both PCs require the matching protocol-4 runtime; the delivered r8 runtime is incompatible.
+
+The optional 30 Hz target changes the fixed simulation step, presentation interval and shared game clock together. It reduces the work needed per second on slower PCs while retaining normal game speed when the target is met. It does not guarantee 30 or 60 FPS. Each PC reports its frame time outside foreground LAN waits (including pacing, rendering and scheduling), available on the host's HUD and in diagnostic traces. Zero means an unknown first sample. Neither this metric nor the LAN barrier is network RTT.
+
+The LAN performance follow-up uses a monotonic presentation deadline instead of each PC's independent monitor-vsync counter. Work and transport waits consume the same frame budget; late frames add no pacing sleep and do not trigger catch-up bursts. Host timing takes precedence over local FPS-limit overrides, temporary solo holds and fast-forward. Solo pacing remains unchanged. An established session uses a separate ten-second exchange timeout, while the initial neutral exchange and first framework frame retain the longer loading deadline. A silent connected peer should therefore stop the established session instead of appearing frozen for the three-minute lobby timeout.
+
+Failed nonblocking connections also check Winsock's exception descriptor set. A refused connection previously waited for the lobby deadline because only successful writable completion was observed. The regression test binds and closes a real loopback port and checks that joining reports connection failure before its ten-second lobby deadline.
+
+Room randomness is separate from kernel allocation entropy. A captured room seed reproducibly caused an SDK shared-memory initialization abort before the first framework frame. Restoring the runtime's established kernel entropy while retaining the room seed at Wonder's known gameplay RNG initialization sites let both instances complete the same-seed startup test. The unattended seed override requires virtual test input; ordinary rooms continue choosing their seed normally.
+
+## Diagnostic work must not stall gameplay
+
+LAN also enables the primary-player probe. Its old discovery worker scanned every committed heap/alias range, including cold pages, and a failed search could queue another full scan while one was still running. Reading committed memory can cause paging even when the read is protected against invalid addresses. This competes with rendering and game memory on a low-memory PC.
+
+The discovery worker now queries page residency before reading, skips cold pages, reads at most 256 KiB between yields and examines at most 32 MiB of address space per attempt. Each retry prioritizes the previous player's neighbourhood, then resumes its fallback cursor. It stops once it finds a usable candidate and does not queue searches behind an active search. Scene generations prevent a completed search from installing a stale player pointer after a transition. Ordinary per-frame checks still validate the candidate's vtable and position.
+
+The OS-level `resident_scan` test allocates three pages, touches the first and third, and verifies that scanning leaves the untouched middle page nonresident. It also checks that failed reads clear old buffer contents. Residency is a best-effort snapshot: an eviction race can still fault a page. Skipping cold memory can delay probe coverage; zero/unavailable position coverage must remain explicit. This probe is still not a whole-world synchronization check.
 
 The in-game LAN input-wait metric measures time the simulation actually blocks. The CSV recorder's `wait_ns` measures the complete transport exchange on its worker. These quantities differ in overlap mode. A low foreground wait does not mean zero network delay or zero input age.
 
@@ -67,8 +83,58 @@ A later full Random course run completed the scripted course portion with **4,09
 
 ![Native PC settings with PlayStation face shapes and preset-dependent bindings](images/pc-lan-playstation-settings.png)
 
+## Physical home-LAN follow-up
+
+The R4 LAN runtime completed three automated course routes across a physical RX 570 guest and RTX 3050 host: 60 Hz serial, 60 Hz buffered and 30 Hz buffered. Both used 720p, compressed textures, frame generation off and draw skipping off. Each host quit normally (code 0); each guest detected that disconnect (code 2). The retained windows contained respectively 4,095 / 4,094 / 3,652 matching committed input pairs and 1,076 / 1,164 / 1,008 matching available primary-player positions. This remains a partial guard, not certification of all game state or rendering.
+
+Across course-relative frames 200–900 (701 samples per PC), guest base frame rates averaged 40.14 / 50.50 / 29.61 FPS. The 30 Hz mode logged 100% game speed in steady intervals; 60 Hz did not sustain its target on this setup. Buffering adds one input frame: guest sample-to-present proxies averaged 24.08 / 36.88 / 50.46 ms. Those are runtime instrumentation proxies, not end-to-end physical controller/display latency. Per-frame measurements use each PC's own monotonic clock; wall-clock differences between PCs are not treated as latency.
+
+All 36 non-GPU CPU checks passed on the final source. Five additional fresh-room two-instance startup tests passed on the second PC after the allocation-entropy fix. The previously crashing captured room seed also passed both local startup peers and a complete physical-LAN course route. All observed resident scan attempts stayed within the 32 MiB examination cap.
+
+Runtime SHA-256: `4c9e1cd507e5727cbe089bb5e4cdcc5b6f8c00d9fb36ddb076acb344f48036f9`. [Aggregated physical test results](data/lan-physical-performance-20261118.json) record the test scope and timing distribution. These results concern the matching R4 LAN runtime and existing 16:9 game data, not the original r8 executable or a newly rebuilt full setup kit.
+
 The PlayStation hint capture uses the Nintendo controller preset, hence Circle confirms and Cross goes back. Icon choice does not silently change bindings; the separate controller preset determines that mapping.
 
 The native pause capture also still shows incorrect blue/green background colors. Zero Vulkan validation errors do not make that image correct. This remains a known rendering failure. Real two-PC performance, all character/actor synchronization, all shader flicker, profiles/nicknames and a new complete matching kit remain unfinished. The installed r8 builds and their immutable ZIPs are unchanged.
 
 ![Known failing pause background colors; not a fixed-rendering claim](images/pc-lan-pause-known-failure.png)
+
+
+## Manual-session follow-up and current limits
+
+The subsequent manual session ended on a position-state rejection, rather than a confirmed Windows crash. The retained input commits agreed. Only the final paired position sample was available, with different x coordinates in the same scene. This does not distinguish actual simulation drift from discovery of different player objects: the heap probe has no actor-slot or lifetime identity. The original probe must not certify a whole scene from its first observation.
+
+The native runtime now requires four consecutive agreeing position samples before arming the partial guard in a scene. Missing samples or scene changes clear the baseline. After arming, three consecutive disagreements reject the session; a transient disagreement followed by agreement does not. Explicit nonzero state hashes and transport authentication, ordering, role and acknowledgement checks remain strict. The trusted session API retains immediate position validation by default. A scene that never establishes a baseline remains **unverified**, visibly reported as pending in the HUD; this is not a repair for genuine divergence. Regression tests cover the captured coordinate disagreement, association, transient and persistent failures, and real TCP rejection on both peers.
+
+The launcher enables network overlap by default and remembers the host's selected simulation rate and buffer mode. It does not save room addresses or pairing codes. A replacement launcher waits for its exiting parent before rotating logs or acquiring the user-data lock. Unexpected session exits return a failure code. This avoids the previous parent/child log-truncation race and preserves the failure evidence.
+
+The source rebased onto current main passes **53 non-GPU CPU checks** (the earlier integration passed 45 before the edition checks were added). On the second physical PC, five fresh-room startup pairs and a native parent/launcher handoff test passed. Two additional two-instance course routes (60 Hz serial and buffered) reached their targets and both scripted render-thread exits returned zero. These are same-PC loopback tests, separate from the earlier R4 physical-LAN results. The 30 Hz buffered route reached its course target, but cleanup did not finish within the test limit; it remains a **failed test**, not a performance or shutdown pass. The cache-flush checkpoint was incomplete on the host. The cause needs a native stack capture and regression before claiming all shutdown paths fixed. No new two-PC manual-play validation is claimed for this follow-up.
+
+When preparing a separate installation, retain both `spirv.pack` and `spirv.journal` if present. The journal contains the locally accumulated shader bundle; omitting it can turn an otherwise warm installation into a cold shader-loading run. Cache files, saves and private diagnostics are not part of the source commit.
+
+
+### Runtime package compatibility and recovery
+
+Current main's edition support uses a new game-library interface. Its runtime correctly refuses an older r8 game-code DLL; that check must remain strict. The runtime-only LAN package is built from the matching ABI1 base with the LAN fixes, so it does not require replacing the existing game library. The installer verifies the tested game-code identities before creating its destination. It retains both shader pack and journal, and its isolated fixture test checks rejection before mutation, warm-cache retention, initial host settings and preservation of the original program and save.
+
+The probe now validates all three coordinates against the wire format's finite/range requirements at both discovery and live sampling. An unusable observation remains absent instead of generating a malformed position packet that ends a room. CPU tests cover NaN on the previously unchecked axes, infinity and out-of-range values.
+
+Replacement launchers wait up to three minutes for their own parent rather than ten seconds, and return without initializing data/logs if that wait fails. A large driver cache can outlast the former wait. Shutdown phase logs now distinguish GPU-lock acquisition, pending background writes and driver cache size/snapshot work. These diagnostics do not themselves prove a cache deadlock or resolve the earlier failed route; native verification remains required.
+
+
+### Follow-up native checks on the matching r8 runtime
+
+The matching r8 runtime completed a 30 Hz buffered 1,200-frame startup/shutdown pair with exit code zero on both peers. A separate native handoff held the parent alive for fifteen seconds, verified that the replacement was still waiting at eleven seconds, then confirmed a normal launcher exit and intact parent/replacement logs. The 4,800-frame 30 Hz course route also completed with both scripted render-thread exits zero: its retained window contains 4,095 matching committed input pairs and 2,090 matching available primary-player positions, with no retained difference. These are two-instance RX570 tests, not a physical-network performance result. [Scoped follow-up results](data/lan-followup-20261118.json).
+
+The earlier second-PC 30 Hz run remains recorded as failed: its harness started short exit waits while frames before the scripted quit were still pending, so it does not establish a runtime deadlock. The new tests observe the complete scripted route within an overall deadline. The captured intro and renewed physical test remain pending. Shader preparation for the renderer changes took several minutes on the first cold local run. Deployment can use the installer's verified same-game QA cache source to retain the now-warm pack, journal, driver cache and preparation markers without altering the original installation.
+
+The r8-compatible build also carries main's extended Windows resource-path fix without adopting its new game-library ABI. Its CPU suite passes 47 checks; main passes 53 after the additional edition checks. The retained startup, handoff and first course results identify their pre-path-fix runtime hash explicitly; the captured-intro follow-up targets the final runtime.
+
+
+### Captured intro and cold-loading follow-up
+
+The final-path-compatible runtime completed a 12,000-frame Mario/Daisy replay using a copy of the manual session's save and its captured room seed. Both scripted exits returned zero; 4,096 retained committed inputs and 1,094 available player positions matched. Native readbacks show both players in gameplay and then together on the visible world map. One earlier picture was taken during the map-loading fade; it is not evidence of a persistent blank screen. The recorded cases identify their actual runtime hash; subsequent loading-deadline changes have separate CPU regression coverage and still need the physical follow-up.
+
+Cold shader preparation exceeded three minutes in local tests. Initial synchronization now has its own ten-minute loading deadline, independent of the lobby deadline and the established ten-second exchange timeout. A scaled TCP regression delays either peer's first game frame for 750 ms beyond a 500 ms lobby deadline, verifies success within the separate two-second loading budget, then verifies that the next silent gameplay exchange still fails on its 150 ms frame deadline. Invalid loading deadlines are rejected before opening the room. Closing a peer still produces immediate disconnect handling; the longer loading grace applies only to the first two exchanges.
+
+Cache seeding accepts either the identical compiled game library, or another explicitly supported library only when its shader-program catalogue is byte-identical. This allows the verified same-game QA cache to be used across the tested r8 library builds without accepting an unrelated catalogue. The installer rejects mismatches before changing files.

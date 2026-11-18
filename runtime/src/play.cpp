@@ -9,7 +9,9 @@
 // run, so a script is cut into segments by anchors ("@course": the frame the player appears in a course): the frames
 // of a segment count from its anchor, and a segment only starts when its anchor happens.
 #include "play.h"
+#include "netplay_probe.h"
 #include "netplay_game.h"
+#include "resident_scan.h"
 
 #include <algorithm>
 #include <atomic>
@@ -456,6 +458,8 @@ std::atomic<uint64_t> g_player{0};      // the object, found by the search threa
 std::atomic<uint64_t> g_last_player{0x503a5c23d8};
 bool g_go_armed = false;  // after a course start, until the player first moves (the "go" event)
 std::atomic<bool> g_search_wanted{false};
+std::atomic<bool> g_search_busy{false};
+std::atomic<uint64_t> g_search_generation{0};
 std::atomic<uint64_t> g_searches{0};
 
 Layout layout() {
@@ -478,34 +482,66 @@ Layout layout() {
     return l;
 }
 
-// Every object with the vtable, on a background thread (a 3 GB heap takes a while; the game never waits on it).
+// Best-effort, bounded background discovery. Avoid paging in gigabytes of cold
+// heap for a diagnostic guard, and never queue scans behind an ongoing scan.
 void search_thread() {
-    std::vector<uint64_t> buf(1 << 17);
+    std::vector<uint64_t> buf(1 << 15);  // at most 256 KiB between yields
+    uint64_t resume=0, cursor_generation=0;
+    constexpr uint64_t max_examined=32*1024*1024;  // total address space per attempt, including cold pages
     while (true) {
         while (!g_search_wanted.exchange(false)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto generation=g_search_generation.load();
+        if(cursor_generation!=generation) { resume=0; cursor_generation=generation; }
+        const auto started=monotonic_ns();
+        uint64_t copied=0, examined=0, pick=0;
         std::vector<uint64_t> found;
-        for (const Range& r : data_ranges())
-            for (uint64_t a = r.lo; a < r.hi; a += buf.size() * 8) {
-                size_t n = size_t(std::min<uint64_t>(buf.size() * 8, r.hi - a));
-                if (!safe_read(a, buf.data(), n)) continue;
-                for (size_t k = 0; k < n / 8; k++)
-                    if (buf[k] == g_layout.vt) found.push_back(a + k * 8);
+        auto ranges=data_ranges();
+        // Scene allocations usually stay close to the previous player. Search
+        // that neighbourhood first before falling back to other resident pages.
+        const uint64_t last_page=g_last_player.load() & ~uint64_t(4095);
+        std::vector<Range> ordered;
+        for(const auto& r:ranges) {
+            const auto lo=std::max(r.lo,last_page>0x800000?last_page-0x800000:0);
+            const auto hi=std::min(r.hi,last_page+0x800000);
+            if(lo<hi) ordered.push_back({lo,hi});
+        }
+        const auto preferred=ordered.size();
+        ordered.insert(ordered.end(),ranges.begin(),ranges.end());
+        for (size_t range_index=0;range_index<ordered.size();++range_index) {
+            const auto& r=ordered[range_index];
+            const bool global=range_index>=preferred;
+            const auto start=global?std::max(r.lo,resume):r.lo;
+            for (uint64_t a = start; a < r.hi && examined<max_examined; a += buf.size() * 8) {
+                if(g_search_generation.load()!=generation) break;
+                size_t n = size_t(std::min({uint64_t(buf.size()*8),r.hi-a,max_examined-examined}));
+                examined+=n;
+                if(global) resume=a+n;
+                copied+=probe::read_resident(a,buf.data(),n,safe_read);
+                for (size_t k = 0; k < n / 8; k++) {
+                    if (buf[k] != g_layout.vt) continue;
+                    const auto object=a+k*8;
+                    found.push_back(object);
+                    float p[3];
+                    if (safe_read(object+g_layout.pos,p,sizeof p) && lan::usable_probe_position(p) && (p[0]!=0 || p[1]!=0)) {
+                        pick=object; break;
+                    }
+                }
+                if(pick) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
-        // More than one object (the other players' slots, a copy for the goal demo): the one whose position moves
-        // is picked by frame() from these; the first is a start.
-        static std::mutex m;
+            if(pick || examined>=max_examined || g_search_generation.load()!=generation) break;
+        }
+        if(!pick && examined<max_examined) resume=0;  // the fallback wrapped; retain progress otherwise
         g_searches++;
-        uint64_t pick = 0;
-        for (uint64_t o : found) {
-            float p[3];
-            if (safe_read(o + g_layout.pos, p, sizeof p) && std::isfinite(p[0]) && std::isfinite(p[1]) && (p[0] != 0 || p[1] != 0)) {
-                pick = o;
-                break;
+        {
+            std::lock_guard guard(g_lock);
+            if(g_search_generation.load()==generation && pick) {
+                g_player=pick; g_last_player=pick;
             }
         }
-        g_player = pick;
-        if (pick) g_last_player = pick;
-        log("play: probe found %zu objects with vtable %llx, using %llx", found.size(), (unsigned long long)g_layout.vt, (unsigned long long)pick);
+        log("play: resident probe found %zu objects, using %llx; %.1f MB read, %.1f MiB examined over %.1f ms (bounded, yielding, no cold-heap scan)",
+            found.size(),(unsigned long long)pick,double(copied)/1e6,double(examined)/(1024*1024),double(monotonic_ns()-started)/1e6);
+        g_search_busy=false;
     }
 }
 
@@ -681,6 +717,7 @@ void file_opened(const std::string& path) {
         g_course = name;
         armed = name == "Title" ? "title" : name.rfind("World", 0) == 0 ? "map" : name.rfind("Course", 0) == 0 ? "course" : "";
         g_scene = "loading";
+        g_search_generation++;
         g_player = 0, g_track_n = 0;  // (the old scene's objects are freed)
         return;
     }
@@ -691,6 +728,7 @@ void file_opened(const std::string& path) {
     if (stream.rfind("BGM_Jingle_PlayerDown", 0) == 0) {
         fire(kEvDeath);
         armed = "course";
+        g_search_generation++;
         g_player = 0, g_track_n = 0;
         // NX_PLAY_FALLBACK=bot: a replay that died has left the recorded run; the bot takes over (perf runs that
         // must reach the goal: tools/perf/perf_suite.sh "course11").
@@ -778,7 +816,7 @@ void frame() {
     if (g_layout.vt && player) {
         uint64_t vt = 0;
         valid = safe_read(player, &vt, 8) && vt == g_layout.vt && safe_read(player + g_layout.pos, pos, sizeof pos) &&
-                std::isfinite(pos[0]);
+                lan::usable_probe_position(pos);
         if (g_layout.vel) safe_read(player + g_layout.vel, vel, sizeof vel);
     }
     g_player_valid = valid;
@@ -817,7 +855,10 @@ void frame() {
     // Gone and not where it was: search, in a course or its loading only (the search reads the whole heap on its own
     // thread), at most every 2 s.
     static int64_t next_search = 0;
-    if (g_layout.vt && !valid && course_scene && fr >= next_search) g_search_wanted = true, next_search = fr + 120;
+    if (g_layout.vt && !valid && course_scene && fr >= next_search) {
+        if (!g_search_busy.exchange(true)) g_search_wanted=true;
+        next_search=fr+120;
+    }
     // "go": after a course (re)start, the first frame the player moves after standing still for 10 frames. The game's
     // own moment (control starts, the input already held), unlike the stream that marks the course start, which comes
     // a frame or two earlier or later from run to run.

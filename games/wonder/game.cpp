@@ -20,6 +20,11 @@ namespace nx {
 namespace nvn { void hold_scene_frame_cap(int fps); }
 
 void game::file_opened(const char* path) {
+    if(lan::active()) {
+        const char* stream=std::strstr(path,"/Sound/Resource/Stream/BGM_");
+        if(stream && (std::strstr(stream,"BGM_Title") || std::strstr(stream,"BGM_World_") || std::strstr(stream,"BGM_Course")))
+            lan::loading_event(path);
+    }
     static std::atomic<bool> held{false};
     // The map can remain resident while entering a course, so returning to it does not necessarily reopen its
     // StageLoadInfo. Its world music does reopen when the player returns from this house.

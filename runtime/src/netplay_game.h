@@ -25,6 +25,7 @@ bool active();
 bool connected(uint32_t player);
 plat::PadState pad(uint32_t player);
 void next_frame();
+void loading_event(const char* path);
 uint64_t seed();
 uint64_t epoch();
 uint32_t local_player();
@@ -46,6 +47,7 @@ inline bool active() { return false; }
 inline bool connected(uint32_t) { return false; }
 inline plat::PadState pad(uint32_t) { return {}; }
 inline void next_frame() {}
+inline void loading_event(const char*) {}
 inline uint64_t seed() { return 0; }
 inline uint64_t epoch() { return 0; }
 inline uint32_t local_player() { return 0; }

@@ -13,6 +13,10 @@ int main() {
     FrameInputs input; input.players=4; input.tick=123; input.state_hash=0x123456789abcdef;
     input.state={42,true,{19.5f,91.0f,0.0f}};
     input.frame_work_ns={16'000'000,33'000'000,9'000'000,0};
+    input.loading_events={0,0x123456789abcdef,42,0};
+    uint64_t hash=0,event=0;
+    decode_input(encode_input({},0,{},0,input.loading_events[1]),hash,nullptr,nullptr,&event);
+    check(event==input.loading_events[1],"full-width loading event survives input encoding");
     for(size_t i=0;i<4;++i) { input.pads[i].buttons=1ull<<i; input.pads[i].lx=int(i)*100; input.pads[i].ly=-int(i)*200; }
     Packet packet; packet.type=Message::Commit; packet.tick=input.tick; packet.session[0]=42; packet.payload=encode_commit(input);
     const auto encoded=encode_packet(packet,key); const auto decoded=decode_packet(encoded,key);
@@ -22,6 +26,7 @@ int main() {
     check(decoded.tick==123 && decoded.session==packet.session && frame.players==4 && frame.state_hash==input.state_hash,"authenticated frame roundtrip");
     check(frame.state.scene==42 && frame.state.valid && frame.state.position==input.state.position,"player-state bits survive authenticated encoding");
     check(frame.frame_work_ns==input.frame_work_ns,"per-PC frame work is retained without guessing from local waits");
+    check(frame.loading_events==input.loading_events,"all peers receive the same loading readiness markers");
     check(rejects([&]{encode_input({},0,{},kMaxFrameWorkNs+1);}),"out-of-range peer telemetry is rejected");
     auto absent=input; absent.players=2;
     check(rejects([&]{encode_commit(absent);}),"timing for a disconnected player is rejected");

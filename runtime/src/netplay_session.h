@@ -37,7 +37,7 @@ public:
     Session& operator=(const Session&) = delete;
     void host(const SessionOptions&, const std::function<void(uint16_t)>& listening = {});
     void join(const SessionOptions&);
-    FrameInputs exchange(const plat::PadState& local, uint64_t previous_state_hash = 0, const PlayerState& = {}, uint64_t frame_work_ns=0);
+    FrameInputs exchange(const plat::PadState& local, uint64_t previous_state_hash = 0, const PlayerState& = {}, uint64_t frame_work_ns=0, uint64_t loading_event=0);
     void stop() noexcept;  // interrupts waits; join caller threads before destroying the object
     uint8_t role() const;
     uint8_t players() const;

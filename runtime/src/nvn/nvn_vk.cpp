@@ -490,7 +490,9 @@ void set_preserve_aspect(bool preserve) { g_preserve_aspect.store(preserve, std:
 bool preserve_aspect() { return g_preserve_aspect.load(std::memory_order_relaxed); }
 
 void flush_pipeline_cache() {
+    log("shutdown: acquiring GPU cache lock");
     std::lock_guard<std::recursive_mutex> lock(g_gpu);
+    log("shutdown: GPU cache lock acquired");
     if (!g_device) return;
     // The GPU lock prevents concurrent pipeline creation while Vulkan serializes the cache.
     pipeline_cache_save(true);

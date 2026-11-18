@@ -1,0 +1,40 @@
+{
+  "runtime_sha256": "52d92290e247bd3a6938bf8a4977854a65af7718f73da06bc8032f811eb36660",
+  "runtime_interface": 1,
+  "protocol": 4,
+  "scope": "Two instances on one RX570; physical follow-up pending",
+  "cpu_checks": {
+    "r8_non_gpu": 47,
+    "main_non_gpu": 52
+  },
+  "startup_shutdown": {
+    "target_frames": 1200,
+    "simulation_rate": 30,
+    "input_lead": 1,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "runtime_sha256": "bc8a12b33dbc67190085819f72bf5da10d5606a7445b9e080ee2eb9dc927478a"
+  },
+  "slow_parent_handoff": {
+    "parent_hold_seconds": 15,
+    "child_still_waiting_at_seconds": 11,
+    "exit": 0,
+    "parent_log_preserved": true,
+    "replacement_log_no_nuls": true,
+    "runtime_sha256": "bc8a12b33dbc67190085819f72bf5da10d5606a7445b9e080ee2eb9dc927478a"
+  },
+  "course": {
+    "target_frames": 4800,
+    "simulation_rate": 30,
+    "input_lead": 1,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "committed_pairs": 4095,
+    "available_position_pairs": 2090,
+    "first_difference": null,
+    "runtime_sha256": "bc8a12b33dbc67190085819f72bf5da10d5606a7445b9e080ee2eb9dc927478a"
+  },
+  "captured_intro": "pending GPU reservation on final runtime with extended-path resource support",
+  "physical_lan": "pending temporary access restart",
+  "limitation": "Inputs and one heuristic player position only. These tests do not certify actor identity, whole-world synchronization, physical-network performance or all rendering."
+}

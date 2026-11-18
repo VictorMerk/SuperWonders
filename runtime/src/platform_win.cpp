@@ -1,6 +1,7 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
 #include "file_io.h"
+#include "host_path.h"
 #include "keyboard_actions.h"
 #include <algorithm>
 #include <array>
@@ -97,7 +98,11 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
     static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
-    if (exiting.test_and_set()) for (;;) Sleep(INFINITE);
+    if (exiting.test_and_set()) {
+        nx::log("shutdown: concurrent exit request on thread %lu; cleanup already owned", GetCurrentThreadId());
+        for (;;) Sleep(INFINITE);
+    }
+    nx::log("shutdown: begin code %d on thread %lu", code, GetCurrentThreadId());
     nx::lan::flush_diagnostics();
     nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
@@ -194,7 +199,7 @@ uint64_t monotonic_ns() {
 // ---- files and output -----------------------------------------------------------------------------------------
 
 FILE* fopen_utf8(const std::string& path, const char* mode) {
-    std::wstring wp = std::filesystem::u8path(path).wstring();
+    std::wstring wp = host_path(std::filesystem::u8path(path)).wstring();
     std::wstring wm(mode, mode + std::strlen(mode));
     return _wfopen(wp.c_str(), wm.c_str());
 }
@@ -1363,7 +1368,14 @@ int main() {
         try {
             const auto parent=DWORD(std::stoul(arg.substr(18)));
             if(parent!=GetCurrentProcessId()) if(auto process=OpenProcess(SYNCHRONIZE,FALSE,parent)) {
-                WaitForSingleObject(process,10000);CloseHandle(process);
+                // A large driver cache can take longer than ten seconds to serialize.
+                // Never continue into data/log initialization while that owner is alive.
+                const auto waited=WaitForSingleObject(process,180000);
+                CloseHandle(process);
+                if(waited!=WAIT_OBJECT_0) {
+                    std::fprintf(stderr,"The previous SuperWonders session is still closing; reopen the launcher after it finishes.\n");
+                    return 2;
+                }
             }
         } catch(...) {}
     }

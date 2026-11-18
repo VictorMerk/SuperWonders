@@ -1,7 +1,14 @@
 #pragma once
 #include "netplay_wire.h"
+#include <cmath>
 
 namespace nx::lan {
+// The discovery probe reads live guest memory. Reject an unusable observation
+// locally instead of sending a malformed position that tears down the room.
+inline bool usable_probe_position(std::span<const float,3> position) {
+    for(float value:position) if(!std::isfinite(value) || std::abs(value)>1e6f) return false;
+    return true;
+}
 // Heap discovery has no actor lifetime/slot identity. Its first observation
 // cannot establish divergence. Require an agreeing baseline for each scene,
 // and confirmation of a later disagreement, without weakening explicit hashes.

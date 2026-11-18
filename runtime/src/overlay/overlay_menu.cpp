@@ -17,6 +17,11 @@
 #include "netplay_game.h"
 #include "button_font.h"
 #include "overlay/overlay_internal.h"
+#include "overlay/usability.h"
+#include "profiles.h"
+#if NX_GAME_LIBRARY
+#include "launcher/launcher.h"
+#endif
 #include "overlay/overlay_ui.h"
 
 namespace nx::overlay {
@@ -685,6 +690,25 @@ void audio(MenuContext& c, const Labels& l) {
 void controls(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     const int lang = std::clamp(s.language, 0, 12);
+    // Show the actual game-action layout and live input before the editable bindings.
+    const float k=std::clamp(c.height/1080.f,.5f,3.f);
+    const auto corner=ImGui::GetCursorScreenPos();
+    const auto width=ImGui::GetContentRegionAvail().x;
+    auto* dl=ImGui::GetWindowDrawList();
+    const uint64_t buttons=pad_buttons();
+    const char* action_names[]={"X","Y","A","B"};
+    const size_t actions[]={CtlX,CtlY,CtlA,CtlB};
+    const uint64_t bits[]={plat::kX,plat::kY,plat::kA,plat::kB};
+    const auto device_kind=plat::controller_kind(0);
+    for(int i=0;i<4;++i) {
+        const ImVec2 p{corner.x+i*width/4,corner.y},q{p.x+width/4-6*k,p.y+76*k};
+        const bool held=(buttons&bits[i])!=0;
+        dl->AddRectFilled(p,q,ui::fade(held?ui::theme().accent:IM_COL32(255,255,255,18)),8*k);
+        const std::string text=std::string(action_names[i])+" / "+physical_button_name(device_kind,controller_binding(s,actions[i]));
+        dl->AddText({p.x+8*k,p.y+10*k},held?IM_COL32(12,16,24,255):ui::theme().text,text.c_str());
+        dl->AddText({p.x+8*k,p.y+42*k},held?IM_COL32(12,16,24,255):ui::theme().text_dim,held?"Pressed":"Ready");
+    }
+    ImGui::Dummy({width,84*k});
     rows::begin("##controls", c.height);
     rows::section("Players & devices");
     if(lan::active()) rows::disable_next();
@@ -706,6 +730,9 @@ void controls(MenuContext& c, const Labels& l) {
         settings_changed(true); ui::notify("Restart the game to update its button prompts.");
     }
     rows::section(kHeaders[lang][1]);
+    if(rows::action("Reset controller bindings","Use selected layout","Clear custom button overrides and return to the selected Xbox, Nintendo or PlayStation preset. Keyboard bindings stay as configured.")) {
+        s.controller_custom_mask=0;settings_changed(true);ui::notify("Controller bindings reset to the selected layout.");
+    }
     const char* presets[] = {"Xbox / PlayStation: bottom confirms", "Nintendo: right confirms", "PlayStation: Circle confirms"};
     if (rows::choice(l.control_preset, &s.controller_preset, presets, 3, kDefaults.controller_preset,
         "Choose bottom-button confirmation (Xbox A / PlayStation Cross), Nintendo layout, or PlayStation Circle confirmation. Circle confirmation swaps Cross and Circle only. Per-action custom bindings below take priority. Restart to refresh in-game button prompts."))
@@ -786,6 +813,11 @@ void overlay_tab(MenuContext& c) {
 void system_tab(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     rows::begin("##system", c.height);
+    rows::section("Menu & comfort");
+    auto& comfort=usability_preferences();
+    if(rows::toggle("Full-window settings",&comfort.menu_fullscreen,false,"Fill the window, or use a floating settings panel that you can move and resize.")) persist_usability();
+    if(rows::toggle("Reduced menu motion",&comfort.reduced_motion,false,"Remove menu transitions and moving highlights. Applies immediately.")) persist_usability();
+    if(rows::integer("Menu opacity",&comfort.menu_opacity,75,100,5,100,"%d%%","Adjust the settings panel background. The game remains visible around a floating panel.")) persist_usability();
     rows::section(l.system);
     const int lang = std::clamp(s.language, 0, 12);
     if (rows::choice(kCommon[lang][11], &s.language, kLanguageNames, int(std::size(kLanguageNames)), kDefaults.language, translated_desc(desc::language, lang)))
@@ -810,6 +842,17 @@ void system_tab(MenuContext& c, const Labels& l) {
         if (armed) log("overlay: quit from the menu"), plat::exit_process(0);
         armed_at = ImGui::GetTime();
     }
+#if NX_GAME_LIBRARY
+    if(c.startup_settings) {
+        static double return_armed_at=-10;
+        const bool return_armed=ImGui::GetTime()-return_armed_at<4;
+        if(rows::action("Return to launcher",return_armed?"Press again to leave":"Profiles & game options",
+            "Close the game and reopen the launcher to switch profiles, manage saves or mods. Unsaved progress is lost. Leaving LAN disconnects this PC; the host leaving ends the room. Select twice within four seconds to confirm.",true,return_armed)) {
+            if(return_armed)launcher::return_to_launcher();
+            return_armed_at=ImGui::GetTime();
+        }
+    }
+#endif
     rows::page_note(l.restart_low_vram);
     rows::end();
 }
@@ -843,17 +886,36 @@ void draw_menu(MenuContext& c) {
     const Labels& l = kLabels[std::clamp(s.language, 0, 12)];
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float k = std::clamp(c.height / 1080.0f, 0.5f, 3.0f);
-    // Savage Wind's in-game Settings window: up to 1500 px wide at 1080 p, the full height less a slim margin; it
-    // rises a little as it fades in (c.reveal: 0..1).
-    const ImVec2 size{std::min(display.x * 0.92f, 1500 * k), display.y - 2 * 22 * k};
-    const float rise = (1.0f - ui::smoothstep(c.reveal)) * 26 * k;
-    ImGui::SetNextWindowPos({display.x * 0.5f, display.y * 0.5f + rise}, ImGuiCond_Always, {0.5f, 0.5f});
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-    ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+    auto& comfort=usability_preferences();
+    const float margin=comfort.menu_fullscreen?0.f:16*k;
+    const ImVec2 maximum{std::max(1.f,display.x-2*margin),std::max(1.f,display.y-2*margin)};
+    const ImVec2 minimum{std::min(maximum.x,760*k),std::min(maximum.y,620*k)};
+    static bool previous_fullscreen=false;
+    static ImVec2 floating_size{0,0};
+    if(!comfort.menu_fullscreen && previous_fullscreen && floating_size.x>0)
+        ImGui::SetNextWindowSize(floating_size);
+    previous_fullscreen=comfort.menu_fullscreen;
+    if(comfort.menu_fullscreen) {
+        ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize(display);
+    } else {
+        ImGui::SetNextWindowPos({display.x*.5f,display.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
+        ImGui::SetNextWindowSize({std::min(maximum.x,1440*k),std::min(maximum.y,900*k)},ImGuiCond_FirstUseEver);
+    }
+    ImGui::SetNextWindowSizeConstraints(minimum,maximum);
+    ImGui::SetNextWindowBgAlpha(comfort.menu_opacity/100.f);
+    ImGuiWindowFlags f=ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings;
+    if(comfort.menu_fullscreen) f|=ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize;
+    if(!c.open)f|=ImGuiWindowFlags_NoInputs;
     if (c.appearing) ImGui::SetNextWindowFocus();  // keyboard and controller navigation start in the menu
     if (!ImGui::Begin("##nx_menu", nullptr, f)) {
         ImGui::End();
         return;
+    }
+    if(!comfort.menu_fullscreen) {
+        floating_size=ImGui::GetWindowSize();
+        const auto pos=ImGui::GetWindowPos(), size=ImGui::GetWindowSize();
+        ImGui::SetWindowPos({std::clamp(pos.x,margin,std::max(margin,display.x-margin-size.x)),
+                             std::clamp(pos.y,margin,std::max(margin,display.y-margin-size.y))});
     }
     ImDrawList* wdl = ImGui::GetWindowDrawList();
     {  // a thin accent rule along the top edge
@@ -868,6 +930,9 @@ void draw_menu(MenuContext& c) {
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopFont();
     if (close_button(k)) c.open = false;
+    ImGui::TextDisabled("%s",comfort.menu_fullscreen ? "Esc / F1: resume  |  L / R: tabs" : "Drag the background to move  |  Drag a corner to resize  |  Esc: resume");
+    if(!c.startup_settings) ImGui::TextDisabled("Launcher settings");
+    else ImGui::TextDisabled("%s",lan::active()?"LAN continues while settings are open.":"Settings do not pause gameplay. Use the game's pause button first.");
 
     if (c.startup_settings) {
         const uint32_t changes = restart_changes(*c.startup_settings, c.settings);
@@ -891,6 +956,11 @@ void draw_menu(MenuContext& c) {
         }
     }
 
+    if(ImGui::Button(c.startup_settings ? "Resume game" : "Back to launcher")) c.open=false;
+    ImGui::SameLine();
+    if(ImGui::Button(s.muted?"Unmute":"Mute audio")) {s.muted=!s.muted;settings_changed(true);}
+    ImGui::SameLine();
+    if(ImGui::Button(s.metrics_enabled?"Hide FPS":"Show FPS")) {s.metrics_enabled=!s.metrics_enabled;settings_changed(true);}
     const char* names[kTabs] = {l.video, l.audio, l.controls, l.overlay, l.system};
     int current = -1;
     // Tabs follow the keyboard / controller focus: moving onto a tab with the arrows or the D-pad shows it (next
@@ -928,7 +998,7 @@ void draw_menu(MenuContext& c) {
                 page_dir = shown_tab < 0 ? 0.0f : t > shown_tab ? 1.0f : -1.0f;
                 page_a = shown_tab < 0 ? 1.0f : 0.0f, shown_tab = t;
             }
-            page_a = ui::approach(page_a, 1.0f, 14.0f);
+            page_a = comfort.reduced_motion ? 1.f : ui::approach(page_a, 1.0f, 14.0f);
             ImGui::PopStyleColor();  // (the rows want their own)
             ImGui::Dummy(ImVec2(0, 4 * k));
             const ImVec2 at = ImGui::GetCursorPos();

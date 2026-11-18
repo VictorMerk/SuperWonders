@@ -807,7 +807,16 @@ static void present_overlay_frame() {
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
     r = p_vkQueuePresentKHR(g_queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) make_swapchain();
+    // Launcher/settings presentations must follow window resizing just as gameplay does.
+    // Some drivers keep presenting the old extent with SUBOPTIMAL rather than OUT_OF_DATE.
+    bool remake=r==VK_ERROR_OUT_OF_DATE_KHR;
+    if(r==VK_SUBOPTIMAL_KHR) {
+        VkSurfaceCapabilitiesKHR caps{};
+        p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_physical,g_surface,&caps);
+        remake=caps.currentExtent.width!=g_sc_current.width || caps.currentExtent.height!=g_sc_current.height ||
+            (present_pass_wanted() && !present_pass_failed() && caps.currentTransform!=g_sc_transform);
+    }
+    if(remake)make_swapchain();
 }
 
 void prep_progress(uint64_t done, uint64_t total, bool visible, int kind) {

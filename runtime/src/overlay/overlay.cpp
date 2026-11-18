@@ -15,6 +15,7 @@
 #include <nx/runtime.h>
 
 #include "overlay/overlay_internal.h"
+#include "overlay/usability.h"
 #include "overlay/overlay_ui.h"
 #include "netplay_game.h"
 
@@ -488,7 +489,7 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     // the menu fades in over about 0.15 s and out a little faster (drawn, without input, until it's gone)
     static float reveal = 0;
     if (appearing) reveal = std::max(reveal, 0.04f);
-    reveal = ui::approach(reveal, open ? 1.0f : 0.0f, open ? 18.0f : 26.0f);
+    reveal = usability_preferences().reduced_motion ? (open?1.f:0.f) : ui::approach(reveal, open ? 1.0f : 0.0f, open ? 18.0f : 26.0f);
     g_fading = !open && reveal > 0.0f;
     const ScreenFn screen = g_screen.load();
     if (screen) screen(float(w), float(h));  // under the menu, which the screen can open (its Settings)

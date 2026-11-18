@@ -30,6 +30,9 @@
 // downloads may come from there too), SUPERWONDERS_UPDATE_AS=<version> (pretend to be that version),
 // SUPERWONDERS_UPDATE_TEST=check|apply (the launcher checks, or checks and installs, at once).
 #include "launcher/updates.h"
+#include "launcher/save_backup.h"
+#include "profiles.h"
+#include "netplay_game.h"
 
 #include <algorithm>
 #include <atomic>
@@ -453,6 +456,16 @@ bool fail(const std::string& why) {
 }
 
 bool apply_now() {
+    const auto phase=lan::lobby_status().phase;
+    if(lan::active() || phase==lan::LobbyPhase::Preparing || phase==lan::LobbyPhase::Waiting || phase==lan::LobbyPhase::Ready)
+        return fail("Close your LAN room before installing an update.");
+    const auto save_data=profiles::storage_root(fs::u8path(plat::data_root()));
+    std::error_code save_ec;
+    if(fs::exists(save_data/"user/save",save_ec)) {
+        std::string backup_error;
+        if(backup_saves(save_data,backup_error).empty()) return fail("Could not protect current saves before updating: "+backup_error);
+    }
+
     UcRelease rel;
     {
         std::lock_guard lk(g.lock);
@@ -608,7 +621,7 @@ void worker(bool apply) {
         }
 #endif
 #if defined(_WIN32)
-        start_detached({str(prog() / "wonder-launcher.exe"), "--config"});
+        start_detached({str(prog() / "wonder-launcher.exe"), "--config", "--launcher-parent="+std::to_string(GetCurrentProcessId())});
 #else
         start_detached({str(prog() / "wonder"), "--config"});
 #endif
@@ -661,6 +674,9 @@ void page_updates(float k) {
     }
     rows::begin("##updates", ImGui::GetContentRegionAvail().y);
     rows::section("SuperWonders Update");
+    rows::action("Installation guide","Full setup or runtime update",
+        "First installation: use a complete package with game-build tools, then prepare your own game files. Runtime updates require an already prepared installation. Keep both LAN PCs on exactly the same runtime. Your profiles, saves and local settings are preserved; the active profile is backed up before installing.",true);
+    if(rows::action("Open installation folder","Folder","View the program folder. Extract manual updates here only after closing every running game instance.",true))plat::open_folder(program_dir());
     rows::action("This version", current_version().c_str(), "The version of SuperWonders you have.", true);
     switch (st) {
         case St::Off:

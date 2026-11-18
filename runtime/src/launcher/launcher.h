@@ -16,6 +16,8 @@ namespace nx::launcher {
 // Before the game boots, on the thread that will run it (nx::boot, after the guest memory is reserved). Returns when
 // the player presses Play (or at once when the launcher isn't wanted); Quit ends the process.
 void run();
+// Start the launcher configuration screen, then use the normal exit/flush path.
+bool return_to_launcher();
 
 // Generate missing profile resources from the installed game data before boot.
 void prepare_ultrawide_layouts();

@@ -33,6 +33,7 @@
 #include <xaudio2.h>
 #include <xinput.h>
 #include <SDL3/SDL.h>
+#include "user_data_lock.h"
 
 #define VK_NO_PROTOTYPES
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -835,6 +836,23 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         }
     }
     switch (msg) {
+        case WM_EXITSIZEMOVE: {
+            if(!g_fullscreen && !IsIconic(h) && !IsZoomed(h)) {
+                RECT client{};GetClientRect(h,&client);
+                g_pc_settings.width=std::clamp(int(client.right-client.left),640,7680);
+                g_pc_settings.height=std::clamp(int(client.bottom-client.top),360,4320);
+                save_pc_settings();pc_menu_sync(g_pc_settings);
+                if(overlay::enabled())overlay::sync(to_overlay(g_pc_settings));
+            }
+            break;
+        }
+        case WM_GETMINMAXINFO: {
+            auto* limits=reinterpret_cast<MINMAXINFO*>(l);
+            RECT minimum{0,0,640,360};
+            AdjustWindowRectEx(&minimum,DWORD(GetWindowLongPtrW(h,GWL_STYLE)),FALSE,DWORD(GetWindowLongPtrW(h,GWL_EXSTYLE)));
+            limits->ptMinTrackSize={minimum.right-minimum.left,minimum.bottom-minimum.top};
+            return 0;
+        }
         case WM_MOVE:
         case WM_SIZE:
             metrics_reposition();
@@ -1310,7 +1328,23 @@ LONG WINAPI throw_tracer(EXCEPTION_POINTERS* e) {
 }
 
 int main() {
+    // Launcher/game/update transitions wait for their own parent to release the data lock.
+    for(const auto& arg:nx::plat::program_args()) if(arg.starts_with("--launcher-parent=")) {
+        try {
+            const auto parent=DWORD(std::stoul(arg.substr(18)));
+            if(parent!=GetCurrentProcessId()) if(auto process=OpenProcess(SYNCHRONIZE,FALSE,parent)) {
+                WaitForSingleObject(process,10000);CloseHandle(process);
+            }
+        } catch(...) {}
+    }
     nx::plat::make_dirs(nx::plat::data_root());
+    static nx::UserDataLock user_data_lock;
+    std::string lock_error;
+    if(!user_data_lock.acquire(std::filesystem::u8path(nx::plat::data_root()),lock_error)) {
+        std::fprintf(stderr,"%s\n",lock_error.c_str());
+        if(!nx::plat::headless())MessageBoxA(nullptr,lock_error.c_str(),"SuperWonders - Data folder in use",MB_OK|MB_ICONINFORMATION);
+        return 2;
+    }
     if (!SDL_Init(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "SDL gamepad input unavailable: %s\n", SDL_GetError());
     nx::plat::load_pc_settings();
     nx::plat::start_memory_guard();  // before anything can grow: a leak must never freeze the machine (memguard_win.cpp)

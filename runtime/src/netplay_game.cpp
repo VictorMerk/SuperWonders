@@ -1,3 +1,4 @@
+#include "profiles.h"
 #include "netplay_game.h"
 #include "netplay_session.h"
 #include "netplay_save.h"
@@ -161,7 +162,7 @@ void isolate_client_save(const fs::path& data) {
         auto executable=fs::path(self).parent_path()/L"wonder-launcher.exe";
         std::error_code ec;
         if(!fs::is_regular_file(executable,ec)) executable=fs::path(self);
-        auto command=L"\""+executable.wstring()+L"\" --config --lan-ended";
+        auto command=L"\""+executable.wstring()+L"\" --config --lan-ended --launcher-parent="+std::to_wstring(GetCurrentProcessId());
         STARTUPINFOW startup{}; startup.cb=sizeof startup;
         PROCESS_INFORMATION process{};
         if(CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process)) {
@@ -234,7 +235,7 @@ void connect_game(const LobbyRequest& request) {
     options.build=fingerprint(data);
     options.allow_save_transfer=true;
     if(request.host) {
-        options.initial_save=capture_save(data/"user"/"save");
+        options.initial_save=capture_save(profiles::user_root(data)/"save");
         options.save=digest(options.initial_save);
     } else {
         isolate_client_save(data);
@@ -337,5 +338,5 @@ void flush_diagnostics() noexcept {
     if (exchange_pipeline) exchange_pipeline->stop();
     dump_trace();
 }
-fs::path user_root(const fs::path& data) { return isolated_user.empty() ? data/"user" : isolated_user; }
+fs::path user_root(const fs::path& data) { return isolated_user.empty() ? profiles::user_root(data) : isolated_user; }
 }

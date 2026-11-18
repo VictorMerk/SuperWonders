@@ -4,6 +4,7 @@
 #include "overlay/overlay.h"
 #include "overlay/usability.h"
 #include "button_font.h"
+#include "overlay/controller_art.h"
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -309,6 +310,7 @@ void load_fonts() {
         }
     }
     io.FontDefault = g_body;
+    init_controller_art(io.Fonts);
 }
 
 ImFont* body() { return g_body; }

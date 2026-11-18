@@ -55,6 +55,29 @@ int controller_binding(const Settings& s, size_t action) {
                                                      : default_controller_binding(action, s.controller_preset);
 }
 
+bool assign_controller_button(Settings& s,size_t action,int physical) {
+    if(action>=kControlCount || physical<0 || physical>=int(kControlCount))return false;
+    const int previous=controller_binding(s,action);
+    const auto previous_mask=s.controller_custom_mask;
+    std::array<bool,kControlCount> used{},conflict{};used[physical]=true;
+    for(size_t a=0;a<kControlCount;++a)if(a!=action) {
+        const int binding=controller_binding(s,a);conflict[a]=binding==physical;
+        if(!conflict[a])used[binding]=true;
+    }
+    bool changed=false;
+    auto set=[&](size_t a,int binding) {
+        changed|=controller_binding(s,a)!=binding;s.controller_bindings[a]=binding;
+        if(binding==default_controller_binding(a,s.controller_preset))s.controller_custom_mask&=~(1u<<a);
+        else s.controller_custom_mask|=1u<<a;
+    };
+    for(size_t a=0;a<kControlCount;++a)if(conflict[a]) {
+        int replacement=previous;
+        if(used[replacement])for(int p=0;p<int(kControlCount);++p)if(!used[p]){replacement=p;break;}
+        used[replacement]=true;set(a,replacement);
+    }
+    set(action,physical);return changed || previous_mask!=s.controller_custom_mask;
+}
+
 bool load_settings(const std::string& path, Settings& s) {
     std::ifstream file(path);
     if (!file) return false;
@@ -86,6 +109,7 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "low_vram_profile=%d", &v) == 1) s.low_vram_profile = v != 0;
         else if (std::sscanf(l, "keyboard_separate_player=%d", &v) == 1) s.keyboard_separate_player = v != 0;
         else if (std::sscanf(l, "button_icons=%d", &v) == 1) s.button_icons = std::clamp(v, 0, 4);
+        else if (std::sscanf(l, "controller_artwork=%d", &v) == 1) s.controller_artwork = std::clamp(v, 0, 9);
         else if (std::sscanf(l, "controller_preset=%d", &v) == 1) s.controller_preset = std::clamp(v, 0, 2);
         else if (std::sscanf(l, "metrics_enabled=%d", &v) == 1) s.metrics_enabled = v != 0;
         else if (std::sscanf(l, "metric_fps=%d", &v) == 1) s.metric_fps = v != 0;
@@ -152,7 +176,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nkeyboard_actions=" << s.keyboard_actions << "\nkeyboard_game_layout=" << s.keyboard_game_layout
       << "\nkeyboard_standee=" << s.keyboard_standee_key
       << "\nmemory_limit_gb=" << s.memory_limit_gb << "\nlow_vram_profile=" << s.low_vram_profile
-      << "\nkeyboard_separate_player=" << s.keyboard_separate_player << "\nbutton_icons=" << s.button_icons << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
+      << "\nkeyboard_separate_player=" << s.keyboard_separate_player << "\nbutton_icons=" << s.button_icons << "\ncontroller_artwork=" << s.controller_artwork << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
       << "\nmetric_fps=" << s.metric_fps << "\nmetric_one_percent_low=" << s.metric_one_percent_low
       << "\nmetric_game_speed=" << s.metric_game_speed << "\nmetric_frametime_graph=" << s.metric_frametime_graph
       << "\noverlay_position=" << s.overlay_position << "\ncontroller_custom_mask=" << s.controller_custom_mask

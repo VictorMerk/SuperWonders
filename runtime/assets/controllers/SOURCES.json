@@ -1,0 +1,83 @@
+[
+  {
+    "file": "dualsense.png",
+    "upstream_path": "Controller Asset Pack/DualSense Controller Image/Default/Templates/White/DualSense Controller Layout (White-Black).png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      356
+    ]
+  },
+  {
+    "file": "dualshock4.png",
+    "upstream_path": "Controller Asset Pack/DualShock 4 Controller Images/Default Theme/DualShock 4 Templates/DS4 V2/Glacier White/DualShock 4 V2 Glacier White Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      342
+    ]
+  },
+  {
+    "file": "xbox-series.png",
+    "upstream_path": "Controller Asset Pack/Xbox Wireless Controller Images/Default Theme/Template/Xbox Series X Controller/Black/Xbox Series X Controller Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      398
+    ]
+  },
+  {
+    "file": "xbox-one.png",
+    "upstream_path": "Controller Asset Pack/Xbox Wireless Controller Images/Default Theme/Template/Xbox One S Controller/White/Xbox One S Controller Overlay - White.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      397
+    ]
+  },
+  {
+    "file": "xbox360.png",
+    "upstream_path": "Controller Asset Pack/Xbox 360 Controller Images/Default Theme/Templates/White/Xbox 360 Controller Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      396
+    ]
+  },
+  {
+    "file": "switch-pro.png",
+    "upstream_path": "Controller Asset Pack/Nintendo Switch Controller Images/Switch Pro Controller/Default Theme/Templates/Switch Pro Controller Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      606,
+      440
+    ]
+  },
+  {
+    "file": "steam-controller.png",
+    "upstream_path": "Controller Asset Pack/Steam Controller Images/Default Theme/Templates/White/Steam Controller White Model Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      615,
+      440
+    ]
+  },
+  {
+    "file": "steam-deck.png",
+    "upstream_path": "Controller Asset Pack/Steam Deck Images/Template/Steam Deck VSCView Overlay.png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      640,
+      261
+    ]
+  },
+  {
+    "file": "joycon-pair.png",
+    "upstream_path": "Connection Icon Pack/Controller Type/Templates/White Theme/VSCView - Switch Joycons (white).png",
+    "upstream_commit": "a6d1113b0b3b2438bbbcb08a33f9a25eb2391d7c",
+    "size": [
+      149,
+      154
+    ]
+  }
+]

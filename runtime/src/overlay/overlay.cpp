@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -444,6 +445,20 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     if (quit_frame && g_frame.load()>=quit_frame) {
         log("overlay: scripted render-thread shutdown at frame %llu",(unsigned long long)g_frame.load());
         plat::exit_process(0);
+    }
+    // An actively reviewed run can request the same clean shutdown after its scenario completes.
+    static const char* quit_file=std::getenv("NX_TEST_QUIT_FILE");
+    static uint64_t next_quit_check=0;
+    if (quit_file && *quit_file) {
+        const auto now=plat::monotonic_ns();
+        if (now>=next_quit_check) {
+            next_quit_check=now+250'000'000;
+            if (FILE* request=plat::fopen_utf8(quit_file,"rb")) {
+                std::fclose(request);
+                log("overlay: scripted render-thread shutdown by request at frame %llu",(unsigned long long)g_frame.load());
+                plat::exit_process(0);
+            }
+        }
     }
     ImGuiIO& io = ImGui::GetIO();
     static uint64_t last_ns = 0;

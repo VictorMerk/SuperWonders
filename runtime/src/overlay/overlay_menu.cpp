@@ -20,6 +20,7 @@
 #include "overlay/usability.h"
 #include "profiles.h"
 #include "keyboard_actions.h"
+#include "overlay/controller_remapping.h"
 #if NX_GAME_LIBRARY
 #include "launcher/launcher.h"
 #endif
@@ -693,26 +694,19 @@ void audio(MenuContext& c, const Labels& l) {
 void controls(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     const int lang = std::clamp(s.language, 0, 12);
-    // Show the actual game-action layout and live input before the editable bindings.
-    const float k=std::clamp(c.height/1080.f,.5f,3.f);
-    const auto corner=ImGui::GetCursorScreenPos();
-    const auto width=ImGui::GetContentRegionAvail().x;
-    auto* dl=ImGui::GetWindowDrawList();
-    const uint64_t buttons=pad_buttons();
-    const char* action_names[]={"X","Y","A","B"};
-    const size_t actions[]={CtlX,CtlY,CtlA,CtlB};
-    const uint64_t bits[]={plat::kX,plat::kY,plat::kA,plat::kB};
-    const auto device_kind=plat::controller_kind(0);
-    for(int i=0;i<4;++i) {
-        const ImVec2 p{corner.x+i*width/4,corner.y},q{p.x+width/4-6*k,p.y+76*k};
-        const bool held=(buttons&bits[i])!=0;
-        dl->AddRectFilled(p,q,ui::fade(held?ui::theme().accent:IM_COL32(255,255,255,18)),8*k);
-        const std::string text=std::string(action_names[i])+" / "+physical_button_name(device_kind,controller_binding(s,actions[i]));
-        dl->AddText({p.x+8*k,p.y+10*k},held?IM_COL32(12,16,24,255):ui::theme().text,text.c_str());
-        dl->AddText({p.x+8*k,p.y+42*k},held?IM_COL32(12,16,24,255):ui::theme().text_dim,held?"Pressed":"Ready");
+    static int section=0;
+    const char* sections[]={"Keyboard remapping","Controller remapping","Players & devices"};
+    if(ImGui::Combo("##controls_section",&section,sections,3)) {c.capture_action=-1;cancel_controller_remapping();rows::focus_first();}
+    ImGui::TextDisabled("Controller artwork v3 | Keyboard and controller remapping");
+    if(section==1){controller_remapping(c.settings,c.appearing,c.open);return;}
+    rows::begin(section==0?"##keyboard_remapping":section==1?"##controller_remapping":"##control_devices", c.height);
+    const char* icon_names[] = {"Automatic at startup", "Keyboard", "Nintendo", "Xbox", "PlayStation"};
+    if (rows::choice("Button prompts", &s.button_icons, icon_names, 5, 0,
+        "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
+        settings_changed(true); ui::notify("Restart the game to update its button prompts.");
     }
-    ImGui::Dummy({width,84*k});
-    rows::begin("##controls", c.height);
+    if(section==0) ImGui::TextWrapped("Select an action row, then press a key. Delete: unbind. Esc: cancel.");
+    if(section==2) {
     rows::section("Players & devices");
     if(lan::active()) rows::disable_next();
     if (rows::toggle("Keyboard as player 1", &s.keyboard_separate_player, false,
@@ -727,35 +721,8 @@ void controls(MenuContext& c, const Labels& l) {
         if (rows::action(label, name.c_str(), network ? "Every PC contributes its primary gamepad or keyboard. Choose the matching number of players in Wonder. Select this PC's row to test local rumble." : "Connect up to four gamepads for local co-op. Player 1 also uses the keyboard. Select a connected controller to test its rumble. Unplugging one pad preserves the other player slots."))
             plat::rumble_player(network?0:player, 0.3f, 0.3f);
     }
-    const char* icon_names[] = {"Automatic at startup", "Keyboard", "Nintendo", "Xbox", "PlayStation"};
-    if (rows::choice("Button prompts", &s.button_icons, icon_names, 5, 0,
-        "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
-        settings_changed(true); ui::notify("Restart the game to update its button prompts.");
     }
-    rows::section(kHeaders[lang][1]);
-    if(rows::action("Reset controller bindings","Use selected layout","Clear custom button overrides and return to the selected Xbox, Nintendo or PlayStation preset. Keyboard bindings stay as configured.")) {
-        s.controller_custom_mask=0;settings_changed(true);ui::notify("Controller bindings reset to the selected layout.");
-    }
-    const char* presets[] = {"Xbox / PlayStation: bottom confirms", "Nintendo: right confirms", "PlayStation: Circle confirms"};
-    if (rows::choice(l.control_preset, &s.controller_preset, presets, 3, kDefaults.controller_preset,
-        "Choose bottom-button confirmation (Xbox A / PlayStation Cross), Nintendo layout, or PlayStation Circle confirmation. Circle confirmation swaps Cross and Circle only. Per-action custom bindings below take priority. Restart to refresh in-game button prompts."))
-        settings_changed(true), ui::notify("Restart the game to update its button prompts.");
-    if (rows::integer(kCommon[lang][8], &s.rumble, 0, 100, 10, kDefaults.rumble, "%d%%", translated_desc(desc::rumble, lang))) settings_changed(true);
-    const auto device = plat::controller_kind(0);
-    const char* physical[kControlCount];
-    for (size_t i = 0; i < kControlCount; ++i) physical[i] = physical_button_name(device, int(i));
-    for (size_t a = 0; a < kControlCount; ++a) {
-        int phys = controller_binding(s, a);
-        const int def = default_controller_binding(a, s.controller_preset);
-        char id[48];
-        std::snprintf(id, sizeof id, "%s###pad%zu", kActions[a], a);
-        if (rows::choice(id, &phys, physical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
-            s.controller_bindings[a] = phys;
-            s.controller_custom_mask |= 1u << a;
-            if (phys == def) s.controller_custom_mask &= ~(1u << a);
-            settings_changed(true);
-        }
-    }
+    if(section==0) {
     rows::section(kHeaders[lang][0]);
     int keyboard_mode=s.keyboard_actions?0:1;
     const char* modes[]={"Dedicated PC actions","Legacy Switch buttons"};
@@ -789,6 +756,7 @@ void controls(MenuContext& c, const Labels& l) {
         if(advanced)for(size_t action:{size_t(CtlL),size_t(CtlZR),size_t(CtlLStick),size_t(CtlRStick)})keyboard_row(action,kActions[action]);
     } else {
         for(size_t action=0;action<kControlCount;++action)keyboard_row(action,kActions[action]);
+    }
     }
     rows::page_note(s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
     rows::end();

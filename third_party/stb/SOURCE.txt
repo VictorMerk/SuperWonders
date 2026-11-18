@@ -1,0 +1,3 @@
+https://github.com/nothings/stb
+Commit: 9600522de53973336fa033a289858a4354cbb04c
+Only PNG decoding is enabled for embedded controller art.

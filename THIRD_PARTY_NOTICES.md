@@ -21,3 +21,5 @@
 | [Ryujinx / Ryubing shader translator](https://github.com/Leuconoe/Ryubing) | Pinned Ryubing commit `a82350bb774f70fcbd41c9987bf67a3775409963` | MIT | Used to build the standalone shader translator. Its source is a maintainer-side packaging input and is not included in the user builder ZIP; license text is under `tools/portable/licenses/Ryujinx-MIT-LICENSE.txt`. |
 
 The portable toolchain archive URLs, pinned versions, and SHA-256 hashes are recorded in the builder's release-preparation script. The builder release contains tools and recompilation source only; `private/` and all extracted game files are excluded.
+
+Controller illustrations: [Gamepad Asset Pack](https://github.com/AL2009man/Gamepad-Asset-Pack), copyright (c) 2024 Al. Lopez, MIT. Resized PNGs and pinned source paths are under `runtime/assets/controllers/`; retain its LICENSE and SOURCES.json. PNG decoding uses [stb_image](https://github.com/nothings/stb), MIT/public-domain dual license, pinned in `third_party/stb/SOURCE.txt`; license retained there.

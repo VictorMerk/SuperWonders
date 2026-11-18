@@ -133,15 +133,47 @@ static void cancellation() {
 }
 static void invalid_timing() {
     using namespace nx::lan;
-    for(int which=0;which<4;++which) {
+    for(int which=0;which<6;++which) {
         Session host; auto config=options(2);
         if(which==0) config.frame_rate=0;
         else if(which==1) config.input_lead=2;
-        else config.frame_timeout=std::chrono::milliseconds(which==2?99:30001);
+        else if(which<4) config.frame_timeout=std::chrono::milliseconds(which==2?99:30001);
+        else config.startup_timeout=std::chrono::milliseconds(which==4?99:900001);
         bool failed=false,listened=false;
         try { host.host(config,[&](uint16_t) { listened=true; }); } catch (...) { failed=true; }
         check(failed && !listened,"unsupported simulation/buffer settings fail before opening a room");
     }
+}
+static void loading_deadline(bool slow_host) {
+    using namespace nx::lan;
+    Session host,client; auto config=options(2);
+    config.timeout=std::chrono::milliseconds(500);
+    config.startup_timeout=std::chrono::seconds(2);
+    config.frame_timeout=std::chrono::milliseconds(150);
+    std::promise<uint16_t> listening;auto port=listening.get_future();
+    bool host_ok=false,client_ok=false;
+    std::thread server([&] {
+        try {
+            host.host(config,[&](uint16_t p){listening.set_value(p);});
+            host.exchange({});
+            if(slow_host)std::this_thread::sleep_for(std::chrono::milliseconds(750));
+            host.exchange({});host_ok=true;
+        } catch(...) {host.stop();}
+    });
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading-test host starts");
+    config.port=port.get();
+    try {
+        client.join(config);client.exchange({});
+        if(!slow_host)std::this_thread::sleep_for(std::chrono::milliseconds(750));
+        client.exchange({});client_ok=true;
+    } catch(...) {client.stop();}
+    server.join();
+    check(host_ok && client_ok,"initial game loading uses its own deadline, beyond the lobby deadline");
+    const auto started=std::chrono::steady_clock::now();bool timed_out=false;
+    try {client.exchange({});} catch(const std::runtime_error& e){timed_out=std::string(e.what())=="LAN peer timed out";}
+    const auto elapsed=std::chrono::steady_clock::now()-started;
+    check(timed_out && elapsed>=config.frame_timeout && elapsed<std::chrono::seconds(1),
+          "the longer loading grace must not extend established gameplay stalls");
 }
 static void stalled_peer(bool host_waits) {
     using namespace nx::lan;
@@ -243,6 +275,7 @@ static void unassociated_probe() {
 int main() {
     for(uint8_t rate:{30,60}) for(uint8_t count:{2,4}) for(bool overlap:{false,true}) roundtrip(count,overlap,rate);
     divergence(); divergence(true); cancellation(); invalid_timing(); save_transfer();
+    loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
     refused_connection(); unassociated_probe();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");

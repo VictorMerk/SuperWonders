@@ -18,6 +18,7 @@ void controller_force_primary(bool force);  // LAN: every PC contributes its pri
 void rumble_player(uint32_t player, float low, float high);
 ControllerKind controller_kind(uint32_t player);
 std::string controller_name(uint32_t player);
+std::string controller_model_hint(uint32_t player); // SDL type where it identifies a model; empty if ambiguous
 void close_controllers();
 void watch_controller_connections(void (*changed)(uint32_t player));
 }

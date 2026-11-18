@@ -15,7 +15,14 @@ $cacheSource=$source
 if($ShaderCacheRoot){
  $cacheSource=(Resolve-Path -LiteralPath $ShaderCacheRoot).Path
  $cacheGame=Join-Path $cacheSource 'game/wonder_game.dll'
- if(!(Test-Path -LiteralPath $cacheGame) -or (Get-FileHash -LiteralPath $cacheGame).Hash.ToLowerInvariant() -ne $gameHash){throw 'Warm shader cache belongs to different game code; no files changed'}
+ if(!(Test-Path -LiteralPath $cacheGame)){throw 'Warm shader cache belongs to different game code; no files changed'}
+ $cacheHash=(Get-FileHash -LiteralPath $cacheGame).Hash.ToLowerInvariant()
+ if($cacheHash -ne $gameHash){
+  if($cacheHash -notin $info.compatible_game_sha256){throw 'Warm shader cache belongs to different game code; no files changed'}
+  $catalog=Join-Path $source 'shader_programs.bin';$warmCatalog=Join-Path $cacheSource 'shader_programs.bin'
+  if(!(Test-Path -LiteralPath $catalog) -or !(Test-Path -LiteralPath $warmCatalog) -or
+     (Get-FileHash -LiteralPath $catalog).Hash -ne (Get-FileHash -LiteralPath $warmCatalog).Hash){throw 'Warm shader cache catalogue differs; no files changed'}
+ }
 }
 foreach($file in $info.files.PSObject.Properties){
  if((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $file.Name)).Hash.ToLowerInvariant() -ne $file.Value){throw ('Package hash mismatch: '+$file.Name)}

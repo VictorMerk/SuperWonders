@@ -58,7 +58,7 @@ def copytree(src, dst, ignore=None):
 def pack_runtime_notices(folder):
     # These components are embedded/static in the runtime; their notices must
     # travel with the executable even when the builder kit is packaged separately.
-    files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "runtime/src/nvn/LICENSE-ultrawide.txt", "tools/collect_diagnostics.ps1", "tools/trace_performance.ps1", "third_party/imgui/LICENSE.txt",
+    files = ["runtime/assets/controllers/LICENSE", "runtime/assets/controllers/SOURCES.json", "third_party/stb/LICENSE", "third_party/stb/SOURCE.txt", "LICENSE", "THIRD_PARTY_NOTICES.md", "runtime/src/nvn/LICENSE-ultrawide.txt", "tools/collect_diagnostics.ps1", "tools/trace_performance.ps1", "third_party/imgui/LICENSE.txt",
              "third_party/fsr1/LICENSE.txt", "third_party/mkw-framegen/LICENSE",
              "third_party/mkw-framegen/README.md", "third_party/fonts/Nunito/OFL.txt",
              "third_party/fonts/PCButtons/README.md", "third_party/sdl/LICENSE.txt"]

@@ -1106,7 +1106,10 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
         return finish(*a);
     }
 
-    std::shared_ptr<PipelineBuild> build = make_build(key, layout);
+    // Use the same ignored-state values for driver creation and persisted
+    // prewarm recipes, so a cold miss and next launch describe one pipeline.
+    state_key.vs = key.vs, state_key.fs = key.fs;
+    std::shared_ptr<PipelineBuild> build = make_build(state_key, layout);
     VkGraphicsPipelineCreateInfo& ci = build->ci;
 
     if (vk_gpl()) {

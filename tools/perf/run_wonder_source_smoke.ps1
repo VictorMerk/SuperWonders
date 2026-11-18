@@ -50,6 +50,7 @@ try {
     $options=@{
         NX_DATA_ROOT=$dataPath;NX_LOG=(Join-Path $outputPath 'native.log');
         NX_NO_LAUNCHER='1';NX_HEADLESS='1';NX_HEADLESS_PRESENT='1';NX_MUTE='1';
+        NX_TEST_VIRTUAL_ONLY='1';
         NX_TEST_QUIT_FRAME=[string]$QuitAfterFrames;NX_DUMP_FRAMES=[string]$CaptureEvery;
         NX_DUMP_PRESENTED='1';NX_FRAMETRACE=(Join-Path $outputPath 'frametrace.csv');
         NX_AUDIO_DUMP=(Join-Path $outputPath 'audio.wav');

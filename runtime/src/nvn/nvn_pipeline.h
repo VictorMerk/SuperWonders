@@ -171,6 +171,7 @@ GpuImage* ensure_contents(VkCommandBuffer cb, uint64_t texture);
 void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img);
 // Every level and layer to zero (colour; magenta with `magenta`), depth and stencil to 0. Leaves TRANSFER_DST.
 void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta = false);
+void apply_texel_writes(VkCommandBuffer cb, Texture& texture, GpuImage& image);
 // A single level and layer of an image, for rendering to.
 void sampled_ready_log();
 void check_linear_content(Texture& t);  // nvn_sampler.cpp
@@ -193,5 +194,6 @@ VkImageView dummy_view(VkCommandBuffer cb, const ImageShape& shape);
 bool compare_twin_wanted(const GpuImage& img);
 bool compare_twin_ready(const GpuImage& img);
 VkImageView compare_twin_view(VkCommandBuffer cb, GpuImage& img, VkImageViewType type);
+bool compare_twin_probe_record(VkCommandBuffer cb, Texture& texture, GpuImage& img, VkBuffer output, unsigned variant);
 
 }  // namespace nx::nvn

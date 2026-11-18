@@ -16,9 +16,9 @@ $outputPath = (Resolve-Path -LiteralPath $Output).Path
 $layerPath = if ($ValidationLayer) { (Resolve-Path -LiteralPath $ValidationLayer).Path } else { '' }
 if ($layerPath -and !(Test-Path -LiteralPath (Join-Path $layerPath 'VkLayer_khronos_validation.json'))) { throw 'Validation layer manifest missing.' }
 $cases = @(
-    @{Name='counter-sync'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=9; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='sync'},
-    @{Name='counter-pipelined'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=9; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='pipelined'},
-    @{Name='counter-async'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=9; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='async'},
+    @{Name='counter-sync'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='sync'},
+    @{Name='counter-pipelined'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='pipelined'},
+    @{Name='counter-async'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='async'},
     @{Name='framegen'; Kind='Framegen'; Flag='NX_FRAMEGEN_PROBE'; Count=87; Pattern='framegen probe \d+x .*: PASS'; Mode='sync'},
     @{Name='overlay'; Kind='Overlay'; Flag='NX_OVERLAY_INPUT_PROBE'; Count=4; Pattern='(?:overlay input probe: .*|controller bridge probe preset \d): PASS'; Mode='sync'},
     @{Name='texture'; Kind='Texture'; Flag='NX_TEXTURE_CONVERSION_PROBE'; Count=8; Pattern='texture conversion probe .*: PASS'; Mode='sync'}

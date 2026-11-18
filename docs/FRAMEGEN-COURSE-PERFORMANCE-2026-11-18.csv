@@ -1,0 +1,5 @@
+run,build,original_intervals,original_fps,one_percent_low_fps,max_interval_ms,new_pipelines,pipeline_worker_ms,skipped_draws
+a1,baseline,900,55.06,11.19,214.87,142.0,357.6,0.0
+b1,optimized,900,57.64,36.89,27.76,6.0,0.8,0.0
+b2,optimized,900,56.94,18.95,143.25,89.0,188.1,0.0
+a2,baseline,900,57.97,32.65,34.08,10.0,1.2,0.0

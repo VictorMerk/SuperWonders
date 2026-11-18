@@ -50,12 +50,14 @@ void log_device_caps(VkPhysicalDevice physical, const std::vector<VkExtensionPro
 // G 11-21, B 22-31), half the bytes of the RGBA16F it is stored as elsewhere, for every load, store and sample of the
 // HDR chain. Vulkan converts negative results to 0 as Maxwell does; Metal wrote Inf/NaN into it (the green screens of
 // nvn_format.cpp), so MoltenVK keeps RGBA16F. Android, when the format can be rendered to, blended, sampled with a
-// linear filter and copied; NX_R11G11B10_EMULATE=1: RGBA16F there too.
+// linear filter and copied. AMD Windows uses the same native unsigned format
+// to preserve the guest's unsigned range and precision at blend boundaries.
+// NX_R11G11B10_EMULATE=1: RGBA16F for comparison or a driver workaround.
 bool native_r11g11b10() {
     static std::atomic<int> state{-1};
     int s = state.load(std::memory_order_acquire);
     if (s >= 0) return s == 1;
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(_WIN32)
     if (!vk_physical()) return false;  // asked before the device exists: not decided yet
     const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT |
                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
@@ -64,6 +66,11 @@ bool native_r11g11b10() {
     VkFormatProperties fp{};
     p_vkGetPhysicalDeviceFormatProperties(vk_physical(), VK_FORMAT_B10G11R11_UFLOAT_PACK32, &fp);
     bool on = (fp.optimalTilingFeatures & need) == need && !std::getenv("NX_R11G11B10_EMULATE");
+#if defined(_WIN32)
+    VkPhysicalDeviceProperties props{};
+    p_vkGetPhysicalDeviceProperties(vk_physical(), &props);
+    on = on && props.vendorID == 0x1002;
+#endif
     log("nvn/vk: R11G11B10F %s (format features %#x)", on ? "native (B10G11R11_UFLOAT)" : "as RGBA16F",
         unsigned(fp.optimalTilingFeatures));
 #else

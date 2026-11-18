@@ -6,7 +6,7 @@
 // SAMPLED_IMAGE_DEPTH_COMPARISON: the validation layer reported both on every course frame (VUID-...-06479).
 // NVIDIA's driver compares colour formats anyway; on AMD the result is undefined. Vulkan cannot view a colour format
 // as depth, so the twin is a separate D32_SFLOAT image of the same size, refreshed by copy whenever the source was
-// rendered again since the last copy (GpuImage::rendered_at):
+// written again since the last copy (GpuImage::content_version):
 //   R32F            -> buffer -> D32 (the same bits; valid on every driver);
 //   other colour    -> blit to an R32F image (converts the first channel to float) -> buffer -> D32.
 // Integer and block-compressed formats are left as they were. NX_COMPARE_TWIN=0: off, the colour view as before.
@@ -28,7 +28,7 @@ struct Twin {
     GpuImage r32f;  // the blit's target when the source is not R32F
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory buffer_memory = VK_NULL_HANDLE;
-    uint64_t copied_serial = ~0ull;  // the source's rendered_at at the last copy
+    uint64_t copied_serial = ~0ull;  // the source's content_version at the last copy
     std::map<VkImageViewType, VkImageView> views;
 };
 
@@ -58,7 +58,7 @@ bool compares(VkFormat f) {
     return cache[f] = depth && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 }
 
-uint64_t serial_of(const GpuImage& img) { return img.rendered ? img.rendered_at : 0; }
+uint64_t serial_of(const GpuImage& img) { return img.content_version; }
 
 bool make(Twin& t, const GpuImage& src) {
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -69,6 +69,8 @@ bool make(Twin& t, const GpuImage& src) {
     ci.arrayLayers = src.layers;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // The opt-in regression probe reads the converted depth values back.
+    if (std::getenv("NX_COUNTER_CLEAR_PROBE")) ci.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (p_vkCreateImage(vk_device(), &ci, nullptr, &t.image.image) != VK_SUCCESS) return false;
     VkMemoryRequirements req{};
     p_vkGetImageMemoryRequirements(vk_device(), t.image.image, &req);
@@ -210,6 +212,15 @@ void copy(VkCommandBuffer cb, Twin& t, GpuImage& src) {
 
 }  // namespace
 
+// Called only after the source's last GPU use has retired. Vulkan can reuse an
+// image handle for a same-size texture; retaining its twin would sample old data.
+void forget_compare_twin(const GpuImage& img) {
+    auto it = twins().find(img.image);
+    if (it == twins().end()) return;
+    destroy(it->second);
+    twins().erase(it);
+}
+
 static bool blittable(VkFormat f) {
     static std::map<VkFormat, bool> cache;
     auto it = cache.find(f);
@@ -265,6 +276,39 @@ VkImageView compare_twin_view(VkCommandBuffer cb, GpuImage& img, VkImageViewType
         if (p_vkCreateImageView(vk_device(), &vi, nullptr, &v) != VK_SUCCESS) v = VK_NULL_HANDLE;
     }
     return v;
+}
+
+// Opt-in GPU regression: cache a twin, update its source without a render pass,
+// then read the refreshed D32 values. The caller checks every float on the CPU.
+bool compare_twin_probe_record(VkCommandBuffer cb, Texture& texture, GpuImage& img, VkBuffer output, unsigned variant) {
+    if (!compare_twin_view(cb, img, VK_IMAGE_VIEW_TYPE_2D) || !compare_twin_ready(img)) return false;
+    if (variant == 0) {
+        Texture::TexelWrite write{};
+        write.w = img.width; write.h = img.height; write.d = 1;
+        write.data.resize(size_t(img.width) * img.height * 4);
+        for (size_t p = 0; p < write.data.size(); p += 4) write.data[p] = 191, write.data[p + 3] = 255;
+        texture.writes.push_back(std::move(write));
+        texture.has_writes = true;
+        apply_texel_writes(cb, texture, img);
+    } else if (variant == 1) {
+        clear_image(cb, img, true);
+    } else {
+        std::vector<uint8_t> texels(size_t(img.width) * img.height * 4);
+        for (size_t p = 0; p < texels.size(); p += 4) texels[p] = 128, texels[p + 3] = 255;
+        const uint64_t saved_memory = texture.memory;
+        texture.memory = reinterpret_cast<uintptr_t>(texels.data());
+        upload_texture(cb, texture, img);
+        texture.memory = saved_memory;
+    }
+    if (compare_twin_ready(img) || !compare_twin_view(cb, img, VK_IMAGE_VIEW_TYPE_2D)) return false;
+    auto& twin = twins().at(img.image).image;
+    transition(cb, twin, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    region.imageExtent = {img.width, img.height, 1};
+    p_vkCmdCopyImageToBuffer(cb, twin.image, twin.layout, output, 1, &region);
+    transition(cb, twin, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return compare_twin_ready(img);
 }
 
 }  // namespace nx::nvn

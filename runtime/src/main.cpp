@@ -173,6 +173,7 @@ void boot() {
     if (plat::setting("trace") == "1") g_trace = true;
     memory_init();
     if (std::getenv("NX_FRAMEGEN_PROBE")) plat::exit_process(nvn::framegen_probe() ? 0 : 1);
+    if (std::getenv("NX_PIPELINE_RECIPE_PROBE")) plat::exit_process(nvn::pipeline_recipe_probe() ? 0 : 1);
     if (std::getenv("NX_OVERLAY_INPUT_PROBE")) plat::exit_process(nvn::overlay_input_probe() ? 0 : 1);
     if (std::getenv("NX_COUNTER_CLEAR_PROBE")) plat::exit_process(nvn::counter_clear_probe() ? 0 : 1);
     if (std::getenv("NX_PRESENTATION_PROBE")) plat::exit_process(nvn::presentation_probe() ? 0 : 1);

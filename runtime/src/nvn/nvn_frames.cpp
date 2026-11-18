@@ -654,6 +654,7 @@ void free_retired_images(uint64_t completed) {
         if (!img || !img->image) continue;
         if (img.use_count() > 1) continue;  // another live texture shares it (image_of): freed with the last one
         forget_image_views(*img);
+        forget_compare_twin(*img);
         if (img->view) p_vkDestroyImageView(vk_device(), img->view, nullptr);
         p_vkDestroyImage(vk_device(), img->image, nullptr);
         if (img->memory) {

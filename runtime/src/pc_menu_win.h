@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <windows.h>
+#include "keyboard_defaults.h"
 
 namespace nx::plat {
 
@@ -43,6 +44,9 @@ struct PcMenuState {
     int memory_limit_gb = 8;  // Process private-commit guard; not a dedicated VRAM budget
     bool keyboard_separate_player = false;
     int button_icons = 0;
+    bool keyboard_actions = true;
+    int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
+    int keyboard_standee_key = input::default_standee_key(input::KeyboardCodes::Windows);
     int controller_preset = 0;  // Xbox / DualSense, Nintendo
     bool muted = false;
     bool fullscreen = false;
@@ -69,10 +73,7 @@ struct PcMenuState {
     bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16
     int rumble = 100;          // overlay menu: rumble strength, percent
-    std::array<int, kPcControlCount> keyboard_bindings = {
-        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_BACK, 'M', 'N',
-        VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN,
-    };
+    std::array<int, kPcControlCount> keyboard_bindings = input::recommended_keyboard_bindings(input::KeyboardCodes::Windows);
     std::array<int, kPcControlCount> controller_bindings{};
     uint32_t controller_custom_mask = 0;
 };

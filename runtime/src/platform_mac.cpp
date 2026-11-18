@@ -47,6 +47,7 @@
 
 #include "kernel.h"
 #include "platform.h"
+#include "keyboard_actions.h"
 #include "shader_bundle.h"
 #include "controllers.h"
 
@@ -314,24 +315,15 @@ static void sample_input() {
         p.rx = axis(SDL_GAMEPAD_AXIS_RIGHTX, false);
         p.ry = axis(SDL_GAMEPAD_AXIS_RIGHTY, true);
     }
-    // Keyboard: WASD / arrows move, Space A, Shift B (run), J X, K Y, Q/E L/R, Z/C ZL/ZR, Enter +, Esc -.
+    static input::KeyboardActionState keyboard_state;
+    // Fixed macOS keyboard path shares the standard Wonder PC action defaults.
     if (g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) {
-        const bool* k = SDL_GetKeyboardState(nullptr);
-        if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_LEFT]) p.lx = -kStickMax, p.buttons |= kLeft;
-        if (k[SDL_SCANCODE_D] || k[SDL_SCANCODE_RIGHT]) p.lx = kStickMax, p.buttons |= kRight;
-        if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP]) p.ly = kStickMax, p.buttons |= kUp;
-        if (k[SDL_SCANCODE_S] || k[SDL_SCANCODE_DOWN]) p.ly = -kStickMax, p.buttons |= kDown;
-        if (k[SDL_SCANCODE_SPACE]) p.buttons |= kA;
-        if (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]) p.buttons |= kB;
-        if (k[SDL_SCANCODE_J]) p.buttons |= kX;
-        if (k[SDL_SCANCODE_K]) p.buttons |= kY;
-        if (k[SDL_SCANCODE_Q]) p.buttons |= kL;
-        if (k[SDL_SCANCODE_E]) p.buttons |= kR;
-        if (k[SDL_SCANCODE_Z]) p.buttons |= kZL;
-        if (k[SDL_SCANCODE_C]) p.buttons |= kZR;
-        if (k[SDL_SCANCODE_RETURN]) p.buttons |= kPlus;
-        if (k[SDL_SCANCODE_ESCAPE]) p.buttons |= kMinus;
+        int count=0;const bool* k = SDL_GetKeyboardState(&count);
+        const auto keyboard=input::keyboard_pad(input::recommended_keyboard_bindings(input::KeyboardCodes::SDL),true,0,
+            input::default_standee_key(input::KeyboardCodes::SDL),input::KeyboardCodes::SDL,keyboard_state,monotonic_ns(),[&](int sc){return sc>0 && sc<count && k[sc];});
+        p.buttons|=keyboard.buttons;if(keyboard.lx)p.lx=keyboard.lx;if(keyboard.ly)p.ly=keyboard.ly;
     }
+    else keyboard_state={};
     std::lock_guard lk(g_pad_lock);
     g_pad = p;
 }

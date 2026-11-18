@@ -1,0 +1,152 @@
+{
+  "device": "Radeon RX 570 Series",
+  "main_cpu_tests": 57,
+  "r8_targeted_tests": 6,
+  "cache_runs": [
+    {
+      "requested_course_seconds": 180,
+      "exit": 0,
+      "validation_errors": 0,
+      "layer_loaded": true,
+      "queries": 5,
+      "query_ms": [
+        0.029,
+        0.006,
+        0.006,
+        0.007,
+        0.007
+      ],
+      "skipped_unchanged": 0,
+      "forced_exports": 0,
+      "loaded_bytes": 189795868,
+      "produced_bytes": 195904540
+    },
+    {
+      "requested_course_seconds": 60,
+      "exit": 0,
+      "validation_errors": 0,
+      "layer_loaded": true,
+      "queries": 3,
+      "query_ms": [
+        0.035,
+        0.006,
+        0.008
+      ],
+      "skipped_unchanged": 3,
+      "forced_exports": 1,
+      "loaded_bytes": 195904540,
+      "produced_bytes": 195904540
+    }
+  ],
+  "course_runs": [
+    {
+      "run": "A1",
+      "build": "previous",
+      "course": "Course004_Course",
+      "start_position": [
+        28.816988,
+        93.0000076
+      ],
+      "end_position": [
+        28.816988,
+        93.0000076
+      ],
+      "frames": 7000,
+      "seconds": 117.29,
+      "avg_fps": 59.68,
+      "low1_fps": 36.26,
+      "low01_fps": 13.96,
+      "p50_ms": 16.66,
+      "p99_ms": 19.1,
+      "max_ms": 318.08,
+      "over_25_ms": 33,
+      "over_33_ms": 3,
+      "over_50_ms": 1,
+      "over_100_ms": 1,
+      "skipped": 0.0,
+      "pipelines": 0.0
+    },
+    {
+      "run": "B1",
+      "build": "cache change",
+      "course": "Course004_Course",
+      "start_position": [
+        28.7305546,
+        93.0
+      ],
+      "end_position": [
+        28.7305546,
+        93.0000076
+      ],
+      "frames": 7000,
+      "seconds": 116.67,
+      "avg_fps": 60.0,
+      "low1_fps": 54.84,
+      "low01_fps": 50.64,
+      "p50_ms": 16.65,
+      "p99_ms": 17.7,
+      "max_ms": 21.78,
+      "over_25_ms": 0,
+      "over_33_ms": 0,
+      "over_50_ms": 0,
+      "over_100_ms": 0,
+      "skipped": 0.0,
+      "pipelines": 0.0
+    },
+    {
+      "run": "B2",
+      "build": "cache change",
+      "course": "Course004_Course",
+      "start_position": [
+        28.8067913,
+        93.0
+      ],
+      "end_position": [
+        28.8067913,
+        93.0
+      ],
+      "frames": 7000,
+      "seconds": 116.67,
+      "avg_fps": 60.0,
+      "low1_fps": 54.5,
+      "low01_fps": 49.67,
+      "p50_ms": 16.65,
+      "p99_ms": 17.77,
+      "max_ms": 21.51,
+      "over_25_ms": 0,
+      "over_33_ms": 0,
+      "over_50_ms": 0,
+      "over_100_ms": 0,
+      "skipped": 0.0,
+      "pipelines": 0.0
+    },
+    {
+      "run": "A2",
+      "build": "previous",
+      "course": "Course004_Course",
+      "start_position": [
+        28.912138,
+        93.0
+      ],
+      "end_position": [
+        28.912138,
+        93.0
+      ],
+      "frames": 7000,
+      "seconds": 116.67,
+      "avg_fps": 60.0,
+      "low1_fps": 51.26,
+      "low01_fps": 44.19,
+      "p50_ms": 16.67,
+      "p99_ms": 18.91,
+      "max_ms": 29.5,
+      "over_25_ms": 2,
+      "over_33_ms": 0,
+      "over_50_ms": 0,
+      "over_100_ms": 0,
+      "skipped": 0.0,
+      "pipelines": 0.0
+    }
+  ],
+  "scope": "Cache export correctness and renderer regression; no guaranteed FPS gain"
+}

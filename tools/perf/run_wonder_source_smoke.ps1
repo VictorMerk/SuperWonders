@@ -93,10 +93,12 @@ try {
         $capture=Join-Path $outputPath 'frames';$null=New-Item -ItemType Directory -Path $capture
         foreach($frame in $frames){Copy-Item -LiteralPath $frame.FullName -Destination (Join-Path $capture $frame.Name)}
     }
-    $contentPassed=$null
+    $contentPassed=$null;$audioPassed=$null
     if($contentPythonPath) {
         & $contentPythonPath (Join-Path $PSScriptRoot 'check_wonder_captures.py') (Join-Path $outputPath 'frames') --json (Join-Path $outputPath 'content-check.json')
         $contentPassed=$LASTEXITCODE -eq 0
+        & $contentPythonPath (Join-Path $PSScriptRoot 'check_wonder_audio.py') $audioPath --json (Join-Path $outputPath 'audio-check.json')
+        $audioPassed=$LASTEXITCODE -eq 0
     }
     $result=[pscustomobject]@{
         runtime=$runtimePath;data_root=$dataPath;reason=$reason;exit_code=$game.ExitCode;
@@ -104,13 +106,14 @@ try {
         fresh_captures=$frames.Count;fatal_errors=[regex]::Matches($log,'FATAL:').Count;
         validation_enabled=[bool]$layerPath;
         audio_bytes=$audioBytes;audio_required=[bool]$RequireAudio;
+        audio_checked=[bool]$contentPythonPath;non_silent_audio_observed=$audioPassed;
         content_checked=[bool]$contentPythonPath;nonflat_content_observed=$contentPassed;
         validation_errors=[regex]::Matches($log,'Validation Error:').Count;
         scope='native process/capture/audio/shutdown smoke; navigation, visual correctness and edition contents need separate inspection'
     }
     $result|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $outputPath 'result.json') -Encoding UTF8
     $result|ConvertTo-Json -Compress|Write-Output
-    if($reason -ne 'exited' -or $result.exit_code -ne 0 -or !$result.intentional_quit -or !$result.fresh_captures -or $result.fatal_errors -or $result.validation_errors -or ($RequireAudio -and $audioBytes -le 44) -or ($contentPythonPath -and !$contentPassed)){exit 1}
+    if($reason -ne 'exited' -or $result.exit_code -ne 0 -or !$result.intentional_quit -or !$result.fresh_captures -or $result.fatal_errors -or $result.validation_errors -or ($RequireAudio -and ($audioBytes -le 44 -or ($contentPythonPath -and !$audioPassed))) -or ($contentPythonPath -and !$contentPassed)){exit 1}
 } finally {
     try {
         if($started -and !$game.HasExited){$game.Kill();$game.WaitForExit()}

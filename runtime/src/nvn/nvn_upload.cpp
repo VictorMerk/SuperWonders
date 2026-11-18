@@ -453,6 +453,7 @@ bool vk_1d_images() {
 }
 
 void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta) {
+    ++img.content_version;
     transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
     VkImageSubresourceRange r{img.aspect, 0, img.levels, 0, img.layers};
     if (img.aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
@@ -466,6 +467,7 @@ void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta) {
 }
 
 void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
+    ++img.content_version;
     img.uploaded = true;
     if (gpu_profile_on()) gpu_profile_mark(cb, "texture uploads");
     if (!t.memory || !t.storage_size) return;

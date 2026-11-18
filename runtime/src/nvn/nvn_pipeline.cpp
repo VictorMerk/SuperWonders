@@ -1215,6 +1215,7 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
         // single batch. A matching layout does not order those transfer writes.
         transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+        ++img.content_version;
     }
     if (back != VK_IMAGE_LAYOUT_UNDEFINED) transition(cb, img, back);
 }
@@ -1297,6 +1298,7 @@ GpuImage* ensure_contents(VkCommandBuffer cb, uint64_t texture) {
         if (img->aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
             VkClearColorValue v{};
             p_vkCmdClearColorImage(cb, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &v, 1, &r);
+            ++img->content_version;
         }
     }
     return img;
@@ -1375,6 +1377,7 @@ VkImageView storage_view(VkCommandBuffer cb, uint64_t texture, const ImageShape&
     if (img && img->storage) {
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);
         img->rendered = true;  // the shader may write it
+        ++img->content_version;
         ViewInfo v = view ? *view : ViewInfo{};
         v.levels = 1, v.swizzle = 0;  // storage views: one level, identity
         if (VkImageView iv = view_of(*img, view_type(shape), v)) return iv;

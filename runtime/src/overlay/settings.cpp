@@ -58,6 +58,7 @@ bool load_settings(const std::string& path, Settings& s) {
     if (!file) return false;
     std::string line;
     int game_language_version = 0;
+    int pipeline_skip_draws_version = 0;
     while (std::getline(file, line)) {
         int v = 0;
         unsigned u = 0;
@@ -97,6 +98,7 @@ bool load_settings(const std::string& path, Settings& s) {
         else if (std::sscanf(l, "render_ahead=%d", &v) == 1) s.render_ahead = std::clamp(v, 1, 2);
         else if (std::sscanf(l, "framegen_multiplier=%d", &v) == 1) s.framegen_multiplier = std::clamp(v, 2, 8);
         else if (std::sscanf(l, "pipeline_skip_draws=%d", &v) == 1) s.pipeline_skip_draws = v != 0;
+        else if (std::sscanf(l, "pipeline_skip_draws_version=%d", &v) == 1) pipeline_skip_draws_version = v;
         else if (std::sscanf(l, "frame_cap=%d", &v) == 1)
             s.frame_cap = v == 30 || v == 60 || v == 90 || v == 120 || v == 144 ? v : 60;
         else if (std::sscanf(l, "controller_custom_mask=%u", &u) == 1) s.controller_custom_mask = u;
@@ -118,6 +120,10 @@ bool load_settings(const std::string& path, Settings& s) {
     // Before version 2, IDs 8 and 10 were Arabic and Turkish. They are no
     // longer selectable game languages; do not reinterpret saved values as Dutch/Chinese.
     if (game_language_version < 2 && (s.game_language == 8 || s.game_language == 10)) s.game_language = 0;
+    // Older builds enabled draw skipping as a performance setting. Carrying it
+    // forward silently keeps objects disappearing on first-use shader compiles.
+    // Reset that legacy choice once; a new explicit opt-in still survives saves.
+    if (pipeline_skip_draws_version < 1) s.pipeline_skip_draws = false;
     return true;
 }
 
@@ -128,6 +134,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\ninternal_resolution=" << s.internal_resolution << "\nmuted=" << s.muted << "\nfullscreen=" << s.fullscreen
       << "\nalways_on_top=" << s.always_on_top << "\nlanguage=" << s.language << "\ngame_language=" << s.game_language
       << "\ngame_language_version=2"
+      << "\npipeline_skip_draws_version=1"
       << "\nmemory_limit_gb=" << s.memory_limit_gb << "\nlow_vram_profile=" << s.low_vram_profile
       << "\nkeyboard_separate_player=" << s.keyboard_separate_player << "\nbutton_icons=" << s.button_icons << "\ncontroller_preset=" << s.controller_preset << "\nmetrics_enabled=" << s.metrics_enabled
       << "\nmetric_fps=" << s.metric_fps << "\nmetric_one_percent_low=" << s.metric_one_percent_low

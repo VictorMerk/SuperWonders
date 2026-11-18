@@ -10,6 +10,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -976,7 +977,7 @@ bool counter_clear_probe() {
         p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;
     bool ok = true;
-    for (unsigned variant = 0; variant < 9; ++variant) {
+    for (unsigned variant = 0; variant < 12; ++variant) {
         if (!begin(true)) { ok = false; break; }
         draw_begin_submit();
         counters = {}; counters[0] = variant == 5 ? 0x100000000ull : 1;
@@ -1040,17 +1041,32 @@ bool counter_clear_probe() {
         // No CPU-visible timestamp completion while the commands are only encoded.
         bool pass = variant == 5 ? counters[0] == 0x100000000ull : counters[0] == 1;
         draw_end_rendering(g_cb);
-        transition(g_cb,*image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
-        copy.imageExtent = {16,16,1};
-        p_vkCmdCopyImageToBuffer(g_cb,image->image,image->layout,buffer,1,&copy);
+        if (variant >= 9) {
+            pass = compare_twin_probe_record(g_cb, texture, *image, buffer, variant - 9) && pass;
+        } else {
+            transition(g_cb,*image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+            copy.imageExtent = {16,16,1};
+            p_vkCmdCopyImageToBuffer(g_cb,image->image,image->layout,buffer,1,&copy);
+        }
         VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
         p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,draw_take_write_backs(),true);
         else { end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE); draw_end_submit(); }
-        for (size_t p = 0; p < texels.size(); p += 4)
-            pass = pass && mapped[p] == (red ? 255 : 0) && mapped[p+1] == 0 && mapped[p+2] == (red ? 0 : 255) && mapped[p+3] == 255;
+        for (size_t p = 0; p < texels.size(); p += 4) {
+            if (variant >= 9) {
+                float depth;
+                std::memcpy(&depth, mapped + p, sizeof depth);
+                const float expected = variant == 9 ? 191.0f / 255.0f : variant == 10 ? 1.0f : 128.0f / 255.0f;
+                pass = pass && std::abs(depth - expected) < 0.00001f;
+            } else
+                pass = pass && mapped[p] == (red ? 255 : 0) && mapped[p+1] == 0 && mapped[p+2] == (red ? 0 : 255) && mapped[p+3] == 255;
+        }
+        if (variant >= 9) {
+            forget_compare_twin(*image);
+            pass = !compare_twin_ready(*image) && pass;
+        }
         if (variant == 0 || variant == 1 || variant == 4 || variant == 6) pass = pass && counters[0] == 0;
         if (variant == 3) pass = pass && counters[0] == 1;
         log("counter/clear GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");

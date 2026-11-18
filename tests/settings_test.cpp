@@ -31,6 +31,9 @@ int main() {
     { std::ofstream f(path); f << "frame_cap=144\nmetrics_enabled=1\n"; }
     check(load_settings(path, s), "load old settings");
     check(!s.pipeline_skip_draws && s.frame_cap == 144 && s.metrics_enabled, "old settings migration");
+    { std::ofstream f(path); f << "pipeline_skip_draws=1\nframe_cap=30\n"; }
+    check(load_settings(path, s) && !s.pipeline_skip_draws && s.frame_cap == 30,
+          "legacy enabled draw skipping migrates to complete rendering without changing the frame cap");
     { std::ofstream f(path); f << "keyboard_9=" <<
 #ifdef _WIN32
         27;

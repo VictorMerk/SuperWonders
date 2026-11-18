@@ -18,6 +18,7 @@
 #include "nvn_pipeline_async.h"
 #include "nvn_shader_prepare.h"
 #include "nvn_spirv_warp.h"
+#include "nvn_spirv_nan.h"
 #include "platform.h"
 #include "shader_bundle.h"
 
@@ -316,31 +317,33 @@ void prepare_shader_catalog() {
     // With GPL (nvn_pipeline.cpp) the preparation makes each program's shader libraries instead of a whole pipeline:
     // its own marker, so switching modes prepares again.
     const bool gpl = vk_gpl() && !render_pass_objects();  // as gpl_program_job decides
-    std::snprintf(marker_name, sizeof marker_name, "/shader_prepare_warp32v2_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
+    std::snprintf(marker_name, sizeof marker_name, "/shader_prepare_nan1_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
                   props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
     const std::string marker = plat::data_root() + marker_name;
     if (marker_exists(marker)) return;
 
-    // An existing preparation on this GPU/driver/catalog needs only the compute programs whose
-    // logical-warp code changed. Do not make an upgrade re-read/re-prepare every graphics shader.
-    char legacy_name[128], previous_name[128];
+    // Existing packs need only programs whose logical-warp or NaN operations
+    // change. Unaffected graphics programs keep their previous preparation.
+    char legacy_name[128], previous_name[128], warp_name[128];
     std::snprintf(legacy_name, sizeof legacy_name, "/shader_prepare_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
                   props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
     std::snprintf(previous_name, sizeof previous_name, "/shader_prepare_warp32_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
                   props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
+    std::snprintf(warp_name, sizeof warp_name, "/shader_prepare_warp32v2_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
+                  props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
     g_catalog_infos.resize(stages.size());
-    if (marker_exists(plat::data_root() + legacy_name) || marker_exists(plat::data_root() + previous_name)) {
+    if (marker_exists(plat::data_root() + legacy_name) || marker_exists(plat::data_root() + previous_name) ||
+        marker_exists(plat::data_root() + warp_name)) {
         std::erase_if(programs, [&](const ProgramRec& program) {
             for (uint32_t index : program.stages) {
-                if (stages[index].stage != ShaderStage::Compute) continue;
                 auto& info = g_catalog_infos[index];
                 if (!info) info = load_catalog_shader(stages[index]);
                 std::vector<uint32_t> patched;
-                if (!info || patch_warp32(info->spirv, patched)) return false;
+                if (!info || patch_warp32(info->spirv, patched) || patch_nan_minmax(info->spirv, patched)) return false;
             }
             return true;
         });
-        log("nvn/vk: incremental logical-warp preparation: %zu affected programs", programs.size());
+        log("nvn/vk: incremental warp/NaN shader preparation: %zu affected programs", programs.size());
         if (programs.empty()) { write_marker(marker, fingerprint, 0, 0); return; }
     }
 

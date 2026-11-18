@@ -152,6 +152,7 @@ bool clears_transfer(VkCommandBuffer cb, const Targets& t) {
         if (!img) continue;
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);  // repeated clears still need an execution dependency
         img->rendered = true;
+        ++img->content_version;
         uint32_t level = std::min<uint32_t>(t.views.level[k], img->levels - 1);
         uint32_t layer = std::min<uint32_t>(t.views.layer[k], img->layers - 1);
         if (k < 8) {
@@ -274,6 +275,7 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
             p_vkCmdClearColorImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.color, 1, &r);
         else
             p_vkCmdClearDepthStencilImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.depthStencil, 1, &r);
+        ++img->content_version;
         // pass_begin keeps rendered images GENERAL, so it cannot rely on a layout
         // change to make this transfer write visible to the attachment load.
         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);

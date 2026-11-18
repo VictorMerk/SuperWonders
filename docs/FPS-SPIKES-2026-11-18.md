@@ -1,4 +1,4 @@
-﻿# FPS-spike follow-up — Windows settings migration
+# FPS-spike follow-up — Windows settings migration
 
 The real RX 570 session exposed a gap in the original graphics update: `platform_win.cpp` has its own settings reader and writer. The shared overlay settings parser was corrected, but the Windows path still loaded legacy `pipeline_skip_draws=1` and omitted the migration version when saving. Earlier QA fixtures already had draw skipping off, so their zero-skip results did not exercise this upgrade path.
 
@@ -18,3 +18,5 @@ Native validation covers legacy enabled settings (expected off), an explicit ver
 Completing draws preserves geometry and can expose first-use pipeline stalls that draw skipping previously hid. The next performance checks should compare a repeated, warmed route at a lower internal resolution and with compressed textures, then measure frame generation separately at the same route/settings. Do not infer an FPS improvement from this settings-correctness repair alone.
 
 Raw user logs and machine-specific paths remain private.
+
+The r8-compatible build also passed all three native migration cases with exit 0, validation-layer loading confirmed and zero Vulkan errors. The shared settings CTest passed. The corrected runtime was installed with a backup; only the legacy draw-skipping value and its migration version changed in the saved settings. Resolution, frame-generation preferences, saves and game data were preserved. No FPS gain is claimed for this settings repair.

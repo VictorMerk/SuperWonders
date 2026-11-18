@@ -1,11 +1,11 @@
 {
-  "runtime_sha256": "62b298e3a3965cf7f3878cf62e3d2aa6f247f8319750147d1f061246b4991230",
+  "runtime_sha256": "cfc9c69eee7fb005b19ce9fedfc4914f5a77f42cb58d78a1276ea69de739492e",
   "runtime_interface": 1,
-  "protocol": 4,
-  "scope": "Two instances on one RX570; physical follow-up pending",
+  "protocol": 5,
+  "scope": "Frozen native checks identify their actual runtime hashes; latest loading-deadline candidate awaits renewed physical LAN checks",
   "cpu_checks": {
     "r8_non_gpu": 47,
-    "main_non_gpu": 53
+    "main_non_gpu": 57
   },
   "startup_shutdown": {
     "target_frames": 1200,
@@ -51,7 +51,7 @@
     "world_map_visible_both": true,
     "scope": "scripted/menu-guided pads on one RX570; partial positions only"
   },
-  "physical_lan": "pending temporary access restart",
+  "physical_lan": "Loading-barrier candidate pending fresh temporary access; earlier R5 physical run failed",
   "limitation": "Inputs and one heuristic player position only. These tests do not certify actor identity, whole-world synchronization, physical-network performance or all rendering.",
   "startup_loading_deadline": {
     "slow_host_passed": true,
@@ -60,5 +60,60 @@
     "startup_timeout_ms": 2000,
     "loading_delay_ms": 750,
     "established_stall_timeout_ms": 150
+  },
+  "physical_r5_before_loading_barrier": {
+    "runtime_sha256": "62b298e3a3965cf7f3878cf62e3d2aa6f247f8319750147d1f061246b4991230",
+    "status": "failed position-state rejection in house",
+    "simulation_rate": 30,
+    "input_lead": 1,
+    "committed_pairs": 4095,
+    "available_position_pairs": 175,
+    "first_difference_tick": 5752,
+    "course_music_framework_tick_difference": 114,
+    "scope": "Two physical PCs; matching inputs did not establish matching game state"
+  },
+  "loading_barrier_rtx3050": {
+    "runtime_sha256": "fb999f7e54bdb6fa5c45d7697237599b76a41852a48305a4e2ab8eebf7a285aa",
+    "target_frames": 12000,
+    "simulation_rate": 30,
+    "input_lead": 1,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "committed_pairs": 4095,
+    "available_position_pairs": 0,
+    "first_difference": null,
+    "scene_music_markers_agreed": true,
+    "late_map_readbacks_match": true,
+    "scope": "Two instances on one RTX3050; no available position coverage in retained window"
+  },
+  "loading_barrier_rx570": {
+    "runtime_sha256": "fb999f7e54bdb6fa5c45d7697237599b76a41852a48305a4e2ab8eebf7a285aa",
+    "target_frames": 4200,
+    "simulation_rate": 30,
+    "input_lead": 1,
+    "host_exit": 0,
+    "guest_exit": 0,
+    "committed_pairs": 4096,
+    "available_position_pairs": 1165,
+    "first_difference": null,
+    "movement_pause_resume": true,
+    "course": "Course004",
+    "late_readbacks_match": true,
+    "scope": "Two instances on one RX570 using installed r8 game-code build; partial positions only"
+  },
+  "installed_current": {
+    "runtime_sha256": "62b298e3a3965cf7f3878cf62e3d2aa6f247f8319750147d1f061246b4991230",
+    "both_pcs_launcher_ui_exit": 0,
+    "both_pcs_native_boot_exit": 0,
+    "original_programs_and_saves_preserved": true,
+    "loading_barrier_candidate_installed": false
+  },
+  "loading_event_deadline": {
+    "status": "passed real TCP regression on both host/client roles",
+    "frame_timeout_ms": 150,
+    "loading_timeout_ms": 1500,
+    "late_peer_delay_ms": 300,
+    "received_marker_extends_neutral_wait": true,
+    "short_gameplay_deadline_restored": true
   }
 }

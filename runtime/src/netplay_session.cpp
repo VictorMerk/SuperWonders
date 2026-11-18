@@ -128,7 +128,7 @@ struct Session::Impl {
     uint8_t common_rate=60,common_lead=0;
     uint64_t tick=0,common_epoch=0,common_seed=0;
     std::atomic<bool> stopped{false};
-    bool started=false,ready=false;
+    bool started=false,ready=false,loading=false;
     std::mutex io;
 
     Clock::time_point deadline() const { return Clock::now()+options.timeout; }
@@ -387,24 +387,27 @@ void Session::join(const SessionOptions& options) {
     } catch(...) { s.interrupt(); throw; }
 }
 
-FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const PlayerState& state,uint64_t work) {
+FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const PlayerState& state,uint64_t work,uint64_t event) {
     auto& s=*impl; std::lock_guard lock(s.io);
     if(!s.ready||s.stopped) throw std::runtime_error("LAN session is not connected");
     // Tick 0 is the lobby's neutral exchange; tick 1 may wait while the other
     // PC loads modules and warms shaders. Only use the short deadline once
     // both games have reached their first complete framework frame.
-    const auto until=Clock::now()+(s.tick<2?s.options.startup_timeout:s.options.frame_timeout);
+    // Explicit loading markers retain the loading budget, including a marker
+    // received from another peer. The first all-zero commit restores the short
+    // established-game deadline for the following exchange.
+    const auto until=Clock::now()+((s.tick<2 || event || s.loading)?s.options.startup_timeout:s.options.frame_timeout);
     try {
         FrameInputs frame; frame.tick=s.tick; frame.players=s.count; frame.state_hash=hash;
         frame.state=state;
         if(s.local_role==0) {
             frame.pads[0]=local;
-            frame.frame_work_ns[0]=work;
+            frame.frame_work_ns[0]=work; frame.loading_events[0]=event;
             for(uint8_t role=1;role<s.count;++role) {
                 const auto p=s.expected(s.peers[role].get(),Message::Input,role,s.tick,until);
                 uint64_t peer_hash=0; PlayerState peer_state;
-                frame.pads[role]=decode_input(p.payload,peer_hash,&peer_state,&frame.frame_work_ns[role]);
-                if((hash&&peer_hash&&hash!=peer_hash) || !s.position_probes[role].observe(state,peer_state,s.options.probe_warmup)) {
+                frame.pads[role]=decode_input(p.payload,peer_hash,&peer_state,&frame.frame_work_ns[role],&frame.loading_events[role]);
+                if((hash&&peer_hash&&hash!=peer_hash) || !s.position_probes[role].observe(event || frame.loading_events[role]?PlayerState{}:state,peer_state,s.options.probe_warmup)) {
                     for(uint8_t i=1;i<s.count;++i) s.send(s.peers[i].get(),s.message(Message::Reject,0,s.tick),until);
                     throw std::runtime_error("LAN simulation diverged; restart from the same session state");
                 }
@@ -419,13 +422,14 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
                     throw std::runtime_error("Invalid LAN acknowledgement");
             }
         } else {
-            s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state,work)),until);
+            s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state,work,event)),until);
             const auto commit=s.expected(s.peers[0].get(),Message::Commit,0,s.tick,until);
             frame=decode_commit(commit.payload); frame.tick=s.tick;
-            if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !s.position_probes[0].observe(state,frame.state,s.options.probe_warmup)) throw std::runtime_error("LAN simulation state mismatch");
+            if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !s.position_probes[0].observe(event || frame.loading_events[0]?PlayerState{}:state,frame.state,s.options.probe_warmup)) throw std::runtime_error("LAN simulation state mismatch");
             s.probe_ready=s.position_probes[0].ready();
             s.send(s.peers[0].get(),s.message(Message::Ack,s.local_role,s.tick),until);
         }
+        s.loading=std::any_of(frame.loading_events.begin(),frame.loading_events.end(),[](uint64_t marker){return marker!=0;});
         ++s.tick; return frame;
     } catch(...) { s.interrupt(); throw; }
 }

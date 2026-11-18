@@ -17,7 +17,10 @@ void check(bool value,const char* message) {
 }
 std::vector<std::string> columns(const std::string& line) {
     std::vector<std::string> out; std::istringstream in(line); std::string item;
-    while (std::getline(in,item,',')) out.push_back(item);
+    while (std::getline(in,item,',')) {
+        while (!item.empty() && (item.back()=='\r' || item.back()=='\n')) item.pop_back();
+        out.push_back(item);
+    }
     return out;
 }
 int main() {
@@ -39,26 +42,28 @@ int main() {
     now = 110000000;
     host_present(1000,2000,3000,4000,input_sample_time(7),true);
     now = 115000000;
-    host_present(1000,2000,4000,5000,input_sample_time(8),false);
+    host_present(1000,2000,4000,5000,input_sample_time(8),false,2000000,52000000);
     check(captured!=nullptr,"presentation produces the requested trace");
     std::fflush(captured); std::rewind(captured);
     char line[4096];
     check(std::fgets(line,sizeof line,captured)!=nullptr,"CSV header");
     const auto header = columns(line);
-    check(header[header.size()-2]=="sample_to_present_ms","latency column is named as a proxy");
+    check(std::find(header.begin(),header.end(),"sample_to_present_ms")!=header.end(),"latency column is named as a proxy");
     check(std::fgets(line,sizeof line,captured)!=nullptr,"original picture row");
     auto row = columns(line);
     auto value = [&](const char* name) { auto at=std::find(header.begin(),header.end(),name); check(at!=header.end(),"diagnostic column exists"); return std::stod(row[size_t(at-header.begin())]); };
     check(value("log_ms")==3 && value("log_max_ms")==2 && value("input_poll_ms")==2 && value("input_poll_max_ms")==2,
           "completed calls retain distinct summed and longest durations");
-    check(row.size()==header.size() && std::stod(row[row.size()-2])==10.0 && std::stoi(row.back())==1,
+    check(row.size()==header.size() && value("sample_to_present_ms")==10.0 && value("original_picture")==1,
           "original picture retains the matching 10 ms sample");
     check(std::fgets(line,sizeof line,captured)!=nullptr,"generated picture row");
     row = columns(line);
     check(value("log_ms")==0 && value("log_max_ms")==0 && value("input_poll_ms")==0 && value("input_poll_max_ms")==0,
           "new presentation intervals do not inherit old call maxima");
-    check(row.size()==header.size() && std::stod(row[row.size()-2])==12.0 && std::stoi(row.back())==0,
+    check(row.size()==header.size() && value("sample_to_present_ms")==12.0 && value("original_picture")==0,
           "generated picture is explicitly labelled");
+    check(value("present_pace_requested_ms")==2.0 && value("present_pace_actual_ms")==52.0,
+          "presentation sleep retains requested and actual wall durations");
     input_sample(7+128);
     check(input_sample_time(7)==0 && input_sample_time(7+128)==now,"wrapped samples never alias an old frame");
     std::puts("frame trace sample/presentation association passed");

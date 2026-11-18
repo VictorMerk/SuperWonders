@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "upload_snapshot.h"
 #include "nvn_draw_state.h"
 
 namespace nx::nvn::replay {
@@ -257,8 +258,7 @@ VkDescriptorBufferInfo buffer_of(VkCommandBuffer cb, const void* bytes, uint64_t
         return {u.buffer, u.offset, n};
     }
     Upload u = upload_alloc(n, 256);
-    std::memset(u.ptr, 0, n);
-    if (bytes && size) std::memcpy(u.ptr, bytes, size);
+    initialize_upload(u.ptr, p, size, n);
     // Only what a compute shader may have written goes back. Host scratch data came here too and was "written back"
     // after the submit to the stack address it had been built at (the support buffer and c[0] of every stage of every
     // draw, into a dead frame; with NX_ASYNC_GPU from whichever thread retired the submit). NX_DRAW_SLOW keeps that.

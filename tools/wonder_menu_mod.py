@@ -416,15 +416,25 @@ def rstb_grow(d, growth):
     _, name_len, ncrc, nname = struct.unpack_from("<IIII", d, 6)
     out = bytearray(d)
     left = dict(growth)
+
+    def budget(size, added):
+        # The original heap budgets are eight-byte aligned. Appending a layout or BYML can add an odd
+        # byte count; keep the allocation budget aligned and at least as large as the requested growth.
+        needed = size + added
+        if not 0 <= needed <= 0xFFFFFFF8:
+            raise ValueError("resource budget is outside the aligned uint32 range")
+        return (needed + 7) & ~7
+
     for i in range(ncrc):
         crc, size = struct.unpack_from("<II", d, 0x16 + 8 * i)
         for path in [p for p in left if zlib.crc32(p.encode()) == crc]:
-            struct.pack_into("<I", out, 0x16 + 8 * i + 4, size + left.pop(path))
+            struct.pack_into("<I", out, 0x16 + 8 * i + 4, budget(size, left.pop(path)))
     o = 0x16 + 8 * ncrc
     for i in range(nname):
         name = d[o:o + name_len].split(b"\0")[0].decode()
         if name in left:
-            struct.pack_into("<I", out, o + name_len, struct.unpack_from("<I", d, o + name_len)[0] + left.pop(name))
+            struct.pack_into("<I", out, o + name_len,
+                             budget(struct.unpack_from("<I", d, o + name_len)[0], left.pop(name)))
         o += name_len + 4
     assert not left, f"not in the size table: {list(left)}"
     return bytes(out)

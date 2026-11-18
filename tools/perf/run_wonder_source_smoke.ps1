@@ -12,7 +12,8 @@ param(
     [switch]$TraceTextureSources,
     [switch]$RequireAudio,
     [ValidateRange(0,3600)][int]$ThreadDumpAtSeconds=0,
-    [switch]$TraceFiles
+    [switch]$TraceFiles,
+    [string]$ContentPython=''
 )
 # A real native-game smoke test, distinct from the library GUI's unit tests.
 # Use only a task-owned fixture: gameplay can update that fixture's saves.
@@ -25,6 +26,7 @@ $outputPath=[IO.Path]::GetFullPath($Output)
 $inputPath=if($InputScript){(Resolve-Path -LiteralPath $InputScript).Path}else{''}
 $livePath=if($LiveInputFile){(Resolve-Path -LiteralPath $LiveInputFile).Path}else{''}
 $layerPath=if($ValidationLayer){(Resolve-Path -LiteralPath $ValidationLayer).Path}else{''}
+$contentPythonPath=if($ContentPython){(Resolve-Path -LiteralPath $ContentPython).Path}else{''}
 $reservation=Join-Path $PSScriptRoot 'game_test_reservation.ps1'
 $claim=& $reservation -Action Acquire -Task 'Wonder source-version native smoke' -Workspace $PSScriptRoot -OwnerPid $PID | ConvertFrom-Json
 if($claim.state -ne 'acquired'){Write-Output ($claim|ConvertTo-Json -Compress -Depth 5);exit 75}
@@ -85,18 +87,24 @@ try {
         $capture=Join-Path $outputPath 'frames';$null=New-Item -ItemType Directory -Path $capture
         foreach($frame in $frames){Copy-Item -LiteralPath $frame.FullName -Destination (Join-Path $capture $frame.Name)}
     }
+    $contentPassed=$null
+    if($contentPythonPath) {
+        & $contentPythonPath (Join-Path $PSScriptRoot 'check_wonder_captures.py') (Join-Path $outputPath 'frames') --json (Join-Path $outputPath 'content-check.json')
+        $contentPassed=$LASTEXITCODE -eq 0
+    }
     $result=[pscustomobject]@{
         runtime=$runtimePath;data_root=$dataPath;reason=$reason;exit_code=$game.ExitCode;
         intentional_quit=($quit.Success -and [int64]$quit.Groups[1].Value -ge $QuitAfterFrames);
         fresh_captures=$frames.Count;fatal_errors=[regex]::Matches($log,'FATAL:').Count;
         validation_enabled=[bool]$layerPath;
         audio_bytes=$audioBytes;audio_required=[bool]$RequireAudio;
+        content_checked=[bool]$contentPythonPath;nonflat_content_observed=$contentPassed;
         validation_errors=[regex]::Matches($log,'Validation Error:').Count;
-        scope='native startup/input/capture/shutdown smoke; gameplay and edition contents need separate inspection'
+        scope='native process/capture/audio/shutdown smoke; navigation, visual correctness and edition contents need separate inspection'
     }
     $result|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $outputPath 'result.json') -Encoding UTF8
     $result|ConvertTo-Json -Compress|Write-Output
-    if($reason -ne 'exited' -or $result.exit_code -ne 0 -or !$result.intentional_quit -or !$result.fresh_captures -or $result.fatal_errors -or $result.validation_errors -or ($RequireAudio -and $audioBytes -le 44)){exit 1}
+    if($reason -ne 'exited' -or $result.exit_code -ne 0 -or !$result.intentional_quit -or !$result.fresh_captures -or $result.fatal_errors -or $result.validation_errors -or ($RequireAudio -and $audioBytes -le 44) -or ($contentPythonPath -and !$contentPassed)){exit 1}
 } finally {
     try {
         if($started -and !$game.HasExited){$game.Kill();$game.WaitForExit()}

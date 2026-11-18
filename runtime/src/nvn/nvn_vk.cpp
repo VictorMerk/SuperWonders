@@ -952,6 +952,16 @@ bool presentation_probe() {
     return true;
 }
 
+bool pipeline_recipe_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    prepare_shader_catalog();
+    prepare_recorded_pipelines();
+    save_pipeline_keys(true);
+    log("pipeline recipe probe: replay complete; inspect ready/skipped counts and Vulkan errors");
+    return true;
+}
+
 bool counter_clear_probe() {
     std::lock_guard lock(g_gpu);
     if (!init()) return false;

@@ -28,6 +28,7 @@ namespace nx::nvn {
 void set_pipeline_skip_draws(bool on);
 uint64_t game_present_period_ns(int interval);
 bool framegen_probe();  // synthetic GPU regression, no game files
+bool pipeline_recipe_probe();  // shader/recipe replay only; no guest game, uses an isolated cache fixture
 bool overlay_input_probe();  // native overlay keyboard/controller regression, no game files
 bool counter_clear_probe();  // real replay/counter/clear readback, no game files
 

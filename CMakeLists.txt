@@ -88,6 +88,19 @@ endforeach()
 file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/pc_button_fonts.inc" CONTENT "${NX_PC_FONT_DATA}" @ONLY)
 set_source_files_properties(runtime/src/button_font.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_BINARY_DIR}/generated")
 
+# Licensed controller artwork uses colored rectangles in the existing ImGui atlas.
+set(NX_CONTROLLER_ART_DATA "")
+foreach(model dualsense dualshock4 xbox-series xbox-one xbox360 switch-pro joycon-pair steam-controller steam-deck)
+    set(art_path "${CMAKE_SOURCE_DIR}/runtime/assets/controllers/${model}.png")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${art_path}")
+    file(READ "${art_path}" art_hex HEX)
+    string(REGEX REPLACE "(..)" "0x\\1," art_bytes "${art_hex}")
+    string(REPLACE "-" "_" art_id "${model}")
+    string(APPEND NX_CONTROLLER_ART_DATA "const unsigned char art_${art_id}[] = {${art_bytes}};\n")
+endforeach()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/controller_art_data.inc" CONTENT "${NX_CONTROLLER_ART_DATA}" @ONLY)
+set_source_files_properties(runtime/src/overlay/controller_art.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_BINARY_DIR}/generated;${CMAKE_SOURCE_DIR}/third_party/stb")
+
 # Unit tests of runtime pieces that build without the game (docs/nvn/WINDOWS-PLAN.md, "Test plan"): ctest.
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
@@ -95,6 +108,10 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(friends_service_test tests/friends_service_test.cpp runtime/src/ipc.cpp runtime/src/svc_friends.cpp)
     target_include_directories(friends_service_test PRIVATE runtime/include runtime/src)
     add_test(NAME friends_service COMMAND friends_service_test)
+    add_executable(controller_art_test tests/controller_art_test.cpp runtime/src/overlay/controller_art.cpp runtime/src/button_font.cpp runtime/src/overlay/settings.cpp
+        third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_tables.cpp)
+    target_include_directories(controller_art_test PRIVATE runtime/include runtime/src third_party/imgui)
+    add_test(NAME controller_art COMMAND controller_art_test)
     add_executable(keyboard_actions_test tests/keyboard_actions_test.cpp runtime/src/overlay/settings.cpp)
     target_include_directories(keyboard_actions_test PRIVATE runtime/src)
     add_test(NAME keyboard_actions COMMAND keyboard_actions_test)
@@ -498,6 +515,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/overlay/overlay_menu.cpp
     runtime/src/overlay/overlay_progress.cpp
     runtime/src/overlay/overlay_ui.cpp
+    runtime/src/overlay/controller_art.cpp
     runtime/src/overlay/option_rows.cpp
     runtime/src/overlay/overlay_vk.cpp
     third_party/imgui/imgui.cpp

@@ -274,6 +274,7 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.keyboard_separate_player = s.keyboard_separate_player;
     o.keyboard_actions=s.keyboard_actions;o.keyboard_game_layout=s.keyboard_game_layout;o.keyboard_standee_key=s.keyboard_standee_key;
     o.button_icons = s.button_icons;
+    o.controller_artwork=s.controller_artwork;
     o.controller_preset = s.controller_preset, o.muted = s.muted, o.fullscreen = s.fullscreen;
     o.always_on_top = s.always_on_top, o.metrics_enabled = s.metrics_enabled, o.low_vram_profile = s.low_vram_profile;
     o.metric_fps = s.metric_fps, o.metric_one_percent_low = s.metric_one_percent_low;
@@ -301,6 +302,7 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.keyboard_separate_player = o.keyboard_separate_player;
     s.keyboard_actions=o.keyboard_actions;s.keyboard_game_layout=o.keyboard_game_layout;s.keyboard_standee_key=o.keyboard_standee_key;
     s.button_icons = o.button_icons;
+    s.controller_artwork=o.controller_artwork;
     s.controller_preset = o.controller_preset, s.muted = o.muted, s.fullscreen = o.fullscreen;
     s.always_on_top = o.always_on_top, s.metrics_enabled = o.metrics_enabled, s.low_vram_profile = o.low_vram_profile;
     s.metric_fps = o.metric_fps, s.metric_one_percent_low = o.metric_one_percent_low;
@@ -415,6 +417,7 @@ static void save_pc_settings() {
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
          << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
          << "\nbutton_icons=" << g_pc_settings.button_icons
+         << "\ncontroller_artwork=" << g_pc_settings.controller_artwork
          << "\ncontroller_preset=" << g_pc_settings.controller_preset
          << "\nmetrics_enabled=" << g_pc_settings.metrics_enabled << "\nmetric_fps=" << g_pc_settings.metric_fps
          << "\nmetric_one_percent_low=" << g_pc_settings.metric_one_percent_low
@@ -471,6 +474,7 @@ static void load_pc_settings() {
             g_pc_settings.keyboard_separate_player = value != 0;
         else if (std::sscanf(line.c_str(), "button_icons=%d", &value) == 1)
             g_pc_settings.button_icons = std::clamp(value, 0, 4);
+        else if (std::sscanf(line.c_str(), "controller_artwork=%d", &value) == 1) g_pc_settings.controller_artwork=std::clamp(value,0,9);
         else if (std::sscanf(line.c_str(), "controller_preset=%d", &value) == 1)
             g_pc_settings.controller_preset = std::clamp(value, 0, 2);
         else if (std::sscanf(line.c_str(), "metrics_enabled=%d", &value) == 1) g_pc_settings.metrics_enabled = value != 0;

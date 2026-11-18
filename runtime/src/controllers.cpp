@@ -157,6 +157,23 @@ ControllerKind controller_kind(uint32_t player) {
     return ControllerKind::Keyboard;
 #endif
 }
+std::string controller_model_hint(uint32_t player) {
+#if NX_SDL_CONTROLLERS
+    if(player>=kPlayerCount)return {};
+    std::lock_guard guard(lock);refresh();if(!pads[player])return {};
+    switch(SDL_GetGamepadType(pads[player])) {
+        case SDL_GAMEPAD_TYPE_PS4:return "DualShock 4";
+        case SDL_GAMEPAD_TYPE_PS5:return "DualSense";
+        case SDL_GAMEPAD_TYPE_XBOX360:return "Xbox 360";
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:return "Nintendo Switch Pro";
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:return "Joy-Con (L/R)";
+        default:break; // XBOXONE includes Series pads; retain the device name for that distinction.
+    }
+#endif
+    return {};
+}
 std::string controller_name(uint32_t player) {
 #if NX_SDL_CONTROLLERS
     if (player >= kPlayerCount) return "Not connected";

@@ -1035,7 +1035,7 @@ bool pipeline_draw_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,fixture.buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&fixture.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,fixture.buffer,fixture.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,fixture.memory,0,2*bytes,0,reinterpret_cast<void**>(&fixture.mapped)) != VK_SUCCESS) return false;
@@ -1173,7 +1173,7 @@ bool counter_clear_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;

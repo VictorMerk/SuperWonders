@@ -191,6 +191,7 @@ bool pipelined();  // NX_PIPELINED: fences not waited for, write-backs copied be
 // The extensions and memory types that the Android performance plan depends on, logged once (nvn_caps.cpp).
 void log_device_caps(VkPhysicalDevice physical, const std::vector<VkExtensionProperties>& extensions);
 uint32_t upload_memory_type(uint32_t bits);
+uint32_t readback_memory_type(uint32_t bits);  // cached coherent host memory when available, else coherent
 bool native_r11g11b10();
 bool ubwc_flags();  // MUTABLE_FORMAT only with a format list (nvn_caps.cpp; Android)  // NVN 0x3f as B10G11R11_UFLOAT (nvn_caps.cpp; Android)  // the upload ring's memory type (nvn_caps.cpp)
 void frame_init(VkCommandPool pool, uint32_t family, VkBuffer ring, uint8_t* ring_ptr, uint64_t ring_size);

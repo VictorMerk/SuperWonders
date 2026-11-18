@@ -713,3 +713,9 @@ if(NX_TESTS AND NOT ANDROID)
   target_include_directories(netplay_probe_test PRIVATE runtime/src)
   add_test(NAME netplay_probe COMMAND netplay_probe_test)
 endif()
+
+if(NX_TESTS AND WIN32)
+  add_test(NAME lan_installer COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+           -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/lan_installer_test.ps1")
+  set_tests_properties(lan_installer PROPERTIES TIMEOUT 30)
+endif()

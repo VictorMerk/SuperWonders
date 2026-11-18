@@ -1,11 +1,11 @@
 {
-  "runtime_sha256": "fb999f7e54bdb6fa5c45d7697237599b76a41852a48305a4e2ab8eebf7a285aa",
+  "runtime_sha256": "cfc9c69eee7fb005b19ce9fedfc4914f5a77f42cb58d78a1276ea69de739492e",
   "runtime_interface": 1,
   "protocol": 5,
-  "scope": "Separate two-instance RX570 and RTX3050 checks; renewed physical-LAN candidate check pending",
+  "scope": "Frozen native checks identify their actual runtime hashes; latest loading-deadline candidate awaits renewed physical LAN checks",
   "cpu_checks": {
     "r8_non_gpu": 47,
-    "main_non_gpu": 53
+    "main_non_gpu": 57
   },
   "startup_shutdown": {
     "target_frames": 1200,
@@ -107,5 +107,13 @@
     "both_pcs_native_boot_exit": 0,
     "original_programs_and_saves_preserved": true,
     "loading_barrier_candidate_installed": false
+  },
+  "loading_event_deadline": {
+    "status": "passed real TCP regression on both host/client roles",
+    "frame_timeout_ms": 150,
+    "loading_timeout_ms": 1500,
+    "late_peer_delay_ms": 300,
+    "received_marker_extends_neutral_wait": true,
+    "short_gameplay_deadline_restored": true
   }
 }

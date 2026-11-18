@@ -288,11 +288,45 @@ static void loading_events() {
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading event room starts");
     config.port=port.get();client.join(config);route(client,1);server.join();
 }
+static void loading_event_deadline(bool slow_host) {
+    using namespace nx::lan;
+    Session host,client; auto config=options(2);
+    config.timeout=std::chrono::seconds(2);
+    config.frame_timeout=std::chrono::milliseconds(150);
+    config.startup_timeout=std::chrono::milliseconds(1500);
+    std::promise<uint16_t> listening; auto port=listening.get_future();
+    const unsigned slow=slow_host?0:1;
+    auto route=[&](Session& session,unsigned role) {
+        for(unsigned i=0;i<3;++i) session.exchange({});
+        if(role==slow) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        auto frame=session.exchange({},0,{},0,role==slow?0:42);
+        check(frame.loading_events[slow]==0 && frame.loading_events[1-slow]==42,"first loading announcement tolerates a slower established peer");
+        if(role!=slow) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        frame=session.exchange({},0,{},0,role==slow?0:42);
+        check(frame.loading_events[slow]==0 && frame.loading_events[1-slow]==42,"a received loading marker extends a locally neutral peer's next wait");
+        frame=session.exchange({},0,{},0,42);
+        check(frame.loading_events[0]==42 && frame.loading_events[1]==42,"both peers finish the same loading event");
+        frame=session.exchange({});
+        check(frame.loading_events[0]==0 && frame.loading_events[1]==0,"loading markers clear on the first ordinary commit");
+        if(role==slow) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));session.stop();
+        } else {
+            const auto start=std::chrono::steady_clock::now();bool timed_out=false;
+            try { session.exchange({}); }
+            catch(const std::runtime_error& error) { timed_out=std::string(error.what())=="LAN peer timed out"; }
+            const auto elapsed=std::chrono::steady_clock::now()-start;
+            check(timed_out && elapsed>=config.frame_timeout && elapsed<std::chrono::seconds(2),"established gameplay regains its short deadline after loading ends");
+        }
+    };
+    std::thread server([&]{host.host(config,[&](uint16_t p){listening.set_value(p);});route(host,0);});
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading-deadline room starts");
+    config.port=port.get();client.join(config);route(client,1);server.join();
+}
 int main() {
     for(uint8_t rate:{30,60}) for(uint8_t count:{2,4}) for(bool overlap:{false,true}) roundtrip(count,overlap,rate);
     divergence(); divergence(true); cancellation(); invalid_timing(); save_transfer();
     loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
-    refused_connection(); unassociated_probe(); loading_events();
+    refused_connection(); unassociated_probe(); loading_events(); loading_event_deadline(true); loading_event_deadline(false);
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

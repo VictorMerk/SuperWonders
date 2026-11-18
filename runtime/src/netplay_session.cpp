@@ -128,7 +128,7 @@ struct Session::Impl {
     uint8_t common_rate=60,common_lead=0;
     uint64_t tick=0,common_epoch=0,common_seed=0;
     std::atomic<bool> stopped{false};
-    bool started=false,ready=false;
+    bool started=false,ready=false,loading=false;
     std::mutex io;
 
     Clock::time_point deadline() const { return Clock::now()+options.timeout; }
@@ -393,7 +393,10 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
     // Tick 0 is the lobby's neutral exchange; tick 1 may wait while the other
     // PC loads modules and warms shaders. Only use the short deadline once
     // both games have reached their first complete framework frame.
-    const auto until=Clock::now()+(s.tick<2?s.options.startup_timeout:s.options.frame_timeout);
+    // Explicit loading markers retain the loading budget, including a marker
+    // received from another peer. The first all-zero commit restores the short
+    // established-game deadline for the following exchange.
+    const auto until=Clock::now()+((s.tick<2 || event || s.loading)?s.options.startup_timeout:s.options.frame_timeout);
     try {
         FrameInputs frame; frame.tick=s.tick; frame.players=s.count; frame.state_hash=hash;
         frame.state=state;
@@ -426,6 +429,7 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
             s.probe_ready=s.position_probes[0].ready();
             s.send(s.peers[0].get(),s.message(Message::Ack,s.local_role,s.tick),until);
         }
+        s.loading=std::any_of(frame.loading_events.begin(),frame.loading_events.end(),[](uint64_t marker){return marker!=0;});
         ++s.tick; return frame;
     } catch(...) { s.interrupt(); throw; }
 }

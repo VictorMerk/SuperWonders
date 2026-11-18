@@ -138,6 +138,12 @@ The reporter sums totals and takes maxima when reconstructing original pictures,
 It does not automatically blame a hitch on logging/input. Unit regressions check accumulation, interval reset,
 maxima and legacy reports. Native hitch attribution with these new columns remains pending.
 
+## Presentation wait attribution
+
+Frame traces also append `present_pace_requested_ms` and `present_pace_actual_ms` for the frame-generation deadline wait before each host present. The actual duration includes the timer wait and scheduling before the thread resumes. Tracing off adds no post-wait clock read and leaves the pacing deadline unchanged.
+
+The reporter sums both values when reconstructing original-picture intervals. Only actual time beyond the requested duration can contribute a `present_pace_oversleep` label; an intentional long wait is not automatically a hitch cause. This is measured wait correlation, not proof of an OS timer defect. Older traces without these fields remain supported, and their unknown hitches cannot be retrospectively attributed.
+
 ## Rules
 
 - Two runs per scenario at least; compare medians.

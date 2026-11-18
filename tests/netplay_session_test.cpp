@@ -272,11 +272,27 @@ static void unassociated_probe() {
     config.port=port.get();client.join(config);route(client,1,client_rejected);server.join();
     check(host_rejected && client_rejected,"both peers stop persistent divergence after probe agreement");
 }
+static void loading_events() {
+    using namespace nx::lan;
+    Session host,client; auto config=options(2);
+    std::promise<uint16_t> listening; auto port=listening.get_future();
+    auto route=[&](Session& session,unsigned role) {
+        for(unsigned tick=0;tick<12;++tick) {
+            const uint64_t local=role==1 || tick>=8?0xfedcba9876543210ull:0;
+            const auto frame=session.exchange({},0,{},0,local);
+            check(frame.loading_events[0]==(tick>=8?0xfedcba9876543210ull:0) &&
+                  frame.loading_events[1]==0xfedcba9876543210ull,"asymmetric loading readiness is agreed on both peers");
+        }
+    };
+    std::thread server([&]{host.host(config,[&](uint16_t p){listening.set_value(p);});route(host,0);});
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading event room starts");
+    config.port=port.get();client.join(config);route(client,1);server.join();
+}
 int main() {
     for(uint8_t rate:{30,60}) for(uint8_t count:{2,4}) for(bool overlap:{false,true}) roundtrip(count,overlap,rate);
     divergence(); divergence(true); cancellation(); invalid_timing(); save_transfer();
     loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
-    refused_connection(); unassociated_probe();
+    refused_connection(); unassociated_probe(); loading_events();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

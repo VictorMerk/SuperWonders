@@ -45,6 +45,7 @@ uint32_t role = 0, count = 0;
 InputTrace<>& input_trace = *new InputTrace<>;
 std::atomic<bool> trace_started{false};
 struct RecordedExchange { FrameInputs inputs; uint64_t sampled_ns, partial_hash; bool position_valid; };
+std::atomic<uint64_t> pending_loading_event{0};
 using ExchangePipeline=OneAhead<TraceEntry,RecordedExchange>;
 ExchangePipeline* exchange_pipeline=nullptr;
 uint64_t scheduled_tick=1;
@@ -179,7 +180,7 @@ void isolate_client_save(const fs::path& data) {
 RecordedExchange perform_exchange(TraceEntry entry) {
     const auto started=plat::monotonic_ns();
     FrameInputs agreed;
-    try { agreed=session.load()->exchange(entry.local,0,entry.state,entry.local_work_ns); }
+    try { agreed=session.load()->exchange(entry.local,0,entry.state,entry.local_work_ns,pending_loading_event.load()); }
     catch (...) {
         entry.wait_ns=plat::monotonic_ns()-started;
         input_trace.push(entry);
@@ -364,6 +365,35 @@ plat::PadState pad(uint32_t player) {
     return connected(player) ? inputs.pads[player] : plat::PadState{};
 }
 void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange(); } }
+void loading_event(const char* path) {
+    if(!active()) return;
+    uint64_t event=0xcbf29ce484222325ull;
+    for(const unsigned char* p=reinterpret_cast<const unsigned char*>(path);*p;++p) event=(event^*p)*0x100000001b3ull;
+    if(!event) event=1;
+    std::lock_guard guard(input_lock);
+    try {
+        // Drain the outstanding worker before issuing exchanges on this thread.
+        if(exchange_pipeline) exchange_pipeline->receive();
+        pending_loading_event=event;
+        log("lan: waiting at loading event %llx (%s)",(unsigned long long)event,path);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::minutes(10);
+        for(;;) {
+            TraceEntry entry; entry.tick=scheduled_tick++; entry.frame=g_frame.load(); entry.sampled_ns=plat::monotonic_ns();
+            const auto agreed=perform_exchange(entry).inputs;
+            bool all=true;
+            for(uint32_t player=0;player<count;++player) {
+                if(agreed.loading_events[player] && agreed.loading_events[player]!=event)
+                    throw std::runtime_error("LAN loading events differ; restart from the same session state");
+                all=all && agreed.loading_events[player]==event;
+            }
+            if(all) { inputs={}; inputs.players=uint8_t(count); inputs.tick=agreed.tick; break; }
+            if(std::chrono::steady_clock::now()>deadline) throw std::runtime_error("LAN scene loading timed out");
+        }
+        pending_loading_event=0;
+        frame_work_clock.reset();
+        log("lan: loading event agreed %llx",(unsigned long long)event);
+    } catch(const std::exception& error) { running=false; end_session(error.what()); }
+}
 uint64_t seed() { return current_seed; }
 uint64_t epoch() { return current_epoch; }
 uint32_t local_player() { return role; }

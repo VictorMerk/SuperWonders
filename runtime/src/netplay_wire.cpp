@@ -111,38 +111,43 @@ Packet decode_packet(std::span<const uint8_t> bytes,const Key& key) {
     std::copy_n(bytes.data()+20,p.session.size(),p.session.begin());
     p.payload.assign(bytes.begin()+kHeaderBytes,bytes.begin()+kHeaderBytes+size); return p;
 }
-std::vector<uint8_t> encode_input(const plat::PadState& pad,uint64_t hash,const PlayerState& state,uint64_t work) {
+std::vector<uint8_t> encode_input(const plat::PadState& pad,uint64_t hash,const PlayerState& state,uint64_t work,uint64_t event) {
     if (work>kMaxFrameWorkNs) throw std::runtime_error("Invalid LAN frame-work duration");
-    std::vector<uint8_t> bytes(72); put_pad(bytes.data(),pad); put(bytes.data()+24,hash,8); put_state(bytes.data()+32,state);
-    put(bytes.data()+64,work,8); return bytes;
+    std::vector<uint8_t> bytes(80); put_pad(bytes.data(),pad); put(bytes.data()+24,hash,8); put_state(bytes.data()+32,state);
+    put(bytes.data()+64,work,8); put(bytes.data()+72,event,8); return bytes;
 }
-plat::PadState decode_input(std::span<const uint8_t> bytes,uint64_t& hash,PlayerState* state,uint64_t* work) {
-    if(bytes.size()!=72) throw std::runtime_error("Invalid LAN input length");
+plat::PadState decode_input(std::span<const uint8_t> bytes,uint64_t& hash,PlayerState* state,uint64_t* work,uint64_t* event) {
+    if(bytes.size()!=80) throw std::runtime_error("Invalid LAN input length");
     const uint64_t duration=get(bytes.data()+64,8);
     if (duration>kMaxFrameWorkNs) throw std::runtime_error("Invalid LAN frame-work duration");
     if (work) *work=duration;
+    if (event) *event=get(bytes.data()+72,8);
     const auto decoded=get_state(bytes.data()+32); if(state) *state=decoded;
     hash=get(bytes.data()+24,8); return get_pad(bytes.data());
 }
 std::vector<uint8_t> encode_commit(const FrameInputs& frame) {
     if(frame.players<2||frame.players>kPlayers) throw std::runtime_error("Invalid LAN player count");
-    std::vector<uint8_t> bytes(48+32*kPlayers,0); bytes[0]=frame.players; put(bytes.data()+8,frame.state_hash,8);
+    std::vector<uint8_t> bytes(48+40*kPlayers,0); bytes[0]=frame.players; put(bytes.data()+8,frame.state_hash,8);
     put_state(bytes.data()+16+24*kPlayers,frame.state);
     for(size_t i=0;i<kPlayers;++i) {
         if (frame.frame_work_ns[i]>kMaxFrameWorkNs || (i>=frame.players && frame.frame_work_ns[i]))
             throw std::runtime_error("Invalid LAN peer timing");
+        if(i>=frame.players && frame.loading_events[i]) throw std::runtime_error("Loading event for disconnected LAN player");
+        put(bytes.data()+48+32*kPlayers+8*i,frame.loading_events[i],8);
         put_pad(bytes.data()+16+24*i,frame.pads[i]);
         put(bytes.data()+48+24*kPlayers+8*i,frame.frame_work_ns[i],8);
     }
     return bytes;
 }
 FrameInputs decode_commit(std::span<const uint8_t> bytes) {
-    if(bytes.size()!=48+32*kPlayers || bytes[0]<2 || bytes[0]>kPlayers)
+    if(bytes.size()!=48+40*kPlayers || bytes[0]<2 || bytes[0]>kPlayers)
         throw std::runtime_error("Invalid LAN frame length");
     for(size_t i=1;i<8;++i) if(bytes[i]) throw std::runtime_error("Invalid LAN frame flags");
     FrameInputs frame; frame.players=bytes[0]; frame.state_hash=get(bytes.data()+8,8);
     frame.state=get_state(bytes.data()+16+24*kPlayers);
     for(size_t i=0;i<kPlayers;++i) {
+        frame.loading_events[i]=get(bytes.data()+48+32*kPlayers+8*i,8);
+        if(i>=frame.players && frame.loading_events[i]) throw std::runtime_error("Loading event for disconnected LAN player");
         frame.pads[i]=get_pad(bytes.data()+16+24*i);
         frame.frame_work_ns[i]=get(bytes.data()+48+24*kPlayers+8*i,8);
         if (frame.frame_work_ns[i]>kMaxFrameWorkNs || (i>=frame.players && frame.frame_work_ns[i]))

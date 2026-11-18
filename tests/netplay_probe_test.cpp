@@ -1,9 +1,19 @@
 #include "netplay_probe.h"
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 static void check(bool ok,const char* message){if(!ok){std::fprintf(stderr,"%s\n",message);std::exit(1);}}
 int main(){
     using namespace nx::lan;
+    const float nan=std::numeric_limits<float>::quiet_NaN();
+    const float inf=std::numeric_limits<float>::infinity();
+    check(usable_probe_position(std::array<float,3>{0,0,0}),"finite origin is a usable live observation");
+    check(usable_probe_position(std::array<float,3>{-1e6f,1e6f,2}),"wire-compatible coordinate boundary accepted");
+    check(!usable_probe_position(std::array<float,3>{1,nan,0}) &&
+          !usable_probe_position(std::array<float,3>{1,0,nan}) &&
+          !usable_probe_position(std::array<float,3>{inf,0,0}) &&
+          !usable_probe_position(std::array<float,3>{0,0,1000001}),
+          "every probe coordinate must be finite and inside the wire bounds");
     PlayerState left{42,true,{-2.24873567f,2,0}},right{42,true,{1.50128126f,2,0}};
     PositionProbeGuard probe;
     check(probe.observe(left,right,4) && !probe.ready(),"first unassociated probe sample cannot establish divergence");

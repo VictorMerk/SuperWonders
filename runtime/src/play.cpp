@@ -9,6 +9,7 @@
 // run, so a script is cut into segments by anchors ("@course": the frame the player appears in a course): the frames
 // of a segment count from its anchor, and a segment only starts when its anchor happens.
 #include "play.h"
+#include "netplay_probe.h"
 #include "netplay_game.h"
 #include "resident_scan.h"
 
@@ -521,7 +522,7 @@ void search_thread() {
                     const auto object=a+k*8;
                     found.push_back(object);
                     float p[3];
-                    if (safe_read(object+g_layout.pos,p,sizeof p) && std::isfinite(p[0]) && std::isfinite(p[1]) && (p[0]!=0 || p[1]!=0)) {
+                    if (safe_read(object+g_layout.pos,p,sizeof p) && lan::usable_probe_position(p) && (p[0]!=0 || p[1]!=0)) {
                         pick=object; break;
                     }
                 }
@@ -815,7 +816,7 @@ void frame() {
     if (g_layout.vt && player) {
         uint64_t vt = 0;
         valid = safe_read(player, &vt, 8) && vt == g_layout.vt && safe_read(player + g_layout.pos, pos, sizeof pos) &&
-                std::isfinite(pos[0]);
+                lan::usable_probe_position(pos);
         if (g_layout.vel) safe_read(player + g_layout.vel, vel, sizeof vel);
     }
     g_player_valid = valid;

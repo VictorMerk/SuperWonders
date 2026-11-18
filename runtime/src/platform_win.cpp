@@ -102,7 +102,11 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 void exit_thread() { ExitThread(0); }
 void exit_process(int code) {
     static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
-    if (exiting.test_and_set()) for (;;) Sleep(INFINITE);
+    if (exiting.test_and_set()) {
+        nx::log("shutdown: concurrent exit request on thread %lu; cleanup already owned", GetCurrentThreadId());
+        for (;;) Sleep(INFINITE);
+    }
+    nx::log("shutdown: begin code %d on thread %lu", code, GetCurrentThreadId());
     nx::lan::flush_diagnostics();
     nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
@@ -1369,7 +1373,14 @@ int main() {
         try {
             const auto parent=DWORD(std::stoul(arg.substr(18)));
             if(parent!=GetCurrentProcessId()) if(auto process=OpenProcess(SYNCHRONIZE,FALSE,parent)) {
-                WaitForSingleObject(process,10000);CloseHandle(process);
+                // A large driver cache can take longer than ten seconds to serialize.
+                // Never continue into data/log initialization while that owner is alive.
+                const auto waited=WaitForSingleObject(process,180000);
+                CloseHandle(process);
+                if(waited!=WAIT_OBJECT_0) {
+                    std::fprintf(stderr,"The previous SuperWonders session is still closing; reopen the launcher after it finishes.\n");
+                    return 2;
+                }
             }
         } catch(...) {}
     }

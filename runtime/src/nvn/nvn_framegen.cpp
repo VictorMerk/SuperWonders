@@ -356,6 +356,17 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         log("framegen probe pattern: %s%s",pattern,probe.compare_only ? " (opaque readback only; compare against reference hashes)" : "");
     auto picture = [&](float shift) {
         std::vector<uint8_t> pixels(bytes);
+        // Exact integer horizontal shifts need no interpolation. Keep the QA
+        // generator cheap enough that broad shader comparisons spend their time
+        // on the GPU checks rather than millions of redundant host round calls.
+        if (!diagonal && !hud && !occlusion && shift == std::floor(shift)) {
+            const int dx = int(shift);
+            for (uint32_t y=0;y<height;++y) for (uint32_t x=0;x<width;++x) {
+                const auto c = colour(int(x)-dx,y);
+                std::memcpy(pixels.data()+(size_t(y)*width+x)*4,c.data(),4);
+            }
+            return pixels;
+        }
         const int left = occlusion ? int(width/3)+int(std::lround(shift*2)) : 0;
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
             const float source = float(x)-shift*(fractional ? .84375f : 1.0f);
@@ -414,7 +425,7 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(device,probe.buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(device,&ai,nullptr,&probe.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(device,probe.buffer,probe.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(device,probe.memory,0,output_bytes,0,reinterpret_cast<void**>(&probe.mapped)) != VK_SUCCESS) return false;
@@ -451,7 +462,7 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         if (p_vkCreateBuffer(device,&bi,nullptr,&probe.flow_buffer) != VK_SUCCESS) return false;
         p_vkGetBufferMemoryRequirements(device,probe.flow_buffer,&req);
         ai.allocationSize=req.size;
-        ai.memoryTypeIndex=memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ai.memoryTypeIndex=readback_memory_type(req.memoryTypeBits);
         if (p_vkAllocateMemory(device,&ai,nullptr,&probe.flow_memory) != VK_SUCCESS ||
             p_vkBindBufferMemory(device,probe.flow_buffer,probe.flow_memory,0) != VK_SUCCESS ||
             p_vkMapMemory(device,probe.flow_memory,0,bi.size,0,reinterpret_cast<void**>(&probe.flow_mapped)) != VK_SUCCESS) return false;

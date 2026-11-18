@@ -25,6 +25,7 @@
 #include "present_geometry.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
+#include "nvn_pipeline_async.h"
 #include "nvn_shader_prepare.h"
 #include "platform.h"
 #include "frametrace.h"
@@ -839,6 +840,19 @@ bool framegen_probe() {
 bool overlay_input_probe() {
     if (!present_ui_frame()) return false;  // real ImGui context and Vulkan swapchain
     const auto startup = overlay::current_settings();
+    if (const char* expected = std::getenv("NX_EXPECT_PIPELINE_SKIP")) {
+        // QA fixture only: test the real platform loader, renderer bridge and
+        // platform serializer, rather than just the shared settings parser.
+        const bool want = expected[0] == '1';
+        bool pass = startup.pipeline_skip_draws == want && pipeline_skip_draws() == want;
+        overlay::apply_settings(startup, true);
+        overlay::Settings reloaded;
+        pass = overlay::load_settings(plat::data_root() + "/pc-settings.ini", reloaded) &&
+               reloaded.pipeline_skip_draws == want && pass;
+        log("settings migration probe: expected draw skipping %d, platform %d, renderer %d: %s", int(want),
+            int(startup.pipeline_skip_draws), int(pipeline_skip_draws()), pass ? "PASS" : "FAIL");
+        if (!pass) return false;
+    }
     overlay::mark_game_started();
     bool ok = !overlay::is_open();
     overlay::key_event(27,overlay::KeyEscape,true);

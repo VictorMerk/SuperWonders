@@ -42,3 +42,8 @@ This covers one RX 570, one driver and this route. It does not certify every cou
 First launch may spend several minutes preparing corrected shaders. A development run prepared all 11,304 affected programs with zero failures in 206.3 seconds; subsequent runs reuse the marker and driver cache.
 
 References: [Khronos sampling requirements](https://docs.vulkan.org/spec/latest/chapters/textures.html), [Khronos synchronization](https://docs.vulkan.org/spec/latest/chapters/synchronization.html), and the existing translator correction in `tools/maxwell/spirv_harness/translator/spirv-nan.patch`.
+
+
+## Windows migration follow-up
+
+The subsequent real-session log exposed a Windows-specific omission: the separate Win32 reader/writer bypassed the original shared-parser migration. The upgrade claim above was incomplete for Windows. See [the correction and native platform regression](FPS-SPIKES-2026-11-18.md). The zero-skipped-draw QA routes above used fixtures with skipping already disabled; they did not prove migration from an enabled Windows setting.

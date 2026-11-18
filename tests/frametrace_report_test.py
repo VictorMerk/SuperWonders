@@ -11,6 +11,27 @@ spec.loader.exec_module(report)
 
 
 class PictureCadence(unittest.TestCase):
+    def test_presentation_sleep_survives_original_picture_merge(self):
+        rows = self.rows()
+        rows[5].update(present_pace_requested_ms=2.,present_pace_actual_ms=3.)
+        rows[6].update(present_pace_requested_ms=4.,present_pace_actual_ms=40.)
+        merged = report.picture_rows(rows,'original')[1]
+        self.assertEqual(merged['present_pace_requested_ms'],6.)
+        self.assertEqual(merged['present_pace_actual_ms'],43.)
+
+    def test_only_excess_presentation_sleep_is_a_stall(self):
+        fields = ('frame_ms','acquire_ms','queue_present_ms','replay_ms','fence_ms','present_cpu_ms',
+                  'guest_cpu_ms','guest_replay_wait_ms','guest_gap_ms','minflt','pipeline_ms','astc_ms',
+                  'file_ms','guest_interval','pipelines','skipped','majflt','upload_mb')
+        normal = dict.fromkeys(fields,0.)
+        normal.update(frame_ms=16.,guest_gap_ms=16.,guest_interval=1)
+        hitch = dict(normal,frame_ms=80.,present_pace_requested_ms=5.,present_pace_actual_ms=65.)
+        found,_ = report.classify([dict(normal) for _ in range(20)]+[hitch])
+        self.assertEqual(found[0]['cause'],'present_pace_oversleep')
+        hitch.update(present_pace_requested_ms=65.)
+        found,_ = report.classify([dict(normal) for _ in range(20)]+[hitch])
+        self.assertEqual(found[0]['cause'],'unknown')
+
     def test_call_totals_sum_but_call_maxima_do_not(self):
         rows = self.rows()
         for index,elapsed in ((5,2.),(6,3.)):

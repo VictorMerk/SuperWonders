@@ -52,7 +52,7 @@ def picture_rows(rows, pictures):
     additive = ("acquire_ms", "queue_present_ms", "replay_ms", "encode_ms", "fence_ms", "upload_mb",
                 "present_cpu_ms", "guest_presents", "guest_cpu_ms", "guest_replay_wait_ms", "guest_pace_ms",
                 "pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads", "file_mb", "file_ms",
-                "minflt", "majflt", "log_ms", "input_poll_ms")
+                "minflt", "majflt", "log_ms", "input_poll_ms", "present_pace_requested_ms", "present_pace_actual_ms")
     available = set().union(*(r.keys() for r in rows))
     additive = tuple(k for k in additive if k in available)
     out, pending, previous = [], [], None
@@ -137,7 +137,8 @@ def classify(rows):
         # Presenting side: stalls timed in this frame.
         stalls = [("swapchain_acquire", x("acquire_ms")), ("queue_present", x("queue_present_ms")),
                   ("gpu_wait", x("fence_ms")), ("pipeline_build", r["pipeline_ms"]), ("astc_decode", r["astc_ms"]),
-                  ("replay_cpu", x("replay_ms"))]
+                  ("replay_cpu", x("replay_ms")),
+                  ("present_pace_oversleep", max(0., r.get("present_pace_actual_ms",0.) - r.get("present_pace_requested_ms",0.)))]
         name, ms = max(stalls, key=lambda t: t[1])
         # Game side: the game's own frame came late (its gap over the median), split into what it did.
         guest_late = x("guest_gap_ms")
@@ -288,6 +289,9 @@ def main():
             if "log_ms" in h:
                 print("    completed calls, total / longest: logging %.3f / %.3f ms; input poll %.3f / %.3f ms (totals may overlap across threads)" %
                       (h.get("log_ms",0),h.get("log_max_ms",0),h.get("input_poll_ms",0),h.get("input_poll_max_ms",0)))
+            if "present_pace_actual_ms" in h:
+                print("    presentation sleep: requested %.3f ms, actual %.3f ms (includes wake scheduling)" %
+                      (h.get("present_pace_requested_ms",0),h["present_pace_actual_ms"]))
             if lines:
                 hi = int(h["log_line"])
                 lo = int(h.get("previous_log_line", prev_line.get(int(h["frame"]) - 1, hi)))

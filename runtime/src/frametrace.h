@@ -61,7 +61,8 @@ void guest_present(uint64_t replay_wait_ns, uint64_t pace_ns, int interval);
 // vkQueueSubmit and fence-wait totals (frame_times()), differenced here.
 // Returns the row's frame number (UINT64_MAX without a trace), for displayed().
 uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t encode_total_ns, uint64_t fence_total_ns,
-                      uint64_t input_sample_ns = 0, bool original_picture = true);
+                      uint64_t input_sample_ns = 0, bool original_picture = true,
+                      uint64_t pace_requested_ns = 0, uint64_t pace_actual_ns = 0);
 // When frame `frame` reached the display (vkWaitForPresentKHR returned): <NX_FRAMETRACE>.display.csv, the same
 // clock as the trace's t_ms. Where the GPU and surface support it; the report then reports what was on screen.
 void displayed(uint64_t frame, uint64_t t_ns);

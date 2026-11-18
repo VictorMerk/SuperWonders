@@ -1,0 +1,155 @@
+{
+  "hardware": [
+    "RX 570 guest",
+    "RTX 3050 host"
+  ],
+  "test": "Three automated course routes across two physical PCs on one home LAN",
+  "profile": "720p, compressed textures, frame generation off, draw skipping off",
+  "course_window": "relative course frames 200 through 900; 701 samples per side",
+  "scope_limit": "Matching inputs and one detected player position; not every actor, character choice, RNG source or rendering path",
+  "modes": {
+    "60serial": {
+      "committed_pairs": 4095,
+      "valid_position_pairs": 1076,
+      "first_difference": null,
+      "host_exit": 0,
+      "guest_exit": 2,
+      "guest_exit_reason": "Expected peer disconnect after intentional host quit",
+      "pcs": {
+        "host": {
+          "base_fps": 40.141092791719096,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 24.912126961483594,
+            "median": 22.932,
+            "p95": 33.163,
+            "peak": 180.03
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 23.934332382310984,
+            "median": 22.763,
+            "p95": 32.533,
+            "peak": 179.878
+          },
+          "max_probe_examined_mib": 32.0
+        },
+        "client": {
+          "base_fps": 40.14140999880721,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 24.911930099857347,
+            "median": 23.253,
+            "p95": 33.309,
+            "peak": 194.956
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 24.084111269614837,
+            "median": 22.921,
+            "p95": 32.177,
+            "peak": 194.665
+          },
+          "max_probe_examined_mib": 32.0
+        }
+      }
+    },
+    "60buffer": {
+      "committed_pairs": 4094,
+      "valid_position_pairs": 1164,
+      "first_difference": null,
+      "host_exit": 0,
+      "guest_exit": 2,
+      "guest_exit_reason": "Expected peer disconnect after intentional host quit",
+      "pcs": {
+        "host": {
+          "base_fps": 50.433385375886644,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 19.828135520684736,
+            "median": 17.061,
+            "p95": 29.991,
+            "peak": 66.12
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 36.15985877318117,
+            "median": 34.513,
+            "p95": 54.272,
+            "peak": 93.309
+          },
+          "max_probe_examined_mib": 32.0
+        },
+        "client": {
+          "base_fps": 50.501179177319216,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 19.801517831669045,
+            "median": 17.125,
+            "p95": 29.097,
+            "peak": 53.444
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 36.88498573466477,
+            "median": 35.595,
+            "p95": 53.544,
+            "peak": 85.294
+          },
+          "max_probe_examined_mib": 32.0
+        }
+      }
+    },
+    "30buffer": {
+      "committed_pairs": 3652,
+      "valid_position_pairs": 1008,
+      "first_difference": null,
+      "host_exit": 0,
+      "guest_exit": 2,
+      "guest_exit_reason": "Expected peer disconnect after intentional host quit",
+      "pcs": {
+        "host": {
+          "base_fps": 29.708417602538326,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 33.660493580599145,
+            "median": 33.331,
+            "p95": 33.741,
+            "peak": 141.687
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 50.617820256776035,
+            "median": 47.526,
+            "p95": 62.346,
+            "peak": 176.578
+          },
+          "max_probe_examined_mib": 32.0
+        },
+        "client": {
+          "base_fps": 29.614950302860393,
+          "frame_gap_ms": {
+            "samples": 701,
+            "mean": 33.76672895863053,
+            "median": 33.338,
+            "p95": 33.771,
+            "peak": 153.261
+          },
+          "sample_to_present_proxy_ms": {
+            "samples": 701,
+            "mean": 50.4647517831669,
+            "median": 53.193,
+            "p95": 56.224,
+            "peak": 186.46
+          },
+          "max_probe_examined_mib": 32.0
+        }
+      }
+    }
+  },
+  "verification": {
+    "cpu": "36/36 passed",
+    "additional_fresh_rooms": "5/5 passed, two instances on second PC",
+    "captured_seed": "Failed before allocation-entropy fix; both local startup peers and physical course passed after fix"
+  }
+}

@@ -642,7 +642,9 @@ void video(MenuContext& c, const Labels& l) {
     int cap = 1;
     for (int i = 0; i < 5; ++i)
         if (cap_values[i] == s.frame_cap) cap = i;
-    if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1, translated_desc(desc::frame_cap, lang)))
+    if (lan::active()) rows::disable_next();
+    if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1,
+        lan::active()?"The LAN host sets the shared simulation target. Change it when creating the next room.":translated_desc(desc::frame_cap, lang)))
         s.frame_cap = cap_values[cap], settings_changed(true);
     const char* latency_modes[] = {lang == 2 ? "Niedrig (1 Bild voraus)" : "Low (1 frame ahead)",
                                   lang == 2 ? "Ausgewogen (2 Bilder voraus)" : "Balanced (2 frames ahead)"};

@@ -128,7 +128,7 @@ The matching r8 runtime completed a 30 Hz buffered 1,200-frame startup/shutdown 
 
 The earlier second-PC 30 Hz run remains recorded as failed: its harness started short exit waits while frames before the scripted quit were still pending, so it does not establish a runtime deadlock. The new tests observe the complete scripted route within an overall deadline. The captured intro and renewed physical test remain pending. Shader preparation for the renderer changes took several minutes on the first cold local run. Deployment can use the installer's verified same-game QA cache source to retain the now-warm pack, journal, driver cache and preparation markers without altering the original installation.
 
-The r8-compatible build also carries main's extended Windows resource-path fix without adopting its new game-library ABI. Its CPU suite passes 47 checks; main passes 52 after the additional edition checks. The retained startup, handoff and first course results identify their pre-path-fix runtime hash explicitly; the captured-intro follow-up targets the final runtime.
+The r8-compatible build also carries main's extended Windows resource-path fix without adopting its new game-library ABI. Its CPU suite passes 47 checks; main passes 53 after the additional edition checks. The retained startup, handoff and first course results identify their pre-path-fix runtime hash explicitly; the captured-intro follow-up targets the final runtime.
 
 
 ### Captured intro and cold-loading follow-up

@@ -5,7 +5,7 @@
   "scope": "Two instances on one RX570; physical follow-up pending",
   "cpu_checks": {
     "r8_non_gpu": 47,
-    "main_non_gpu": 52
+    "main_non_gpu": 53
   },
   "startup_shutdown": {
     "target_frames": 1200,

@@ -21,6 +21,9 @@ static void verify(const nx::lan::FrameInputs& frame,uint8_t count,uint64_t tick
         const auto expected=pad(role,tick); const auto& actual=frame.pads[role];
         check(actual.buttons==expected.buttons&&actual.lx==expected.lx&&actual.ly==expected.ly&&actual.rx==expected.rx&&actual.ry==expected.ry,
             "every peer receives the same independent player inputs");
+        // Nonzero timings are used by the transport routes; save-transfer and
+        // divergence fixtures retain the explicit unknown (zero) default.
+        if(frame.frame_work_ns[role]) check(frame.frame_work_ns[role]==uint64_t(role+1)*1'000'000+tick,"per-PC diagnostics survive the authenticated transport");
     }
 }
 static nx::lan::SessionOptions options(uint8_t count) {
@@ -32,26 +35,36 @@ static nx::lan::SessionOptions options(uint8_t count) {
 static void exchange_route(nx::lan::Session& session,uint8_t count,uint8_t role,bool overlap) {
     using namespace nx::lan;
     if (!overlap) {
-        for(uint64_t tick=0;tick<64;++tick) verify(session.exchange(pad(role,tick),tick+1),count,tick);
+        for(uint64_t tick=0;tick<64;++tick) {
+            const auto frame=session.exchange(pad(role,tick),tick+1,{},uint64_t(role+1)*1'000'000+tick);
+            verify(frame,count,tick);
+            for(uint8_t player=0;player<count;++player) check(frame.frame_work_ns[player]!=0,"every peer contributes timing evidence");
+        }
         return;
     }
-    OneAhead<uint64_t,FrameInputs> pipeline([&](uint64_t tick) { return session.exchange(pad(role,tick),tick+1); },[&] { session.stop(); });
+    OneAhead<uint64_t,FrameInputs> pipeline([&](uint64_t tick) { return session.exchange(pad(role,tick),tick+1,{},uint64_t(role+1)*1'000'000+tick); },[&] { session.stop(); });
     for(uint64_t tick=0;tick<64;++tick) {
         const auto previous=pipeline.submit(tick);
         if (tick==0) check(!previous,"pipelined session has an explicit neutral lead-in");
-        else { check(previous.has_value(),"pipelined input is available in exact order"); verify(*previous,count,tick-1); }
+        else {
+            check(previous.has_value(),"pipelined input is available in exact order"); verify(*previous,count,tick-1);
+            for(uint8_t player=0;player<count;++player)
+                check(previous->frame_work_ns[player]==uint64_t(player+1)*1'000'000+tick-1,"buffered peer timing is not lost or shifted to another tick");
+        }
     }
     verify(*pipeline.receive(),count,63);
 }
-static void roundtrip(uint8_t count,bool overlap=false) {
+static void roundtrip(uint8_t count,bool overlap=false,uint8_t rate=60) {
     using namespace nx::lan;
     Session host; auto config=options(count);
+    config.frame_rate=rate; config.input_lead=overlap?1:0;
     std::promise<uint16_t> listening; auto port=listening.get_future();
     std::mutex lock; std::vector<std::string> errors;
     auto error=[&](const std::exception& e) { std::lock_guard guard(lock); errors.emplace_back(e.what()); };
     std::thread server([&] {
         try {
             host.host(config,[&](uint16_t number) { listening.set_value(number); });
+            check(host.frame_rate()==rate && host.input_lead()==unsigned(overlap),"host timing choices retained");
             exchange_route(host,count,0,overlap);
         } catch(const std::exception& e) { error(e); }
     });
@@ -67,7 +80,10 @@ static void roundtrip(uint8_t count,bool overlap=false) {
     std::vector<std::thread> clients;
     for(uint8_t i=1;i<count;++i) clients.emplace_back([&] {
         try {
-            Session client; client.join(config);
+            auto guest_config=config;
+            guest_config.frame_rate=rate==60?30:60; guest_config.input_lead=overlap?0:1;
+            Session client; client.join(guest_config);
+            check(client.frame_rate()==rate && client.input_lead()==unsigned(overlap),"joining peers adopt the authenticated host target/buffer despite different local preferences");
             check(client.players()==count&&client.role()>0&&client.role()<count,"client assigned an independent slot");
             check(client.epoch()==config.epoch&&client.seed()==config.seed,"all peers share the session clock origin and seed");
             exchange_route(client,count,client.role(),overlap);
@@ -115,6 +131,43 @@ static void cancellation() {
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"cancellation host starts");
     host.stop(); server.join(); check(cancelled,"stopping a room interrupts its accept wait");
 }
+static void invalid_timing() {
+    using namespace nx::lan;
+    for(int which=0;which<4;++which) {
+        Session host; auto config=options(2);
+        if(which==0) config.frame_rate=0;
+        else if(which==1) config.input_lead=2;
+        else config.frame_timeout=std::chrono::milliseconds(which==2?99:30001);
+        bool failed=false,listened=false;
+        try { host.host(config,[&](uint16_t) { listened=true; }); } catch (...) { failed=true; }
+        check(failed && !listened,"unsupported simulation/buffer settings fail before opening a room");
+    }
+}
+static void stalled_peer(bool host_waits) {
+    using namespace nx::lan;
+    Session host,client;
+    auto config=options(2);
+    config.timeout=std::chrono::minutes(3);
+    config.frame_timeout=std::chrono::milliseconds(150);
+    std::promise<uint16_t> listening;
+    auto port=listening.get_future();
+    std::thread server([&] { host.host(config,[&](uint16_t p) { listening.set_value(p); }); });
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"stall-test room starts");
+    auto guest=config; guest.port=port.get(); client.join(guest); server.join();
+    std::thread warmup([&] {
+        host.exchange({});
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        host.exchange({});
+    });
+    client.exchange({}); client.exchange({}); warmup.join();
+    const auto start=std::chrono::steady_clock::now();
+    bool timed_out=false;
+    try { (host_waits?host:client).exchange({}); }
+    catch(const std::runtime_error& e) { timed_out=std::string(e.what())=="LAN peer timed out"; }
+    const auto elapsed=std::chrono::steady_clock::now()-start;
+    check(timed_out && elapsed>=config.frame_timeout && elapsed<std::chrono::seconds(2),
+          "silent connected peer uses the frame deadline, not the three-minute lobby deadline");
+}
 static void save_transfer() {
     using namespace nx::lan;
     Session host; auto config=options(2);
@@ -144,7 +197,53 @@ static void save_transfer() {
     } catch(const std::exception& e) { std::fprintf(stderr,"save client: %s\n",e.what()); host.stop(); }
     server.join(); check(host_ok&&client_ok&&installed,"host-save transfer starts a session with matching state");
 }
+static void refused_connection() {
+    using namespace nx::lan;
+    auto config=options(2);
+    uint16_t closed_port=0;
+    // Destroy a real bound listener, leaving a known unused loopback port.
+    {
+        Session host;
+        try { host.host(config,[&](uint16_t port) { closed_port=port; throw std::runtime_error("close test listener"); }); }
+        catch(const std::runtime_error&) {}
+    }
+    check(closed_port!=0,"refusal fixture bound a port");
+    config.port=closed_port; config.timeout=std::chrono::seconds(10);
+    const auto start=std::chrono::steady_clock::now();
+    bool refused=false;
+    try { Session guest; guest.join(config); }
+    catch(const std::runtime_error& error) { refused=std::string(error.what()).find("connect")!=std::string::npos; }
+    // Windows may retry the SYN for roughly two seconds before reporting refusal.
+    check(refused && std::chrono::steady_clock::now()-start<std::chrono::seconds(5),
+          "refused Windows connection fails promptly instead of waiting for the lobby deadline");
+}
+static void unassociated_probe() {
+    using namespace nx::lan;
+    Session host,client;auto config=options(2);config.probe_warmup=4;
+    std::promise<uint16_t> listening;auto port=listening.get_future();
+    std::atomic<bool> host_rejected{false},client_rejected{false};
+    auto route=[&](Session& session,unsigned role,std::atomic<bool>& rejected){
+        for(unsigned tick=0;tick<20;++tick){
+            PlayerState state{42,true,{float(tick),2,0}};
+            if(tick<8 || tick>=16)state.position[0]+=float(role)*3.75f;
+            try {
+                const auto frame=session.exchange(pad(uint8_t(role),tick),0,state);
+                check(tick<18 && frame.tick==tick && frame.pads[0].buttons==pad(0,tick).buttons && frame.pads[1].buttons==pad(1,tick).buttons,"unassociated probe does not break authenticated shared input");
+                check(session.position_probe_ready()==(tick>=11),"both roles establish the same probe baseline");
+            }catch(const std::runtime_error& error){
+                rejected=tick==18 && std::string(error.what()).find("simulation")!=std::string::npos;return;
+            }
+        }
+    };
+    std::thread server([&]{host.host(config,[&](uint16_t p){listening.set_value(p);});route(host,0,host_rejected);});
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"probe room starts");
+    config.port=port.get();client.join(config);route(client,1,client_rejected);server.join();
+    check(host_rejected && client_rejected,"both peers stop persistent divergence after probe agreement");
+}
 int main() {
-    roundtrip(2); roundtrip(4); roundtrip(2,true); roundtrip(4,true); divergence(); divergence(true); cancellation(); save_transfer();
+    for(uint8_t rate:{30,60}) for(uint8_t count:{2,4}) for(bool overlap:{false,true}) roundtrip(count,overlap,rate);
+    divergence(); divergence(true); cancellation(); invalid_timing(); save_transfer();
+    stalled_peer(true); stalled_peer(false);
+    refused_connection(); unassociated_probe();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

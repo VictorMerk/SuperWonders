@@ -12,12 +12,19 @@ int main() {
     const auto key=pairing_key("unit-test-pairing-code");
     FrameInputs input; input.players=4; input.tick=123; input.state_hash=0x123456789abcdef;
     input.state={42,true,{19.5f,91.0f,0.0f}};
+    input.frame_work_ns={16'000'000,33'000'000,9'000'000,0};
     for(size_t i=0;i<4;++i) { input.pads[i].buttons=1ull<<i; input.pads[i].lx=int(i)*100; input.pads[i].ly=-int(i)*200; }
     Packet packet; packet.type=Message::Commit; packet.tick=input.tick; packet.session[0]=42; packet.payload=encode_commit(input);
     const auto encoded=encode_packet(packet,key); const auto decoded=decode_packet(encoded,key);
+    auto legacy=encoded; legacy[4]=3;
+    check(rejects([&] { packet_payload_size(std::span(legacy).first(kHeaderBytes)); }),"protocol 3 cannot silently ignore negotiated timing");
     const auto frame=decode_commit(decoded.payload);
     check(decoded.tick==123 && decoded.session==packet.session && frame.players==4 && frame.state_hash==input.state_hash,"authenticated frame roundtrip");
     check(frame.state.scene==42 && frame.state.valid && frame.state.position==input.state.position,"player-state bits survive authenticated encoding");
+    check(frame.frame_work_ns==input.frame_work_ns,"per-PC frame work is retained without guessing from local waits");
+    check(rejects([&]{encode_input({},0,{},kMaxFrameWorkNs+1);}),"out-of-range peer telemetry is rejected");
+    auto absent=input; absent.players=2;
+    check(rejects([&]{encode_commit(absent);}),"timing for a disconnected player is rejected");
     auto small=frame.state; small.position[0]+=0.0001f;
     check(compatible_state(frame.state,small),"subpixel float variation is bounded explicitly");
     small.position[0]+=0.01f;

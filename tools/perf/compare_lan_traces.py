@@ -42,6 +42,8 @@ def compare(left, right):
         differences = {key: [a[key], b[key]] for key in fields if a[key] != b[key]}
         if a.get("input_lead", "0") != b.get("input_lead", "0"):
             differences["input_lead"] = [a.get("input_lead", "0"), b.get("input_lead", "0")]
+        if a.get("simulation_rate", "60") != b.get("simulation_rate", "60"):
+            differences["simulation_rate"] = [a.get("simulation_rate", "60"), b.get("simulation_rate", "60")]
         if a["state_valid"] == b["state_valid"] == "1":
             report["valid_position_pairs"] += 1
             if a["scene"] != b["scene"]:
@@ -53,11 +55,21 @@ def compare(left, right):
         if differences and report["first_difference"] is None:
             report["first_difference"] = {"tick": tick, "fields": differences}
     report["exchange_wait_ms"] = []
+    report["local_frame_work_ms"] = []
     for rows in (left, right):
         waits = sorted(int(row["wait_ns"]) / 1e6 for row in rows.values())
         report["exchange_wait_ms"].append({"mean": sum(waits) / len(waits),
                                   "p95": waits[min(len(waits) - 1, int(len(waits) * .95))],
                                   "peak": waits[-1]})
+        # Zero denotes an unknown first sample. This includes local pacing and
+        # render/scheduling time, and excludes foreground LAN wait; it is not
+        # CPU execution time or network RTT.
+        work = sorted(int(row.get("local_work_ns", "0")) / 1e6 for row in rows.values()
+                      if int(row.get("local_work_ns", "0")) > 0)
+        report["local_frame_work_ms"].append({"samples": len(work),
+            "mean": sum(work) / len(work) if work else None,
+            "p95": work[min(len(work)-1, int(len(work)*.95))] if work else None,
+            "peak": work[-1] if work else None})
     return report
 
 
@@ -65,9 +77,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host")
     parser.add_argument("client")
+    parser.add_argument("--from-tick", type=int, default=0, help="Exclude loading/startup ticks when comparing steady gameplay")
+    parser.add_argument("--to-tick", type=int, help="Last included simulation tick")
     args = parser.parse_args()
     try:
-        report = compare(load(args.host), load(args.client))
+        def window(path):
+            return {tick: row for tick, row in load(path).items()
+                    if tick >= args.from_tick and (args.to_tick is None or tick <= args.to_tick)}
+        report = compare(window(args.host), window(args.client))
     except (OSError, ValueError, KeyError) as error:
         parser.exit(2, f"Cannot compare LAN traces: {error}\n")
     print(json.dumps(report, indent=2))

@@ -60,7 +60,12 @@ Pool& pool() {
 uint64_t g_pipelines_skipped = 0;
 
 static std::atomic<bool> g_skip_draws{false};
-void set_pipeline_skip_draws(bool on) { g_skip_draws.store(on, std::memory_order_relaxed); }
+void set_pipeline_skip_draws(bool on) {
+    const bool previous = g_skip_draws.exchange(on, std::memory_order_relaxed);
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true, std::memory_order_relaxed) || previous != on)
+        log("nvn/vk: draw skipping while compiling: %s", on ? "enabled" : "disabled");
+}
 bool pipeline_skip_draws() { return g_skip_draws.load(std::memory_order_relaxed); }
 
 bool async_pipelines() {

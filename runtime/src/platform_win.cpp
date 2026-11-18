@@ -390,6 +390,7 @@ static void save_pc_settings() {
          << "\nalways_on_top=" << g_pc_settings.always_on_top << "\nlanguage=" << g_pc_settings.language
          << "\ngame_language=" << g_pc_settings.game_language
          << "\ngame_language_version=2"
+         << "\npipeline_skip_draws_version=1"
          << "\nmemory_limit_gb=" << g_pc_settings.memory_limit_gb
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
          << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
@@ -422,6 +423,7 @@ static void load_pc_settings() {
     std::ifstream file(data_root() + "/pc-settings.ini");
     std::string line;
     int game_language_version = 0;
+    int pipeline_skip_draws_version = 0;
     while (std::getline(file, line)) {
         int value = 0;
         if (std::sscanf(line.c_str(), "width=%d", &value) == 1 && value >= 640 && value <= 7680) g_pc_settings.width = value;
@@ -481,6 +483,8 @@ static void load_pc_settings() {
             g_pc_settings.framegen_multiplier = std::clamp(value, 2, 8);
         else if (std::sscanf(line.c_str(), "pipeline_skip_draws=%d", &value) == 1)
             g_pc_settings.pipeline_skip_draws = value != 0;
+        else if (std::sscanf(line.c_str(), "pipeline_skip_draws_version=%d", &value) == 1)
+            pipeline_skip_draws_version = value;
         else if (std::sscanf(line.c_str(), "frame_cap=%d", &value) == 1)
             g_pc_settings.frame_cap = value == 30 || value == 60 || value == 90 || value == 120 || value == 144
                                           ? value
@@ -497,6 +501,9 @@ static void load_pc_settings() {
     }
     if (game_language_version < 2 && (g_pc_settings.game_language == 8 || g_pc_settings.game_language == 10))
         g_pc_settings.game_language = 0;
+    // Win32 keeps its own settings reader; apply the same legacy draw-skip
+    // migration as overlay::load_settings before bridging into the renderer.
+    if (pipeline_skip_draws_version < 1) g_pc_settings.pipeline_skip_draws = false;
     if (g_pc_settings.aspect_ratio >= 0) {
         const char* profile = std::getenv("NX_ASPECT_PROFILE");
         const int ratio = profile && std::strcmp(profile, "21:9") == 0 ? 1 :

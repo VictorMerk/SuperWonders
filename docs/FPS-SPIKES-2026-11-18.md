@@ -15,7 +15,7 @@ Native validation covers legacy enabled settings (expected off), an explicit ver
 - A slow reporting window logged 29.5 base FPS, zero pipelines compiled, replay 8.32 ms, fence wait 5.27 ms and presentation 18.76 ms. The diagnostic timing fields are not a complete non-overlapping wall-time breakdown. Compilation cannot explain every slow window.
 - The session started with 4x optical-flow presentation and later logged 2x. Its saved final settings used native internal resolution, a 1920x1080 output, uncompressed textures and 2x presentation. These are workload observations, not a controlled comparison of settings.
 
-Completing draws preserves geometry and can expose first-use pipeline stalls that draw skipping previously hid. The next performance checks should compare a repeated, warmed route at a lower internal resolution and with compressed textures, then measure frame generation separately at the same route/settings. Do not infer an FPS improvement from this settings-correctness repair alone.
+Completing draws preserves geometry and can expose first-use pipeline stalls that draw skipping previously hid. The subsequent performance work keeps resolution, texture quality and frame-generation settings fixed and optimizes the synthesis code itself; see [the measured code optimization](FRAMEGEN-CODE-PERFORMANCE-2026-11-18.md). Do not infer an FPS improvement from this settings-correctness repair alone.
 
 Raw user logs and machine-specific paths remain private.
 

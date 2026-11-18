@@ -63,3 +63,7 @@ Twenty title/map/course captures were inspected. No black blocks or missing geom
 The optimized B2 run still contained 143.25 ms maximum original-picture intervals, with replay/compilation activity. This change reduces interpolation GPU work; it does not repair first-use pipeline compilation or every CPU/load hitch. Raw logs, traces and machine-specific installation details remain private.
 
 [Sanitized course measurements](FRAMEGEN-COURSE-PERFORMANCE-2026-11-18.csv).
+
+## Integration base refresh
+
+The integration branch merges PC-QoL base `343e0f6`. Settings conflicts retain both the new keyboard/profile work and the draw-skipping migration/version keys. The merged Windows platform translation unit compiled successfully and the settings CTest passed. Full native/GPU performance measurements above use the isolated r8-compatible source, not this refreshed integration build. The r8 package does not include these launcher/profile changes.

@@ -1,3 +1,4 @@
+#include "keyboard_actions.h"
 // Original vector icons built from bundled OFL Nunito. No Nintendo font/atlas is included.
 #include "button_font.h"
 #include <algorithm>
@@ -98,7 +99,9 @@ std::vector<uint8_t> pc_button_font(const overlay::Settings& s, plat::Controller
     const uint32_t actions[] = {0xE0E0,0xE0E1,0xE0E2,0xE0E3,0xE0E4,0xE0E5,0xE0E6,0xE0E7,
         0xE0EF,0xE0F0,0,0,0xE0AE,0xE0AD,0xE0AB,0xE0AC};
     for (size_t a = 0; a < 16; ++a) {
-        const uint32_t target = kind == plat::ControllerKind::Keyboard ? binding_key_code(s, a, keys[a])
+        const size_t key_slot=s.keyboard_actions?input::canonical_keyboard_slot(a,s.keyboard_game_layout):a;
+        const size_t prompt_slot=s.keyboard_actions && key_slot==7?5:key_slot; // R/ZR are the same spin action
+        const uint32_t target = kind == plat::ControllerKind::Keyboard ? binding_key_code(s, prompt_slot, keys[prompt_slot])
             : 0xE200 + uint32_t(overlay::controller_binding(s, a));
         if (actions[a]) replace(actions[a], target);
         if (a < 8) replace(0xE0A0+uint32_t(a), target);

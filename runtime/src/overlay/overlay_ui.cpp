@@ -2,6 +2,7 @@
 // the colours are SuperWonders' own and the font is Nunito (SIL OFL 1.1, third_party/fonts/Nunito).
 #include "overlay/overlay_ui.h"
 #include "overlay/overlay.h"
+#include "overlay/usability.h"
 #include "button_font.h"
 #include <cstring>
 #include <vector>
@@ -316,6 +317,7 @@ ImFont* title() { return g_title; }
 float font_scale(float height) { return kBody1080 * std::clamp(height / 1080.0f, 0.5f, 3.0f) / kBodyBake; }
 
 float approach(float current, float target, float rate) {
+    if(usability_preferences().reduced_motion) return target;
     const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const float t = 1.0f - std::exp(-rate * dt);
     const float next = current + (target - current) * t;
@@ -404,6 +406,7 @@ void progress_bar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, float alpha) {
     const float lo = a.x + r * 0.5f, hi = fx - r * 0.5f;
     if (hi - lo < 4) return;
     const float w = std::max(4 * h, (fx - a.x) * 0.25f);
+    if(usability_preferences().reduced_motion)return;
     const float t = float(ImGui::GetTime());
     const float centre = lo - w * 0.5f + std::fmod(t / 1.6f, 1.0f) * (hi - lo + w);
     auto light = [&](float x) {

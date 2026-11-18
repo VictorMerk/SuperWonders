@@ -1,4 +1,5 @@
 #pragma once
+#include "profiles.h"
 #include "platform.h"
 #include "netplay_timing.h"
 #include <filesystem>
@@ -48,7 +49,7 @@ inline TimingSnapshot timing() { return {}; }
 inline void flush_diagnostics() noexcept {}
 inline void set_tick_seed_filter(TickSeedFilter) {}
 inline uint64_t guest_tick(uint64_t,uint64_t real_tick) { return real_tick; }
-inline std::filesystem::path user_root(const std::filesystem::path& data) { return data/"user"; }
+inline std::filesystem::path user_root(const std::filesystem::path& data) { return profiles::user_root(data); }
 inline bool start_lobby(LobbyRequest) { return false; }
 inline void cancel_lobby() {}
 inline LobbyStatus lobby_status() { return {LobbyPhase::Failed,"Native LAN is available on Windows and Linux desktop builds."}; }

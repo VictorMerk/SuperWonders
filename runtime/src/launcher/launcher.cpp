@@ -1,6 +1,9 @@
 // SuperWonders Launcher (launcher.h): state, the setup job, and the screen.
 #include "launcher/launcher.h"
 #include "launcher/save_backup.h"
+#include "launcher/profile_ui.h"
+#include "profiles.h"
+#include "overlay/usability.h"
 #include "launcher/mod_catalog.h"
 #include "launcher/game_source.h"
 
@@ -38,6 +41,7 @@
 #include "overlay/overlay.h"
 #include "overlay/overlay_ui.h"
 #include "platform.h"
+#include "controllers.h"
 #include "netplay_game.h"
 
 namespace fs = std::filesystem;
@@ -563,7 +567,7 @@ void backdrop(ImDrawList* dl, ImVec2 ds) {
     dl->AddRectFilledMultiColor({0, 0}, {ds.x, ds.y * 0.5f}, th.back_top, th.back_top, th.back_mid, th.back_mid);
     dl->AddRectFilledMultiColor({0, ds.y * 0.5f}, ds, th.back_mid, th.back_mid, th.back_top, th.back_top);
     // a slow glow drifting behind the pages (the compile screen's, overlay_progress.cpp)
-    const float t = float(ImGui::GetTime());
+    const float t = overlay::usability_preferences().reduced_motion?0.f:float(ImGui::GetTime());
     const float gx = ds.x * (0.62f + 0.18f * std::sin(t * 0.3f)), gy = ds.y * 0.42f, r = ds.y * 0.6f;
     const ImU32 in = (th.accent2 & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 30), out = in & ~IM_COL32_A_MASK;
     constexpr int kSeg = 64;
@@ -632,13 +636,16 @@ void open_lan() {
 
 void draw_lan(float w,float h,float k) {
     if(g->lan_request_open) { ImGui::OpenPopup("LAN co-op"); g->lan_request_open=false; }
-    ImGui::SetNextWindowSize({800*k,0},ImGuiCond_Appearing);
+    const float panel_w=std::min(900*k,w-32*k);
+    ImGui::SetNextWindowSize({panel_w,std::min(920*k,h-32*k)},ImGuiCond_Appearing);
     ImGui::SetNextWindowPos({w*0.5f,h*0.5f},ImGuiCond_Appearing,{0.5f,0.5f});
-    ImGui::SetNextWindowSizeConstraints({800*k,0},{800*k,h-64*k});
-    if(!ImGui::BeginPopupModal("LAN co-op",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::SetNextWindowSizeConstraints({std::min(650*k,panel_w),std::min(400*k,h-32*k)},{panel_w,h-32*k});
+    if(!ImGui::BeginPopupModal("LAN co-op",nullptr,ImGuiWindowFlags_NoSavedSettings)) return;
     const auto state=lan::lobby_status();
     const bool waiting=state.phase==lan::LobbyPhase::Preparing || state.phase==lan::LobbyPhase::Waiting;
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"Native co-op  |  Experimental");
+    ImGui::TextWrapped("Profile: %s",profiles::active(u8(plat::data_root())).name.c_str());
+    ImGui::TextWrapped("1. Choose Host or Join.  2. Enter the shared room details.  3. Choose the same player count in Wonder.");
     ImGui::TextWrapped("Each PC runs Wonder and controls its own co-op character. Use the same game build and mods on every PC.");
     ImGui::TextWrapped("Synchronization is still being tested. A detected position mismatch stops the session.");
     ImGui::Separator();
@@ -652,11 +659,11 @@ void draw_lan(float w,float h,float k) {
         ImGui::SetNextItemWidth(180*k); ImGui::InputInt("Players",&g->lan_players);
         g->lan_players=std::clamp(g->lan_players,2,4);
     } else {
-        ImGui::SetNextItemWidth(420*k); ImGui::InputText("Host address",g->lan_address,sizeof g->lan_address);
+        ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Host address",g->lan_address,sizeof g->lan_address);
     }
     ImGui::SetNextItemWidth(270*k); ImGui::InputInt("Port",&g->lan_port);
     g->lan_port=std::clamp(g->lan_port,1,65535);
-    ImGui::SetNextItemWidth(420*k); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
+    ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
     if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
     ImGui::TextWrapped("Share the address, port and exact pairing code with the other players privately.");
     ImGui::Checkbox("Overlap LAN networking (experimental)",&g->lan_pipeline);
@@ -668,7 +675,8 @@ void draw_lan(float w,float h,float k) {
     if(!valid) ImGui::BeginDisabled();
     if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
         g->lan_error.clear();
-        lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
+        if(g->lan_mode==0 && !backup_before_play())g->lan_error="Could not back up this profile. Open Profiles & saves to check the save folder before hosting.";
+        else lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
             uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
     }
     if(!valid) ImGui::EndDisabled();
@@ -697,6 +705,9 @@ void page_play() {
         g->play = true;
     if (!ready && rows::action(lt(LtSetUpGameFiles), "", "Pick your ExeFS and RomFS folders and set the game up."))
         g->page = PageFiles, rows::focus_first();
+    rows::section("Your adventure");
+    const auto profile = profiles::active(u8(plat::data_root()));
+    if (rows::action("Profiles & saves", profile.name.c_str(), "Choose a nickname and save profile, start a fresh adventure, back up progress or restore an earlier backup.")) open_profiles();
     rows::section("Before you play");
     if (rows::action("Graphics & performance", "Resolution & scaling", "Choose a graphics preset, resolution, scaling and frame pacing."))
         overlay::open_settings(0);
@@ -705,6 +716,9 @@ void page_play() {
     if (rows::action("Performance overlay", "FPS & frame times", "Show FPS, 1% lows, game speed and the frame-time graph."))
         overlay::open_settings(3);
     rows::section("Play together");
+    unsigned devices=0;for(uint32_t player=0;player<plat::kPlayerCount;++player)if(plat::player_connected(player))++devices;
+    const std::string device_summary=std::to_string(devices)+" player slots ready";
+    rows::action("Connected players",device_summary.c_str(),"Open Controller setup to inspect each player slot and test rumble. Use Keyboard as player 1 when combining a keyboard and gamepads. In LAN each PC supplies one player.",true);
     if (rows::action("Local co-op", "2-4 players", "Connect independent controllers, or reserve the keyboard for player 1 in Controls. Choose the player count in the game for real local co-op characters."))
         overlay::open_settings(2);
     if (!ready) rows::disable_next();
@@ -851,6 +865,14 @@ void page_files() {
             ImGui::PopID();
         }
     }
+    rows::section("Installation status");
+    const char* package_issue=setup_tools_issue(g->kit);
+    rows::action("Package contents",package_issue?"Runtime update / tools missing":"Setup tools available",
+        package_issue?package_issue:"This copy contains the tools needed to build your own extracted game. Updates keep prepared data and player profiles.",true);
+    const auto built_kit=read_line(u8(plat::data_root())/"game/build-id.txt","kit");
+    const std::string compatibility="Runtime: " NX_VERSION_STRING "\nInstalled game kit: "+(built_kit.empty()?"not built":built_kit)+
+        "\nPackage kit: "+(g->kit.id.empty()?"not supplied":g->kit.id)+"\n\nLAN peers need the same runtime and enabled mods. A runtime update does not include first-build tools.";
+    rows::action("Build compatibility",g->status.ready==Ready::Yes?"Prepared":g->status.ready==Ready::Rebuild?"Rebuild required":"Setup required",compatibility.c_str(),true);
     rows::section(lt(LtYourGameFiles));
     const std::string exefs = g->config.exefs.empty() ? lt(LtChoose) : fit_path(g->config.exefs, lt(LtExeFS));
     const std::string exefs_desc =
@@ -941,24 +963,35 @@ void page_settings() {
     rows::section("Loading");
     if (rows::action("Optimize shader loading", "Prepare local cache", "Prepare or rebuild the cache used by Fast shader loading. This can reduce file-opening delays on future launches and uses extra disk space and memory. Original shaders and saves are preserved."))
         start_shader_optimization();
-    rows::section("Your saves");
+    rows::section("Profiles & saves");
+    if (rows::action("Manage profiles & progress", profiles::active(u8(plat::data_root())).name.c_str(), "Create or rename profiles, switch independent save slots, and restore backups with a safety copy of current progress.")) open_profiles();
     if (rows::action("Back up saves", "Create a copy", "Copy your saves into a new folder under data/backups. Existing backups and active saves are preserved. The completed backup folder opens when the copy finishes.")) {
         std::string error;
-        const auto backup = backup_saves(u8(plat::data_root()), error);
+        const auto backup = backup_saves(profiles::storage_root(u8(plat::data_root())), error);
         if (backup.empty()) ui::notify(error.c_str());
         else { ui::notify("Save backup created."); plat::open_folder(str(backup)); }
     }
     std::error_code backup_error;
-    if (!fs::is_directory(u8(plat::data_root()) / "backups", backup_error)) rows::disable_next();
+    if (!fs::is_directory(profiles::storage_root(u8(plat::data_root())) / "backups", backup_error)) rows::disable_next();
     if (rows::action("Open save backups", "Folder", "Browse your saved copies. Close the game before manually restoring a backup."))
-        plat::open_folder(plat::data_root() + "/backups");
+        plat::open_folder(str(profiles::storage_root(u8(plat::data_root())) / "backups"));
     rows::page_note("These are the same settings used in-game. Open them any time with Esc, F1 or Minus + Plus.");
     rows::end();
 }
 
 void page_mods() {
     rows::begin("##mods", ImGui::GetContentRegionAvail().y);
-    rows::section(lt(LtMods));
+    rows::section("Built-in comfort presets");
+    if(rows::action("Quiet play","Apply","Mute audio and turn off controller rumble. You can change either setting separately in Settings.")) {
+        auto s=overlay::current_settings();s.muted=true;s.rumble=0;overlay::apply_settings(s);ui::notify("Quiet play applied.");
+    }
+    if(rows::action("Clean screen","Apply","Hide the performance HUD for an unobstructed picture. Open the Escape menu to turn it back on.")) {
+        auto s=overlay::current_settings();s.metrics_enabled=false;overlay::apply_settings(s);ui::notify("Performance HUD hidden.");
+    }
+    if(rows::action("Restore sound & rumble","Apply","Unmute audio and restore rumble to 100%. Your volume setting stays as configured.")) {
+        auto s=overlay::current_settings();s.muted=false;s.rumble=100;overlay::apply_settings(s);ui::notify("Sound and rumble restored.");
+    }
+    rows::section("Installed game mods");
     if (g->mods.empty())
         rows::action("No mods yet", "", "Put each mod in a folder of its own in the mods folder. A mod holds a romfs "
                                         "folder (romfs/, or contents/<title id>/romfs/ as Switch mods come).",
@@ -1007,7 +1040,7 @@ void page_quit() {
 void screen(float w, float h) {
     if (!g) return;
     if (g->follow_hold > 0) g->follow_hold--;
-    g_k = std::clamp(h / 1080.0f, 0.5f, 3.0f);
+    g_k = std::clamp(std::min(h / 1080.0f,w / 1500.0f), 0.4f, 3.0f);
     const float k = g_k;
     const ui::Theme& th = ui::theme();
     {
@@ -1049,7 +1082,7 @@ void screen(float w, float h) {
     const ImVec2 ds{w, h};
     backdrop(ImGui::GetBackgroundDrawList(), ds);
     // fades and rises in, as the menu does
-    const float reveal = ui::smoothstep(std::min(1.0f, float(double(plat::monotonic_ns() - g->shown_ns) / 0.35e9)));
+    const float reveal = overlay::usability_preferences().reduced_motion?1.f:ui::smoothstep(std::min(1.0f, float(double(plat::monotonic_ns() - g->shown_ns) / 0.35e9)));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, reveal);
     ImGui::SetNextWindowPos({0, (1 - reveal) * 20 * k});
     ImGui::SetNextWindowSize(ds);
@@ -1066,8 +1099,9 @@ void screen(float w, float h) {
     }
     menu_was_open = menu_open;
     ImGui::Begin("##launcher", nullptr, f);
+    ImGui::BeginDisabled(menu_open || profiles_open() || g->lan_open);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float margin = 56 * k, nav_w = std::max(300 * k, w * 0.24f);
+    const float margin = 36 * k, nav_w = std::min(w*.24f,330*k);
 
     // the title
     ImGui::SetCursorPos({margin, margin * 0.8f});
@@ -1093,7 +1127,7 @@ void screen(float w, float h) {
         ImGui::PushID(i);
         const bool sel = g->page == i;
         const ImVec2 at = ImGui::GetCursorScreenPos();
-        const float row_h = 64 * k;
+        const float row_h = std::min(64*k,(h-top-150*k)/float(kPages));
         const float a = ui::eased(ImGui::GetID("hl"), sel ? 1.0f : 0.0f, 14.0f);
         if (a > 0.01f) {
             dl->AddRectFilled(at, {at.x + nav_w, at.y + row_h}, ui::fade(th.accent, 0.16f * a), 10 * k);
@@ -1150,7 +1184,7 @@ void screen(float w, float h) {
         ImGui::SetCursorPosX(margin + 26 * k);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.text_off));
         ImGui::PushTextWrapPos(margin + nav_w);
-        ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
+        if(h>=540)ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
     }
@@ -1190,7 +1224,7 @@ void screen(float w, float h) {
         ImGui::EndChild();
     } else {
         ImGui::BeginChild("##page", {pw, ph}, ImGuiChildFlags_NavFlattened);
-        switch (g->page.load()) {
+        if(!menu_open) switch (g->page.load()) {
             case PagePlay: page_play(); break;
             case PageFiles: page_files(); break;
             case PageSettings: page_settings(); break;
@@ -1203,17 +1237,19 @@ void screen(float w, float h) {
 
     // the controls, along the bottom
     const ui::Hint hints[] = {{"A", lt(LtSelect)}, {"B", lt(LtBack)}, {"L", ""}, {"R", lt(LtPages)}, {"+", lt(LtPlayHint)}};
-    ui::hints(dl, w * 0.5f, h - margin * 0.7f, 34 * k, hints, 5);
+    if(!menu_open && !profiles_open() && !g->lan_open)ui::hints(dl, w * 0.5f, h - 46*k, 34 * k, hints, 5);
+    ImGui::EndDisabled();
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 
     draw_lan(w,h,k);
+    draw_profiles(w,h);
 
     // The controller, by the player's own bindings (the pad as the overlay saw it: NpadButton bits), and the keys.
     const uint64_t pad = overlay::pad_buttons(), pressed = pad & ~g->pad_before;
     g->pad_before = pad;
-    if (menu_open || g->lan_open) return;
+    if (menu_open || g->lan_open || profiles_open()) return;
     const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, false) ||
                        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, false) || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false);
     const bool back = (pressed & plat::kB) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
@@ -1250,7 +1286,7 @@ bool wanted(const std::vector<std::string>& args, bool& config_mode) {
         const char* e = std::getenv(n);
         return e && *e && std::strcmp(e, "0") != 0;
     };
-    if ((env_on("NX_LAUNCHER_TOUR") || env_on("NX_LAN_LOBBY_TOUR") || env_on("NX_LAN_LOBBY_AUTOSTART")) && env_on("NX_HEADLESS_PRESENT")) return true;
+    if ((env_on("NX_LAUNCHER_TOUR") || env_on("NX_PROFILE_MANAGER_TOUR") || env_on("NX_QOL_RESIZE_TOUR") || env_on("NX_LAN_LOBBY_TOUR") || env_on("NX_LAN_LOBBY_AUTOSTART")) && env_on("NX_HEADLESS_PRESENT")) return true;
     if (env_on("NX_NO_LAUNCHER") || env_on("NX_HEADLESS") || env_on("NX_INPUT_SCRIPT") || env_on("NX_INPUT_REPLAY"))
         return config_mode && !env_on("NX_HEADLESS");
     return true;
@@ -1284,6 +1320,25 @@ void prepare_ultrawide_layouts() {
 #endif
         plat::exit_process(1);
     }
+}
+
+bool return_to_launcher() {
+#if defined(_WIN32)
+    const auto executable=u8(program_dir())/"wonder-launcher.exe";
+    if(!file(executable)) {ui::notify("wonder-launcher.exe is missing from the program folder.");return false;}
+    auto command=L"\""+executable.wstring()+L"\" --config --launcher-parent="+std::to_wstring(GetCurrentProcessId());
+    STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi)) {
+        ui::notify("Could not reopen the launcher. Your game is still running.");return false;
+    }
+    CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+#else
+    const auto executable=u8(program_dir())/"wonder";
+    const auto child=fork();
+    if(child<0) {ui::notify("Could not reopen the launcher.");return false;}
+    if(child==0) {execl(executable.c_str(),executable.c_str(),"--config",nullptr);_exit(127);}
+#endif
+    plat::exit_process(0);
 }
 
 void run() {
@@ -1360,6 +1415,9 @@ void run() {
         g->page = PageFiles, start_setup();
     const bool lobby_tour=std::getenv("NX_LAN_LOBBY_TOUR")!=nullptr;
     if(lobby_tour) open_lan();
+    // Isolated native QA only: show the real profile manager and quit after 120 UI frames.
+    const bool profile_tour=std::getenv("NX_PROFILE_MANAGER_TOUR")!=nullptr;
+    if(profile_tour)open_profiles();
     // Repro hook: exercise the real asynchronous launcher-to-game path without
     // desktop input. Normal launches configure these fields in the native popup.
     if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART")) {
@@ -1373,10 +1431,24 @@ void run() {
         if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
         lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
     }
+    const bool resize_tour=std::getenv("NX_QOL_RESIZE_TOUR")!=nullptr;
     uint64_t frames = 0;
     test_pad_start();  // (NX_TEST_PAD: a scripted controller, launcher/test_pad.h)
     for (;;) {
         const uint64_t t0 = plat::monotonic_ns();
+        if(resize_tour) {
+            if(frames==0 || frames==40 || frames==80 || frames==120) {
+                auto settings=overlay::current_settings();
+                settings.width=frames==40?960:frames==80?640:1280;settings.height=settings.width*9/16;
+                overlay::apply_settings(settings,false);
+                overlay::open_settings(2);
+            }
+            if(frames==15 || frames==55 || frames==95 || frames==135) {
+                uint32_t width=0,height=0;plat::window_size(width,height);
+                log("qol resize: client %ux%u",width,height);
+            }
+            if(frames>=160)plat::exit_process(0);
+        }
         test_pad_frame(frames);
         plat::PadState pad{};
         plat::read_pad(pad);  // (feeds the overlay's controller navigation: overlay::filter_pad)
@@ -1397,7 +1469,7 @@ void run() {
         }
         if (!nvn::present_ui_frame()) plat::sleep_ns(16'000'000);
         frames++;
-        if(lobby_tour && frames>=120) plat::exit_process(0);
+        if((lobby_tour || profile_tour) && frames>=120) plat::exit_process(0);
         if (g->quit) {
             log("launcher: quit");
             plat::exit_process(0);
@@ -1405,6 +1477,9 @@ void run() {
         if (g->play && !g->job.running) {
             refresh_status();
             if (g->status.ready == Ready::Yes) {
+                if (!lan::active() && !backup_before_play()) {
+                    g->play=false; open_profiles(); continue;
+                }
 #if defined(_WIN32)
                 std::wstring self(32768, L'\0');
                 DWORD n = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
@@ -1412,7 +1487,7 @@ void run() {
                     self.resize(n);
                     if (!lan::active() && _wcsicmp(fs::path(self).filename().c_str(), L"wonder-launcher.exe") == 0) {
                         const std::wstring game = (fs::path(self).parent_path() / L"wonder.exe").wstring();
-                        std::wstring command = L"\"" + game + L"\" --play";
+                        std::wstring command = L"\"" + game + L"\" --play --launcher-parent="+std::to_wstring(GetCurrentProcessId());
                         STARTUPINFOW si{};
                         si.cb = sizeof(si);
                         PROCESS_INFORMATION pi{};

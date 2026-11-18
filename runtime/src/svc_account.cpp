@@ -1,11 +1,13 @@
 // acc:u0 (accounts) and the storage objects am hands out (launch parameters).
 #include "ipc.h"
+#include "profiles.h"
+#include "platform.h"
 
 namespace nx {
 
 // One local user.
 constexpr uint64_t kUserLo = 0x0000000000000001ull, kUserHi = 0x4E58485553455231ull;
-const char kNickname[] = "Zagreus";
+
 
 // IStorage / IStorageAccessor over a byte blob (am's storage objects).
 std::shared_ptr<Service> make_storage(std::vector<uint8_t> data) {
@@ -60,7 +62,8 @@ std::shared_ptr<Service> profile() {
         push_uid(c);
         c.push<uint64_t>(0);
         char name[0x20] = {};
-        std::memcpy(name, kNickname, sizeof kNickname);
+        const auto nickname = profiles::nickname(std::filesystem::u8path(plat::data_root()));
+        std::memcpy(name, nickname.data(), std::min(nickname.size(), sizeof(name)-1));
         for (char ch : name) c.push<char>(ch);
     };
     s->cmds[0] = [base](IpcCtx& c) {  // Get(out UserData buffer) -> ProfileBase

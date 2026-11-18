@@ -132,6 +132,13 @@ static void manifests(void) {
     CHECK(uc_manifest_find(&m, "savagewind.ex") == NULL);
     CHECK(uc_manifest_find(&m, "zig/lib/empty") == NULL);
     uc_manifest_free(&m);
+    static const char *const owned[]={"user/save/progress","DATA/game/file","profiles/p-1/user/save","backups/saves-1/user/save",
+        "mods/custom/romfs/a","pc-settings.ini","usability.ini","active-profile.txt","profile-name.txt"};
+    for(size_t i=0;i<sizeof owned/sizeof *owned;++i) {
+        char manifest[1024];snprintf(manifest,sizeof manifest,"superwonders-update-manifest 1\nversion 0.5.1\nf " H64 " 0 %s\n",owned[i]);
+        CHECK(!uc_manifest_parse(manifest,&m,why,sizeof why));
+    }
+
 
     static const char *const bad[] = {
         "",

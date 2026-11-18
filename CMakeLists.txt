@@ -95,6 +95,12 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(friends_service_test tests/friends_service_test.cpp runtime/src/ipc.cpp runtime/src/svc_friends.cpp)
     target_include_directories(friends_service_test PRIVATE runtime/include runtime/src)
     add_test(NAME friends_service COMMAND friends_service_test)
+    add_executable(keyboard_actions_test tests/keyboard_actions_test.cpp runtime/src/overlay/settings.cpp)
+    target_include_directories(keyboard_actions_test PRIVATE runtime/src)
+    add_test(NAME keyboard_actions COMMAND keyboard_actions_test)
+    add_executable(keyboard_defaults_test tests/keyboard_defaults_test.cpp runtime/src/overlay/settings.cpp)
+    target_include_directories(keyboard_defaults_test PRIVATE runtime/src)
+    add_test(NAME keyboard_defaults COMMAND keyboard_defaults_test)
     add_executable(settings_test tests/settings_test.cpp runtime/src/overlay/settings.cpp)
     target_include_directories(settings_test PRIVATE runtime/src/overlay runtime/src)
     add_test(NAME settings COMMAND settings_test)
@@ -123,6 +129,12 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(file_io_test tests/file_io_test.cpp)
     target_include_directories(file_io_test PRIVATE runtime/src)
     add_test(NAME file_io COMMAND file_io_test)
+    add_executable(profile_account_test tests/profile_account_test.cpp runtime/src/profiles.cpp runtime/src/svc_account.cpp)
+    target_include_directories(profile_account_test PRIVATE runtime/include runtime/src)
+    add_test(NAME profile_account COMMAND profile_account_test)
+    add_executable(profiles_test tests/profiles_test.cpp runtime/src/profiles.cpp runtime/src/launcher/save_backup.cpp)
+    target_include_directories(profiles_test PRIVATE runtime/src)
+    add_test(NAME profiles COMMAND profiles_test)
     add_executable(save_backup_test tests/save_backup_test.cpp runtime/src/launcher/save_backup.cpp)
     target_include_directories(save_backup_test PRIVATE runtime/src)
     add_test(NAME save_backup COMMAND save_backup_test)
@@ -176,7 +188,7 @@ if(NX_TESTS AND NOT ANDROID)
         if(WIN32)
             target_link_libraries(netplay_latency_bench PRIVATE ws2_32)
         endif()
-        add_executable(netplay_lobby_test tests/netplay_lobby_test.cpp runtime/src/netplay_game.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
+        add_executable(netplay_lobby_test tests/netplay_lobby_test.cpp runtime/src/profiles.cpp runtime/src/netplay_game.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
         target_include_directories(netplay_lobby_test PRIVATE runtime/include runtime/src)
         target_compile_definitions(netplay_lobby_test PRIVATE NX_VERSION_STRING="test")
         if(WIN32)
@@ -372,6 +384,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/hle_fs.cpp
     runtime/src/stream_cache.cpp
     runtime/src/svc_account.cpp
+    runtime/src/profiles.cpp
     runtime/src/svc_friends.cpp
     runtime/src/hle_ro.cpp
     runtime/src/hle_vi.cpp
@@ -485,7 +498,7 @@ endif()
 list(APPEND NX_RUNTIME_SOURCES ${NX_GAME_SOURCES} ${NX_SHADER_SOURCES} runtime/src/gamelib.cpp)
 if(NX_GAME_LIBRARY)
     # SuperWonders Launcher: the start screen before the game (setup, settings, mods, updates; launcher/launcher.h)
-    list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/save_backup.cpp runtime/src/launcher/mod_catalog.cpp runtime/src/launcher/game_source.cpp runtime/src/launcher/launcher.cpp runtime/src/launcher/updates.cpp runtime/src/launcher/test_pad.cpp
+    list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/profile_ui.cpp runtime/src/launcher/save_backup.cpp runtime/src/launcher/mod_catalog.cpp runtime/src/launcher/game_source.cpp runtime/src/launcher/launcher.cpp runtime/src/launcher/updates.cpp runtime/src/launcher/test_pad.cpp
          runtime/src/launcher/update_core.c runtime/src/launcher/update_crypto.c)
     if(NOT WIN32)
         list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/update_appimage.c)  # (an AppImage updates itself)

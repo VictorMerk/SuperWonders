@@ -358,6 +358,18 @@ void uc_manifest_free(UcManifest *m) {
     m->count = 0;
 }
 
+static bool player_owned_path(const char *path) {
+    const size_t n=strcspn(path,"/");
+    static const char *const names[]={"data","user","profiles","backups","mods","extract","analysis","game","spirv",
+        "lan-sessions","pc-settings.ini","usability.ini","launcher.ini","profile-name.txt","active-profile.txt","user-data.lock","nx.log"};
+    for(size_t i=0;i<sizeof names/sizeof *names;++i) {
+        if(strlen(names[i])!=n) continue;
+        size_t j=0;for(;j<n && tolower((unsigned char)path[j])==names[i][j];++j) {}
+        if(j==n)return true;
+    }
+    return false;
+}
+
 bool uc_manifest_parse(const char *text, UcManifest *out, char *why, size_t why_size) {
     memset(out, 0, sizeof *out);
     int cap = 0, line_no = 0;
@@ -392,7 +404,7 @@ bool uc_manifest_parse(const char *text, UcManifest *out, char *why, size_t why_
                 snprintf(why, why_size, "line %d is malformed", line_no);
                 goto bad;
             }
-            if (!uc_path_safe(path)) { snprintf(why, why_size, "line %d names an unsafe path", line_no); goto bad; }
+            if (!uc_path_safe(path) || player_owned_path(path)) { snprintf(why, why_size, "line %d names an unsafe path", line_no); goto bad; }
             if (uc_manifest_find(out, path)) { snprintf(why, why_size, "line %d repeats a file", line_no); goto bad; }
             if (out->count == cap) {
                 cap = cap ? cap * 2 : 256;

@@ -7,6 +7,7 @@ LAN work in progress: [buffered transport measurements, scoped RNG seeds and rem
 Latest test preview: [simpler one-folder setup and corrected Windows controller presets](docs/PC-PREVIEW-2026-11-17-R8.md).
 Graphics validation: [Vulkan synchronization fixes, optional audio prefetch and two-PC LAN testing](docs/PC-PREVIEW-2026-11-17-R7.md).
 Measured loading follow-up: [verified low-VRAM texture conversions](docs/TEXTURE-CONVERSION-CACHE.md).
+Versioned source work: [Product.120 compatibility, checked NUP inspection and the shared Wonder launcher](docs/WONDER-EDITIONS.md).
 
 This fork's PC stability work and remaining multiplayer/rendering milestones are tracked in
 [the fork roadmap](docs/FORK-ROADMAP.md). The initial changes preserve draws during shader compilation,
@@ -47,7 +48,7 @@ I have tested the project on a Windows and Linux PC with an **NVIDIA GeForce RTX
 
 **Support on intel graphic cards is still at early stages. It boots, but it may display graphical glitches**. Other systems and GPUs may behave differently. Linux support is available.
 
-The recompilation targets the game's base version **1.0.0**. The builder uses the extracted folders provided by the user and does not identify the game version automatically. Updates and DLC are not supported.
+The primary target is the game's base version **1.0.0**. Experimental support for an inspected **Product.120** update selects patches by exact NSO identity; see the [edition investigation and verification limits](docs/WONDER-EDITIONS.md). This does not certify arbitrary updates, DLC, or native Switch 2/Bellabel Park content.
 
 ## Minimum hardware (provisional)
 

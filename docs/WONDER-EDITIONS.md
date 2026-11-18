@@ -41,6 +41,10 @@ The first visual run did not establish working sound: its log reported no recogn
 
 Later gameplay cleared the first course and exercised the Wonder Flower effect. A new process loaded the saved world-map position and both recorded Wonder Seeds. However, one longer run crashed in texture untiling when re-entering the first course after its first clear. The following traced reload/replay run exited cleanly after 12,000 frames, but that does **not** establish that the intermittent crash is fixed. Opt-in source tracing now records texture/pool metadata and diagnoses unreadable guest source ranges before dereferencing them. A separate fresh-save fixture is used to reproduce the first-clear transition. Full support remains unverified while this fault is unresolved.
 
+A separate fresh-save fixture has also remained at a blank title scene while music and presents continued. That cold-start case remains under investigation. Windows crash reports now include plain thread-local metadata for an active texture upload without requiring full upload logging; timed thread dumps include wait ownership as well as call chains. These are diagnostics, not repairs for the unresolved faults.
+
+The user's visible session on the pre-integration runtime closed normally with exit code 0. After integrating the repository's newer AMD/pipeline changes, the runtime rebuilt and all 45 CPU tests passed. Native checks on that integrated renderer remain a separate requirement; frame generation and user-selected settings prevent treating the manual session as a controlled performance comparison.
+
 `tools/perf/run_wonder_source_smoke.ps1` is the actual native-game test harness for follow-up runs. It acquires the machine reservation, starts the specified runtime on a task-owned fixture, records native logs/frame traces/captures, checks deliberate frame-keyed shutdown and preserves each run under a new output directory. The library CMD opens the GUI; it is not this test. A native smoke success still does not certify all courses, visuals, multiplayer or the contents of the upgraded edition.
 
 ## MKW reference and AMD fixes

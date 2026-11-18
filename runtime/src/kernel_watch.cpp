@@ -160,7 +160,12 @@ static void stall_sampler(void*) {
     for (;;) {
         plat::sleep_ns(5'000'000);
         uint64_t f = g_frame, now = plat::monotonic_ns();
-        if (dump_at && now >= dump_at) dump_threads(), dump_at = 0;
+        if (dump_at && now >= dump_at) {
+            log("threads: timed wait-state and call-chain dump");
+            report_threads();
+            dump_threads();
+            dump_at = 0;
+        }
         if (f != last_frame || plat::window_minimized()) {
             uint64_t ms = (now - since) / 1'000'000;
             if (last_frame && ms > 100 && !hits.empty()) {

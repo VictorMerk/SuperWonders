@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include "keyboard_defaults.h"
 
 namespace nx::overlay {
 
@@ -34,6 +35,9 @@ struct Settings {
     int memory_limit_gb = 8;
     bool keyboard_separate_player = false;
     int button_icons = 0;  // Auto, Keyboard, Nintendo, Xbox, PlayStation; applies at startup
+    bool keyboard_actions = true;
+    int keyboard_game_layout = 0;  // match Wonder: 0 B jump/Y dash, 1 A jump/B dash
+    int keyboard_standee_key = input::default_standee_key();
     int controller_preset = 1;  // 1 Nintendo positions (the default, as on the Switch: A on the right), 0 Xbox / DualSense
     bool muted = false, fullscreen = false, always_on_top = false;
     bool metrics_enabled = false, low_vram_profile = false;
@@ -54,7 +58,7 @@ struct Settings {
     int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
     int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
     bool pipeline_skip_draws = false;  // opt-in: hide draws while new pipelines compile (can cause flicker)
-    std::array<int, kControlCount> keyboard_bindings{};
+    std::array<int, kControlCount> keyboard_bindings=input::recommended_keyboard_bindings();
     std::array<int, kControlCount> controller_bindings{};
     uint32_t controller_custom_mask = 0;  // bit per action: controller_bindings[action] instead of the preset
 };

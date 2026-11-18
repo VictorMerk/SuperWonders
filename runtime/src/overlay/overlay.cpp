@@ -449,7 +449,12 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
         switch (e.kind) {
             case Event::KeyEv:
                 if (g_capture >= 0 && e.down) {  // the next key becomes the binding; Esc cancels
-                    if (e.key != KeyEscape) g_settings.keyboard_bindings[size_t(g_capture)] = e.raw, changed = true;
+                    if (e.key != KeyEscape) {
+                        const int binding=e.key==KeyDelete?0:e.raw;
+                        if(g_capture<int(kControlCount))g_settings.keyboard_bindings[size_t(g_capture)]=binding;
+                        else if(g_capture==int(kControlCount))g_settings.keyboard_standee_key=binding;
+                        changed=true;
+                    }
                     g_capture = -1;
                     break;
                 }

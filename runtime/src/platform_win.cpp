@@ -1,6 +1,7 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
 #include "file_io.h"
+#include "keyboard_actions.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -236,6 +237,8 @@ std::string data_root() {
 static PcMenuState g_pc_settings;
 static std::atomic<IXAudio2MasteringVoice*> g_master_voice{nullptr};
 static std::array<std::atomic<int>, kPcControlCount> g_keyboard_bindings{};
+static std::atomic<bool> g_keyboard_actions{true};
+static std::atomic<int> g_keyboard_game_layout{0},g_keyboard_standee{int('V')};
 static std::array<std::atomic<int>, kPcControlCount> g_controller_bindings{};
 static std::atomic<HWND> g_metrics_window{nullptr};
 static std::atomic<bool> g_metrics_enabled{false}, g_metric_fps{true}, g_metric_one_percent_low{true};
@@ -260,6 +263,7 @@ static overlay::Settings to_overlay(const PcMenuState& s) {
     o.width = s.width, o.height = s.height, o.aspect_ratio = s.aspect_ratio, o.internal_resolution = s.internal_resolution, o.volume = s.volume;
     o.language = s.language, o.game_language = s.game_language, o.memory_limit_gb = s.memory_limit_gb;
     o.keyboard_separate_player = s.keyboard_separate_player;
+    o.keyboard_actions=s.keyboard_actions;o.keyboard_game_layout=s.keyboard_game_layout;o.keyboard_standee_key=s.keyboard_standee_key;
     o.button_icons = s.button_icons;
     o.controller_preset = s.controller_preset, o.muted = s.muted, o.fullscreen = s.fullscreen;
     o.always_on_top = s.always_on_top, o.metrics_enabled = s.metrics_enabled, o.low_vram_profile = s.low_vram_profile;
@@ -286,6 +290,7 @@ static PcMenuState from_overlay(const overlay::Settings& o) {
     s.width = o.width, s.height = o.height, s.aspect_ratio = o.aspect_ratio, s.internal_resolution = o.internal_resolution, s.volume = o.volume;
     s.language = o.language, s.game_language = o.game_language, s.memory_limit_gb = o.memory_limit_gb;
     s.keyboard_separate_player = o.keyboard_separate_player;
+    s.keyboard_actions=o.keyboard_actions;s.keyboard_game_layout=o.keyboard_game_layout;s.keyboard_standee_key=o.keyboard_standee_key;
     s.button_icons = o.button_icons;
     s.controller_preset = o.controller_preset, s.muted = o.muted, s.fullscreen = o.fullscreen;
     s.always_on_top = o.always_on_top, s.metrics_enabled = o.metrics_enabled, s.low_vram_profile = o.low_vram_profile;
@@ -371,6 +376,8 @@ static void apply_metrics_settings(const PcMenuState& state) {
 }
 
 static void apply_input_bindings(const PcMenuState& state) {
+    g_keyboard_actions=state.keyboard_actions;g_keyboard_game_layout=std::clamp(state.keyboard_game_layout,0,1);
+    g_keyboard_standee=std::clamp(state.keyboard_standee_key,0,255);
     for (size_t i = 0; i < kPcControlCount; ++i) {
         g_keyboard_bindings[i].store(std::clamp(state.keyboard_bindings[i], 0, 255), std::memory_order_relaxed);
         const int controller = state.controller_custom_mask & (1u << i)
@@ -391,6 +398,9 @@ static void save_pc_settings() {
          << "\nalways_on_top=" << g_pc_settings.always_on_top << "\nlanguage=" << g_pc_settings.language
          << "\ngame_language=" << g_pc_settings.game_language
          << "\ngame_language_version=2"
+         << "\nkeyboard_layout_version=2"
+         << "\nkeyboard_actions=" << g_pc_settings.keyboard_actions << "\nkeyboard_game_layout=" << g_pc_settings.keyboard_game_layout
+         << "\nkeyboard_standee=" << g_pc_settings.keyboard_standee_key
          << "\nmemory_limit_gb=" << g_pc_settings.memory_limit_gb
          << "\nlow_vram_profile=" << g_pc_settings.low_vram_profile
          << "\nkeyboard_separate_player=" << g_pc_settings.keyboard_separate_player
@@ -423,6 +433,8 @@ static void load_pc_settings() {
     std::ifstream file(data_root() + "/pc-settings.ini");
     std::string line;
     int game_language_version = 0;
+    int keyboard_layout_version = 0;
+    bool keyboard_mode_present=false,keyboard_keys_present=false;
     while (std::getline(file, line)) {
         int value = 0;
         if (std::sscanf(line.c_str(), "width=%d", &value) == 1 && value >= 640 && value <= 7680) g_pc_settings.width = value;
@@ -438,6 +450,10 @@ static void load_pc_settings() {
             g_pc_settings.game_language = std::clamp(value, 0, 11);
         else if (std::sscanf(line.c_str(), "game_language_version=%d", &value) == 1)
             game_language_version = value;
+        else if (std::sscanf(line.c_str(), "keyboard_layout_version=%d", &value) == 1) keyboard_layout_version = value;
+        else if (std::sscanf(line.c_str(), "keyboard_actions=%d", &value) == 1) {g_pc_settings.keyboard_actions=value!=0;keyboard_mode_present=true;}
+        else if (std::sscanf(line.c_str(), "keyboard_game_layout=%d", &value) == 1) g_pc_settings.keyboard_game_layout=std::clamp(value,0,1);
+        else if (std::sscanf(line.c_str(), "keyboard_standee=%d", &value) == 1 && value>=0 && value<=255)g_pc_settings.keyboard_standee_key=value;
         else if (std::sscanf(line.c_str(), "memory_limit_gb=%d", &value) == 1) g_pc_settings.memory_limit_gb = std::clamp(value, 2, 32);
         else if (std::sscanf(line.c_str(), "low_vram_profile=%d", &value) == 1) g_pc_settings.low_vram_profile = value != 0;
         else if (std::sscanf(line.c_str(), "keyboard_separate_player=%d", &value) == 1)
@@ -490,12 +506,15 @@ static void load_pc_settings() {
             int index = -1, binding = -1;
             if (std::sscanf(line.c_str(), "keyboard_%d=%d", &index, &binding) == 2 &&
                 index >= 0 && index < int(kPcControlCount) && binding >= 0 && binding <= 255)
-                g_pc_settings.keyboard_bindings[size_t(index)] = index == int(PcMinus) && binding == VK_ESCAPE ? VK_BACK : binding;
+                keyboard_keys_present=true, g_pc_settings.keyboard_bindings[size_t(index)] = index == int(PcMinus) && binding == VK_ESCAPE ? VK_BACK : binding;
             else if (std::sscanf(line.c_str(), "controller_%d=%d", &index, &binding) == 2 &&
                      index >= 0 && index < int(kPcControlCount) && binding >= 0 && binding < int(kPcControlCount))
                 g_pc_settings.controller_bindings[size_t(index)] = binding;
         }
     }
+    const bool migrated=input::migrate_keyboard_defaults(g_pc_settings.keyboard_bindings,keyboard_layout_version,input::KeyboardCodes::Windows);
+    if(!keyboard_mode_present && keyboard_keys_present)
+        g_pc_settings.keyboard_actions=migrated || g_pc_settings.keyboard_bindings==input::recommended_keyboard_bindings(input::KeyboardCodes::Windows);
     if (game_language_version < 2 && (g_pc_settings.game_language == 8 || g_pc_settings.game_language == 10))
         g_pc_settings.game_language = 0;
     if (g_pc_settings.aspect_ratio >= 0) {
@@ -1094,6 +1113,8 @@ void read_pad(PadState& p) {
         if (source >= 0 && source < int(physical.size()) && physical[size_t(source)]) nav.buttons |= kPadActionBits[action];
     }
     const bool menu_open = pc_menu_open() || (overlay::enabled() && overlay::is_open());
+    static thread_local input::KeyboardActionState keyboard_state;
+    if(menu_open || !g_window || GetForegroundWindow()!=g_window)keyboard_state={};
     if (pc_menu_open()) {
         for (size_t i = 0; i < physical.size(); ++i)
             if (physical[i] && !g_previous_controller_state[i]) pc_menu_capture_controller_button(int(i));
@@ -1102,20 +1123,22 @@ void read_pad(PadState& p) {
             const int source = g_controller_bindings[action].load(std::memory_order_relaxed);
             if (source >= 0 && source < int(physical.size()) && physical[size_t(source)])
                 p.buttons |= kPadActionBits[action];
-            const int vk = g_keyboard_bindings[action].load(std::memory_order_relaxed);
-            if (key(vk)) {
-                p.buttons |= kPadActionBits[action];
-                if (action == PcDpadLeft) p.lx = -kStickMax;
-                else if (action == PcDpadRight) p.lx = kStickMax;
-                else if (action == PcDpadUp) p.ly = kStickMax;
-                else if (action == PcDpadDown) p.ly = -kStickMax;
-            }
         }
-        // WASD remains a convenient independent movement option in addition to remappable D-pad keys.
-        if (key('A')) p.lx = -kStickMax;
-        if (key('D')) p.lx = kStickMax;
-        if (key('W')) p.ly = kStickMax;
-        if (key('S')) p.ly = -kStickMax;
+        input::KeyboardBindings bindings;
+        for(size_t action=0;action<bindings.size();++action)bindings[action]=g_keyboard_bindings[action].load(std::memory_order_relaxed);
+        const bool actions=g_keyboard_actions.load();
+        const auto keyboard=input::keyboard_pad(bindings,actions,g_keyboard_game_layout.load(),g_keyboard_standee.load(),
+                                               input::KeyboardCodes::Windows,keyboard_state,monotonic_ns(),[&](int vk){return !menu_open && key(vk);});
+        p.buttons|=keyboard.buttons;
+        if(keyboard.lx)p.lx=keyboard.lx;
+        if(keyboard.ly)p.ly=keyboard.ly;
+        // Preserve the old fixed movement aliases only for explicitly selected legacy button layouts.
+        if(!actions) {
+            if (key('A')) p.lx = -kStickMax;
+            if (key('D')) p.lx = kStickMax;
+            if (key('W')) p.ly = kStickMax;
+            if (key('S')) p.ly = -kStickMax;
+        }
     }
     g_previous_controller_state = physical;
     if (menu_open) p = {};

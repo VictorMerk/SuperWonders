@@ -22,6 +22,7 @@
 #include "platform.h"
 #include "stream_cache.h"
 #include "controllers.h"
+#include "keyboard_actions.h"
 #include "platform_linux.h"
 #include "svc_am.h"
 
@@ -40,6 +41,7 @@ PadState g_pad;
 std::mutex g_settings_lock;
 overlay::Settings g_settings;
 std::array<std::atomic<int>, overlay::kControlCount> g_key_binding{}, g_pad_binding{};
+std::atomic<bool> g_keyboard_actions{true};std::atomic<int> g_keyboard_game_layout{0},g_keyboard_standee{25};
 constexpr uint64_t kActionBits[overlay::kControlCount] = {
     kA, kB, kX, kY, kL, kR, kZL, kZR, kPlus, kMinus, kStickL, kStickR, kLeft, kUp, kRight, kDown,
 };
@@ -71,6 +73,7 @@ void apply_settings(const overlay::Settings& s, bool persist) {
         g_key_binding[a] = s.keyboard_bindings[a], g_pad_binding[a] = overlay::controller_binding(s, a);
         controller_binding(a, overlay::controller_binding(s, a));
     }
+    g_keyboard_actions=s.keyboard_actions;g_keyboard_game_layout=s.keyboard_game_layout;g_keyboard_standee=s.keyboard_standee_key;
     controller_rumble_strength(s.rumble);
     controller_keyboard_separate(s.keyboard_separate_player);
     if (g_stream) {
@@ -166,13 +169,8 @@ void initial_window(int& w, int& h, bool& fullscreen) {
 
 void load_player_settings() {
     overlay::Settings s;
-    const int keys[overlay::kControlCount] = {
-        SDL_SCANCODE_SPACE, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_J, SDL_SCANCODE_K, SDL_SCANCODE_Q, SDL_SCANCODE_E,
-        SDL_SCANCODE_Z, SDL_SCANCODE_C, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_M, SDL_SCANCODE_N,
-        SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN,
-    };
     for (size_t a = 0; a < overlay::kControlCount; ++a)
-        s.keyboard_bindings[a] = keys[a], s.controller_bindings[a] = overlay::default_controller_binding(a, s.controller_preset);
+        s.controller_bindings[a] = overlay::default_controller_binding(a, s.controller_preset);
     bool found = overlay::load_settings(settings_path(), s);
     // Aspect-dependent resources and render targets are selected at startup. Keep explicit environment overrides
     // for developer tests, otherwise configure the same profiles as the Windows launcher.
@@ -250,23 +248,24 @@ bool handle_event(const SDL_Event& e) {
 void sample_input() {
     PadState p;
     read_controller(0, p);
-    // Keyboard: WASD / arrows move the stick; the 16 actions follow their bindings (defaults: Space A, Shift B, J X,
-    // K Y, Q/E L/R, Z/C ZL/ZR, Enter +, Esc -, M/N stick clicks, arrows D-pad). Not while the menu has the keys.
+    // Named PC actions are translated before LAN sampling and without changing gamepad input.
+    static input::KeyboardActionState keyboard_state;
     bool tab = false;
     if (g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) && !overlay::wants_keyboard()) {
-        int count = 0;
-        const bool* k = SDL_GetKeyboardState(&count);
-        tab = k[SDL_SCANCODE_TAB];  // fast-forward (hle_vi.cpp)
-        auto held = [&](int sc) { return sc > 0 && sc < count && k[sc] &&
-            !(sc == SDL_SCANCODE_ESCAPE && overlay::enabled()); };
-        if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_LEFT]) p.lx = -kStickMax;
-        if (k[SDL_SCANCODE_D] || k[SDL_SCANCODE_RIGHT]) p.lx = kStickMax;
-        if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP]) p.ly = kStickMax;
-        if (k[SDL_SCANCODE_S] || k[SDL_SCANCODE_DOWN]) p.ly = -kStickMax;
-        for (size_t a = 0; a < overlay::kControlCount; ++a)
-            if (held(g_key_binding[a].load())) p.buttons |= kActionBits[a];
-        if (k[SDL_SCANCODE_RSHIFT] && g_key_binding[overlay::CtlB].load() == SDL_SCANCODE_LSHIFT) p.buttons |= kB;
+        int count=0;const bool* k=SDL_GetKeyboardState(&count);tab=k[SDL_SCANCODE_TAB];
+        const bool actions=g_keyboard_actions.load();input::KeyboardBindings bindings;
+        for(size_t a=0;a<bindings.size();++a)bindings[a]=g_key_binding[a].load();
+        const auto keyboard=input::keyboard_pad(bindings,actions,g_keyboard_game_layout.load(),g_keyboard_standee.load(),input::KeyboardCodes::SDL,keyboard_state,monotonic_ns(),
+            [&](int sc){return sc>0 && sc<count && k[sc] && !(sc==SDL_SCANCODE_ESCAPE && overlay::enabled());});
+        p.buttons|=keyboard.buttons;if(keyboard.lx)p.lx=keyboard.lx;if(keyboard.ly)p.ly=keyboard.ly;
+        if(!actions) {
+            if(k[SDL_SCANCODE_A] || k[SDL_SCANCODE_LEFT])p.lx=-kStickMax;
+            if(k[SDL_SCANCODE_D] || k[SDL_SCANCODE_RIGHT])p.lx=kStickMax;
+            if(k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP])p.ly=kStickMax;
+            if(k[SDL_SCANCODE_S] || k[SDL_SCANCODE_DOWN])p.ly=-kStickMax;
+        }
     }
+    else keyboard_state={};
     g_fast_forward = tab;
     std::lock_guard lk(g_pad_lock);
     g_pad = p;

@@ -19,6 +19,7 @@
 #include "overlay/overlay_internal.h"
 #include "overlay/usability.h"
 #include "profiles.h"
+#include "keyboard_actions.h"
 #if NX_GAME_LIBRARY
 #include "launcher/launcher.h"
 #endif
@@ -754,12 +755,38 @@ void controls(MenuContext& c, const Labels& l) {
         }
     }
     rows::section(kHeaders[lang][0]);
-    for (size_t a = 0; a < kControlCount; ++a) {
-        char id[48];
-        std::snprintf(id, sizeof id, "%s###key%zu", kActions[a], a);
-        const bool waiting = c.capture_action == int(a);
-        const char* name = waiting ? "Press a key..." : c.host.key_name ? c.host.key_name(s.keyboard_bindings[a]) : "?";
-        if (rows::action(id, name, translated_desc(desc::key, lang), true, waiting)) c.capture_action = int(a);  // overlay.cpp takes the next key
+    int keyboard_mode=s.keyboard_actions?0:1;
+    const char* modes[]={"Dedicated PC actions","Legacy Switch buttons"};
+    if(rows::choice("Keyboard controls",&keyboard_mode,modes,2,0,
+        "Named PC actions include single-key ground pound and standee shortcuts. Sprint/grab/throw remain one contextual action. Legacy preserves direct Switch-button mappings. Switching mode applies its default keyboard layout; controllers are unchanged.")) {
+        s.keyboard_actions=keyboard_mode==0;
+        s.keyboard_bindings=s.keyboard_actions?input::recommended_keyboard_bindings():input::legacy_keyboard_bindings(input::native_keyboard_codes());
+        s.keyboard_standee_key=input::default_standee_key();c.capture_action=-1;settings_changed(true);
+    }
+    if(rows::action("Reset keyboard layout",s.keyboard_actions?"Space jump / Shift sprint":"Legacy defaults",
+        "Replace the current keyboard keys with this mode's defaults. PC mode: WASD movement, Space jump, Shift sprint, E spin, Ctrl ground pound, F use item/confirm, Q greet, V standee, Enter pause. Esc/F1 opens PC settings. Restart to refresh game prompts.")) {
+        s.keyboard_bindings=s.keyboard_actions?input::recommended_keyboard_bindings():input::legacy_keyboard_bindings(input::native_keyboard_codes());
+        s.keyboard_standee_key=input::default_standee_key();c.capture_action=-1;settings_changed(true);
+        ui::notify("Keyboard layout reset. Restart to refresh the game's key prompts.");
+    }
+    auto keyboard_row=[&](size_t action,const char* label) {
+        char id[96];std::snprintf(id,sizeof id,"%s###key%zu",label,action);
+        const bool waiting=c.capture_action==int(action);
+        const int binding=action==kControlCount?s.keyboard_standee_key:s.keyboard_bindings[action];
+        const char* name=waiting?"Press a key...":binding==0?"Unbound":c.host.key_name?c.host.key_name(binding):"?";
+        if(rows::action(id,name,"Select and press a key. Standee briefly crouches then presses use; stand on the ground. Delete clears the binding; Esc cancels. Keys apply immediately; restart to update game prompts.",true,waiting))c.capture_action=int(action);
+    };
+    if(s.keyboard_actions) {
+        const char* schemes[]={"B jump / Y dash (standard)","A jump / B dash (alternate)"};
+        if(rows::choice("Wonder's game layout",&s.keyboard_game_layout,schemes,2,0,
+            "Match Wonder's own Settings > Dash and Jump Controls. This translates your PC action keys to either game setting; the PC keys stay the same. It does not change gamepad mappings or edit your game save."))settings_changed(true);
+        constexpr size_t order[]={CtlLeft,CtlRight,CtlUp,CtlDown,CtlB,CtlY,CtlR,CtlZL,kControlCount,CtlA,CtlX,CtlPlus,CtlMinus};
+        for(size_t action:order)keyboard_row(action,action==kControlCount?"Place standee":input::keyboard_action_name(action));
+        static bool advanced=false;
+        if(rows::action("Advanced keyboard bindings",advanced?"Hide":"Show","Optional original shoulder/stick inputs. Duplicate spin and unused stick clicks are unbound in the PC defaults."))advanced=!advanced;
+        if(advanced)for(size_t action:{size_t(CtlL),size_t(CtlZR),size_t(CtlLStick),size_t(CtlRStick)})keyboard_row(action,kActions[action]);
+    } else {
+        for(size_t action=0;action<kControlCount;++action)keyboard_row(action,kActions[action]);
     }
     rows::page_note(s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
     rows::end();

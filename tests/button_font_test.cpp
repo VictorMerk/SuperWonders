@@ -43,9 +43,21 @@ int main(int argc, char** argv) {
         s.controller_custom_mask = 0;
     }
     std::array<std::string, 16> keys{}; keys[0] = "Space"; keys[4] = "Q";
+    s.keyboard_actions=false;
+#ifdef _WIN32
+    s.keyboard_bindings[0]=32;s.keyboard_bindings[4]='Q';
+#endif
     auto keyboard = pc_button_font(s, ControllerKind::Keyboard, keys);
     check(glyph(keyboard, 0xE0E0) == glyph(keyboard, 0xE400), "keyboard Space keycap");
     check(glyph(keyboard, 0xE0E4) == glyph(keyboard, 0xE351), "keyboard custom letter keycap");
+    s.keyboard_actions=true;s.keyboard_game_layout=1;
+    s.keyboard_bindings=input::recommended_keyboard_bindings();
+    keys[0]="F";keys[1]="Space";keys[2]="Q";keys[3]="Shift";keys[5]="E";
+    auto alternate=pc_button_font(s,ControllerKind::Keyboard,keys);
+    check(glyph(alternate,0xE0E0)==glyph(alternate,0xE400),"alternate game A still shows the Space jump key");
+    check(glyph(alternate,0xE0E1)==glyph(alternate,0xE401),"alternate game B shows the Shift sprint key");
+    check(glyph(alternate,0xE0E2)==glyph(alternate,0xE346),"alternate game X shows F for use/confirm");
+    check(glyph(alternate,0xE0E7)==glyph(alternate,0xE345),"both spin prompts show the dedicated E key");
     s.button_icons = 4;
     auto forced = pc_button_font(s, ControllerKind::Keyboard, keys);
     check(forced == pc_button_font(s, ControllerKind::PlayStation, keys), "manual prompt device override");

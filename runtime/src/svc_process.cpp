@@ -29,7 +29,11 @@ uint64_t get_info(uint32_t type, uint32_t handle, uint64_t sub, uint32_t& rc) {
         case 8: return 0;  // IsCurrentProcessBeingDebugged
         case 9: return 0;  // ResourceLimit handle
         case 10: return 0;  // IdleTickCount
-        case 11: return (lan::active() ? lan::seed() : 0x1234567890ABCDEFull) ^ sub;  // RandomEntropy
+        // Kernel allocation entropy must stay independent of the gameplay seed.
+        // Feeding room seeds to the SDK's address allocator can make its bounded
+        // search fail before the first frame. Wonder's gameplay RNG is seeded
+        // separately at its known initialization call sites.
+        case 11: return 0x1234567890ABCDEFull ^ sub;  // RandomEntropy
         case 12: return kAddressSpaceBase;
         case 13: return kAddressSpaceSize;
         case 14: return kStackBase;

@@ -15,6 +15,7 @@
 
 #include "nvn_pipeline.h"
 #include "nvn_spirv_warp.h"
+#include "nvn_spirv_nan.h"
 
 namespace nx::nvn {
 
@@ -485,6 +486,7 @@ bool init_vertex_outputs(const std::vector<uint32_t>& in, std::vector<uint32_t>&
 
 std::vector<uint32_t> patched_spirv(const ShaderInfo* s, const uint8_t* kinds, uint32_t unwritten, bool* int_inputs) {
     std::vector<uint32_t> code = s->spirv, next;  // each pass reads `code` and leaves its result in `next`
+    if (patch_nan_minmax(code, next)) code.swap(next);
     if (patch_warp32(code, next)) {
         code.swap(next);
         log("nvn/vk: shader %s: logical 32-lane ballots and shuffles", s->hash.c_str());

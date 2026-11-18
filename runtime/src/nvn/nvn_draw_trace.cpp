@@ -324,6 +324,22 @@ namespace nx::nvn::replay {
 
 void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, const ShaderInfo* vs,
                 const ShaderInfo* fs, const TexBindings& tex_bindings, const std::vector<uint64_t>& handles) {
+    // Bounded opt-in capture for diagnosing a color transform without changing
+    // its shader: the first use of each requested fragment program, eight rows.
+    static const char* fs_uniforms = std::getenv("NX_TRACE_FS_UNIFORMS");
+    static std::set<std::string> captured_uniforms;
+    if (fs_uniforms && fs && std::strstr(fs_uniforms, fs->hash.c_str()) && captured_uniforms.insert(fs->hash).second) {
+        for (int bank = 0; bank < 4; ++bank) {
+            const Range& u = g_state.uniforms[1][bank];
+            const uint8_t* bytes = u.address ? guest_bytes(u.address) : nullptr;
+            for (uint64_t row = 0; bytes && row < 8 && row * 16 + 16 <= u.size; ++row) {
+                float values[4];
+                std::memcpy(values, bytes + row * 16, sizeof values);
+                log("fs uniforms %s c%d[%llu]: %g %g %g %g", fs->hash.c_str(), bank + 3,
+                    (unsigned long long)row, values[0], values[1], values[2], values[3]);
+            }
+        }
+    }
     // NX_TRACE_SCENE_UNIFORMS=1: capture shader uniform blocks used by draws to Wonder's full-size
     // 16:9 scene targets. This identifies the actual scene projection without changing rendering.
     static const bool trace_scene_uniforms = std::getenv("NX_TRACE_SCENE_UNIFORMS") != nullptr;

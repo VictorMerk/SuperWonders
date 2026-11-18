@@ -1,0 +1,11 @@
+#version 450
+layout(local_size_x=128) in;
+layout(set=0,binding=0,std430) buffer Results { uint value[]; } result;
+void main() {
+    uint at = gl_GlobalInvocationID.x * 4;
+    float n = uintBitsToFloat(result.value[at]);
+    result.value[at] = floatBitsToUint(min(n, 0.25));
+    result.value[at+1] = floatBitsToUint(max(0.75, n));
+    result.value[at+2] = floatBitsToUint(clamp(n, 0.0, 1.0));
+    result.value[at+3] = floatBitsToUint(clamp(uintBitsToFloat(0x7f800000u), 0.0, 1.0));
+}

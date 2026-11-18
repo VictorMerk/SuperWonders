@@ -74,7 +74,7 @@ bool make_scratch(Scratch& s, uint32_t w, uint32_t h) {
     p_vkGetBufferMemoryRequirements(d, s.buffer, &req);
     ai.allocationSize = req.size;
     ai.memoryTypeIndex =
-        memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(d, &ai, nullptr, &s.buffer_memory) != VK_SUCCESS) return false;
     p_vkBindBufferMemory(d, s.buffer, s.buffer_memory, 0);
     return true;
@@ -283,7 +283,7 @@ bool frame_dump_record(VkCommandBuffer cb, GpuImage& img) {
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         ai.allocationSize = req.size;
         ai.memoryTypeIndex =
-            memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            readback_memory_type(req.memoryTypeBits);
         p_vkAllocateMemory(d, &ai, nullptr, &g_readback.memory);
         p_vkBindBufferMemory(d, g_readback.buffer, g_readback.memory, 0);
         g_readback.size = size;

@@ -27,6 +27,7 @@
 
 #include "platform.h"
 #include "file_io.h"
+#include "host_path.h"
 #include "stream_cache.h"
 #include <optional>
 #include "frametrace.h"
@@ -108,7 +109,7 @@ struct Dir {
 std::vector<std::pair<uint64_t, Dir>> g_dirs;
 uint64_t g_next = 1;
 
-fs::path data_root() { return fs::u8path(plat::data_root()); }
+fs::path data_root() { return host_path(fs::u8path(plat::data_root())); }
 
 std::string utf8(const fs::path& p) {
     auto s = p.u8string();

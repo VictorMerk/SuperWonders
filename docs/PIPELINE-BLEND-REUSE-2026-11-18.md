@@ -18,4 +18,10 @@ A read-only audit using the compiled canonicalization helper examined 3,449 reco
 
 For A/B timing, restore identical shader/recipe/driver cache inputs before every process, use identical probe instrumentation in both executables, enable synchronization validation for correctness runs and disable validation for timing runs. Prewarm duration measures host pipeline preparation, not an ordinary game frame or GPU rendering time.
 
-Native timing and rendering validation are pending the shared GPU reservation. The previous verified shader/graphics changes are on main; this additional optimization is not yet installed or claimed to improve gameplay FPS.
+Native replay completed on the AMD Vulkan device. Validation-enabled baseline and candidate runs prepared all 3,449 and 2,218 recipes respectively, with no skipped recipes or Vulkan validation errors. Validation runs are correctness checks and are excluded from timing comparisons.
+
+Three restored-cache samples per build, in ABBAAB order with validation disabled, gave baseline prewarm durations of 1,202.4 / 1,193.2 / 1,154.3 ms and candidate durations of 1,112.5 / 1,092.2 / 1,169.8 ms. The medians were 1,193.2 and 1,112.5 ms. The sample ranges overlap; this is a limited warmed host-preparation measurement, not gameplay FPS or cold driver compilation.
+
+A synthetic draw/readback probe also checks opaque output, live alpha/additive blending, channel write masks and independent multiple-render-target blending. The baseline and canonicalized implementation produced identical pixel digests. The candidate passed cache-identity checks in synchronous, pipelined and asynchronous submission modes, with synchronization validation enabled and no validation errors. The baseline reproduced the redundant creations while retaining the same pixels.
+
+These results apply to blend-state normalization alone. A subsequent audit found uninitialized depth-state padding; its additional fix and validation are documented separately. The installed runtime and source branch must still be distinguished when testing gameplay.

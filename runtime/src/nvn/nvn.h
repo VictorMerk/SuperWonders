@@ -29,6 +29,7 @@ void set_pipeline_skip_draws(bool on);
 uint64_t game_present_period_ns(int interval);
 bool framegen_probe();  // synthetic GPU regression, no game files
 bool pipeline_recipe_probe();  // shader/recipe replay only; no guest game, uses an isolated cache fixture
+bool pipeline_draw_probe();  // synthetic pipeline reuse/blending readbacks, no guest game
 bool overlay_input_probe();  // native overlay keyboard/controller regression, no game files
 bool counter_clear_probe();  // real replay/counter/clear readback, no game files
 
@@ -359,6 +360,7 @@ struct ChannelMaskInfo {
 };
 struct DepthStencilInfo {
     uint8_t depth_test = 0, depth_write = 0, stencil_test = 0;
+    uint8_t reserved = 0;  // formerly uninitialized alignment padding, recorded and hashed with the state
     uint32_t depth_func = 0;
     uint32_t stencil_func[2] = {}, stencil_fail[2] = {}, depth_fail[2] = {}, depth_pass[2] = {};
 };

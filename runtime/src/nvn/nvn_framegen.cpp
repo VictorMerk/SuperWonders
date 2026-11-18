@@ -37,11 +37,14 @@ struct State {
     uint32_t factor = 0;
 } state;
 
-void barrier(VkCommandBuffer cb) {
+void barrier(VkCommandBuffer cb, bool between_compute_passes = false) {
+    static const bool probe_compute = std::getenv("NX_FRAMEGEN_PROBE") && std::getenv("NX_FRAMEGEN_PROBE_COMPUTE_BARRIERS");
+    const bool compute = between_compute_passes && probe_compute;
     VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    p_vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+    b.srcAccessMask = compute ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_MEMORY_WRITE_BIT;
+    b.dstAccessMask = compute ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    const VkPipelineStageFlags stage = compute ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    p_vkCmdPipelineBarrier(cb, stage, stage,
                           0, 1, &b, 0, nullptr, 0, nullptr);
 }
 void free_image(GpuImage& image) {
@@ -85,6 +88,34 @@ bool image(GpuImage& out, uint32_t width, uint32_t height, VkFormat format) {
     return true;
 }
 VkPipeline pipeline(const uint32_t* code, size_t bytes, const int* values = nullptr, uint32_t count = 0) {
+    // QA only: compare compiled shader variants in one otherwise identical
+    // executable. Normal gameplay always uses the embedded modules.
+    std::vector<uint32_t> probe_code;
+    if (std::getenv("NX_FRAMEGEN_PROBE")) {
+        const char* key = code == k_fg_flow_comp ? "NX_FRAMEGEN_PROBE_FLOW_SPV"
+                        : code == k_fg_synth_comp ? "NX_FRAMEGEN_PROBE_SYNTH_SPV"
+                        : code == k_fg_luma_comp ? "NX_FRAMEGEN_PROBE_LUMA_SPV"
+                        : code == k_fg_median_comp ? "NX_FRAMEGEN_PROBE_MEDIAN_SPV" : nullptr;
+        const char* path = key ? std::getenv(key) : nullptr;
+        if (path && *path) {
+            FILE* f = plat::fopen_utf8(path,"rb");
+            bool ok = false;
+            if (f) {
+                plat::fseek64(f,0,SEEK_END);
+                const int64_t size = plat::ftell64(f);
+                if (size >= 20 && size <= (4ll << 20) && size % 4 == 0) {
+                    probe_code.resize(size_t(size)/4);
+                    plat::fseek64(f,0,SEEK_SET);
+                    ok = std::fread(probe_code.data(),1,size_t(size),f) == size_t(size) && !std::ferror(f);
+                    ok = ok && probe_code[0] == 0x07230203 && probe_code[3] != 0 && probe_code[4] == 0;
+                }
+                std::fclose(f);
+            }
+            if (!ok) { log("framegen probe: invalid shader override %s",key); return VK_NULL_HANDLE; }
+            code = probe_code.data(); bytes = probe_code.size()*4;
+            log("framegen probe: %s override loaded (%zu bytes)",key,bytes);
+        }
+    }
     VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     mi.codeSize = bytes; mi.pCode = code;
     VkShaderModule module = VK_NULL_HANDLE;
@@ -191,7 +222,7 @@ void pass(VkCommandBuffer cb, VkPipeline program, GpuImage& a, GpuImage& b, GpuI
     p_vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, state.layout, 0, 1, &set, 0, nullptr);
     p_vkCmdPushConstants(cb, state.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 16, pc);
     p_vkCmdDispatch(cb, (out.width+7)/8, (out.height+7)/8, 1);
-    barrier(cb);
+    barrier(cb,true);
 }
 }
 
@@ -282,10 +313,14 @@ struct Probe {
     VkQueryPool timing = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint8_t* mapped = nullptr;
+    VkBuffer flow_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory flow_memory = VK_NULL_HANDLE;
+    uint8_t* flow_mapped = nullptr;
+    std::array<size_t,7> flow_offsets{};
     std::vector<uint8_t> a, b;
     std::vector<std::vector<uint8_t>> expected;
     uint32_t factor = 2;
-    bool recorded = false, still = false, cut = false;
+    bool recorded = false, still = false, cut = false, compare_only = false;
 } probe;
 }
 bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
@@ -305,15 +340,46 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         h = (h^(h>>16))*0x85EBCA6Bu; h = (h^(h>>13))*0xC2B2AE35u; h ^= h>>16;
         return std::array<uint8_t,4>{uint8_t(32+(h&127)),uint8_t(64+((h>>8)&127)),uint8_t(32+((h>>16)&127)),255};
     };
+    const char* pattern = std::getenv("NX_FRAMEGEN_PROBE_PATTERN");
+    const bool diagonal = pattern && (std::strcmp(pattern,"diagonal") == 0 || std::strcmp(pattern,"fractional") == 0);
+    const bool fractional = pattern && std::strcmp(pattern,"fractional") == 0;
+    const bool hud = pattern && std::strcmp(pattern,"hud") == 0;
+    const bool occlusion = pattern && std::strcmp(pattern,"occlusion") == 0;
+    const bool flat_new = pattern && std::strcmp(pattern,"flat-new") == 0;
+    const bool flat_old = pattern && std::strcmp(pattern,"flat-old") == 0;
+    const bool palette = pattern && std::strcmp(pattern,"palette") == 0;
+    if (pattern && *pattern && !(diagonal || hud || occlusion || flat_new || flat_old || palette)) {
+        log("framegen probe: unknown picture pattern"); return false;
+    }
+    probe.compare_only = std::getenv("NX_FRAMEGEN_PROBE_COMPARE_ONLY") || flat_new || flat_old || palette;
+    if (pattern && *pattern)
+        log("framegen probe pattern: %s%s",pattern,probe.compare_only ? " (opaque readback only; compare against reference hashes)" : "");
     auto picture = [&](float shift) {
         std::vector<uint8_t> pixels(bytes);
+        const int left = occlusion ? int(width/3)+int(std::lround(shift*2)) : 0;
         for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
-            const float source = float(x)-shift;
+            const float source = float(x)-shift*(fractional ? .84375f : 1.0f);
             const int lo = int(std::floor(source));
             const float f = source-float(lo);
             const auto a = colour(lo,y), b = colour(lo+1,y);
             const size_t p = (size_t(y)*width+x)*4;
-            for (size_t c = 0; c < 4; ++c) pixels[p+c] = uint8_t(std::lround(float(a[c])*(1-f)+float(b[c])*f));
+            if (diagonal) {
+                const float sy = float(y)-shift*(fractional ? .453125f : .5f);
+                const int iy = int(std::floor(sy)); const float fy = sy-float(iy);
+                const auto aa=colour(lo,uint32_t(std::max(0,iy))),ab=colour(lo+1,uint32_t(std::max(0,iy)));
+                const auto ba=colour(lo,uint32_t(std::max(0,iy+1))),bb=colour(lo+1,uint32_t(std::max(0,iy+1)));
+                for (size_t c = 0; c < 4; ++c)
+                    pixels[p+c] = uint8_t(std::lround((float(aa[c])*(1-f)+float(ab[c])*f)*(1-fy)+(float(ba[c])*(1-f)+float(bb[c])*f)*fy));
+            } else {
+                for (size_t c = 0; c < 4; ++c) pixels[p+c] = uint8_t(std::lround(float(a[c])*(1-f)+float(b[c])*f));
+            }
+            if (hud && x < width/3 && y < height/5) {
+                const uint8_t value = x < 2 || y < 2 || x+2 >= width/3 || y+2 >= height/5 ? 16 : 235;
+                pixels[p]=pixels[p+1]=pixels[p+2]=value; pixels[p+3]=255;
+            }
+            if (occlusion && int(x) >= left && int(x) < left+int(width/5) && y >= height/3 && y < height/2) {
+                pixels[p]=0; pixels[p+1]=192; pixels[p+2]=255; pixels[p+3]=255;
+            }
         }
         return pixels;
     };
@@ -324,6 +390,17 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     if (probe.cut) for (size_t at = 0; at < bytes; at += 4) {
         probe.a[at] = probe.a[at+3] = 255; probe.a[at+1] = probe.a[at+2] = 0;
         probe.b[at+2] = probe.b[at+3] = 255; probe.b[at] = probe.b[at+1] = 0;
+    }
+    if (flat_new || flat_old || palette) for (size_t at = 0; at < bytes; at += 4) {
+        if (flat_new) { probe.b[at]=0; probe.b[at+1]=255; probe.b[at+2]=0; probe.b[at+3]=255; }
+        if (flat_old) { probe.a[at]=0; probe.a[at+1]=12; probe.a[at+2]=71; probe.a[at+3]=255; }
+        if (palette) {
+            const unsigned luma=(299u*probe.a[at]+587u*probe.a[at+1]+114u*probe.a[at+2])/1000u;
+            const uint8_t colors[3][3]={{0,12,71},{0,79,39},{201,195,161}};
+            const auto& color=colors[luma<85 ? 0 : luma<170 ? 1 : 2];
+            for (unsigned c=0;c<3;++c) probe.b[at+c]=color[c];
+            probe.b[at+3]=255;
+        }
     }
     for (uint32_t i = 1; i < probe.factor; ++i) {
         if (probe.cut) probe.expected.push_back(i * 2 < probe.factor ? probe.a : probe.b);
@@ -367,6 +444,24 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent = {width,height,1};
         p_vkCmdCopyImageToBuffer(cb,middle->image,middle->layout,probe.buffer,1,&copy);
     }
+    if (std::getenv("NX_FRAMEGEN_PROBE_FLOW_DIGEST")) {
+        for (size_t i=0;i<state.flow.size();++i)
+            probe.flow_offsets[i+1]=probe.flow_offsets[i]+size_t(state.flow[i].width)*state.flow[i].height*4;
+        bi.size=probe.flow_offsets.back();
+        if (p_vkCreateBuffer(device,&bi,nullptr,&probe.flow_buffer) != VK_SUCCESS) return false;
+        p_vkGetBufferMemoryRequirements(device,probe.flow_buffer,&req);
+        ai.allocationSize=req.size;
+        ai.memoryTypeIndex=memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (p_vkAllocateMemory(device,&ai,nullptr,&probe.flow_memory) != VK_SUCCESS ||
+            p_vkBindBufferMemory(device,probe.flow_buffer,probe.flow_memory,0) != VK_SUCCESS ||
+            p_vkMapMemory(device,probe.flow_memory,0,bi.size,0,reinterpret_cast<void**>(&probe.flow_mapped)) != VK_SUCCESS) return false;
+        for (size_t i=0;i<state.flow.size();++i) {
+            auto& field=state.flow[i]; transition(cb,field,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy copy{};copy.bufferOffset=probe.flow_offsets[i];
+            copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={field.width,field.height,1};
+            p_vkCmdCopyImageToBuffer(cb,field.image,field.layout,probe.flow_buffer,1,&copy);
+        }
+    }
     VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     p_vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
@@ -389,7 +484,7 @@ bool framegen_probe_check() {
                 after += std::abs(int(probe.b[i])-int(expected[i]));
             }
             const double channels = double(expected.size()/4*3);
-            const bool pass = opaque && ((probe.still || probe.cut) ? generated==0 : generated < .9*std::min(before,after));
+            const bool pass = opaque && (probe.compare_only || ((probe.still || probe.cut) ? generated==0 : generated < .9*std::min(before,after)));
             if (std::getenv("NX_FRAMEGEN_PROBE_DIGEST")) {
                 uint64_t hash = 0xcbf29ce484222325ull;
                 for (size_t i = 0; i < expected.size(); ++i) hash = (hash ^ actual[i]) * 0x100000001b3ull;
@@ -400,7 +495,20 @@ bool framegen_probe_check() {
             ok = pass && ok;
             log("framegen probe %ux %ux%u %s %zu/%u: error %.3f, input errors %.3f / %.3f: %s",
                 probe.factor,probe.source.width,probe.source.height,probe.cut ? "cut" : probe.still ? "still" : "moving",
-                frame+1,probe.factor,generated/channels,before/channels,after/channels,pass ? "PASS" : "FAIL");
+                frame+1,probe.factor,generated/channels,before/channels,after/channels,pass ? (probe.compare_only ? "READBACK" : "PASS") : "FAIL");
+        }
+        if (probe.flow_mapped) for (size_t field=0;field<state.flow.size();++field) {
+            uint64_t hash=0xcbf29ce484222325ull; bool finite=true;
+            for (size_t b=probe.flow_offsets[field];b<probe.flow_offsets[field+1];++b)
+                hash=(hash^probe.flow_mapped[b])*0x100000001b3ull;
+            for (size_t b=probe.flow_offsets[field];b<probe.flow_offsets[field+1];b+=2) {
+                uint16_t value;std::memcpy(&value,probe.flow_mapped+b,2);
+                finite=finite && (value&0x7c00u)!=0x7c00u;
+            }
+            log("framegen probe flow digest %ux %ux%u %s %zu: %016llx",probe.factor,probe.source.width,probe.source.height,
+                probe.cut ? "cut" : probe.still ? "still" : "moving",field,(unsigned long long)hash);
+            log("framegen probe flow finite %zu: %s",field,finite ? "PASS" : "FAIL");
+            ok=finite && ok;
         }
     } else log("framegen probe: missing interpolated images: FAIL");
     if (probe.recorded && probe.timing) {
@@ -414,6 +522,9 @@ bool framegen_probe_check() {
     if (probe.mapped) p_vkUnmapMemory(vk_device(),probe.memory);
     if (probe.buffer) p_vkDestroyBuffer(vk_device(),probe.buffer,nullptr);
     if (probe.memory) p_vkFreeMemory(vk_device(),probe.memory,nullptr);
+    if (probe.flow_mapped) p_vkUnmapMemory(vk_device(),probe.flow_memory);
+    if (probe.flow_buffer) p_vkDestroyBuffer(vk_device(),probe.flow_buffer,nullptr);
+    if (probe.flow_memory) p_vkFreeMemory(vk_device(),probe.flow_memory,nullptr);
     free_image(probe.source); probe = {};
     return ok;
 }

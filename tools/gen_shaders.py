@@ -20,6 +20,7 @@ root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (sources, header, extra glslc arguments)
 OUTPUTS = [
+    (os.path.join('tests', 'shaders', 'pipeline_draw*.*'), os.path.join('runtime', 'src', 'nvn', 'pipeline_draw_probe_spv.h'), []),
     (os.path.join('runtime', 'shaders', 'framegen', '*.comp'), os.path.join('runtime', 'src', 'nvn', 'framegen_spv.h'), []),
     (os.path.join('runtime', 'shaders', '*.*'), os.path.join('runtime', 'src', 'shaders_spv.h'), []),
     (os.path.join('runtime', 'shaders', 'post', '*.comp'), os.path.join('runtime', 'src', 'nvn', 'post_spv.h'),

@@ -20,7 +20,7 @@
 #include <unordered_map>
 
 #include "nvn_pipeline.h"
-#include "pipeline_blend_key.h"
+#include "pipeline_key.h"
 #include "cache_file.h"
 #include "shader_bundle.h"
 #include "nvn_pipeline_async.h"
@@ -117,7 +117,7 @@ void load_pipeline_keys() {
     const size_t loaded = g_pipeline_key_records.size();
     for (auto& rec : g_pipeline_key_records) {
         rec.key.vs = rec.key.fs = nullptr;  // never trust pointer bytes from disk, even in a versioned local cache
-        canonicalize_pipeline_blend(rec.key);
+        canonicalize_pipeline_key(rec.key);
         if (g_pipeline_key_ids.insert(pipeline_record_id(rec)).second) {
             if (&rec != &g_pipeline_key_records[kept]) g_pipeline_key_records[kept] = rec;
             ++kept;
@@ -126,7 +126,7 @@ void load_pipeline_keys() {
     g_pipeline_key_records.resize(kept);
     if (kept != loaded) {
         g_pipeline_keys_dirty = true;
-        log("nvn/vk: pipeline recipes: %llu equivalent blend-state entries removed, %llu retained",
+        log("nvn/vk: pipeline recipes: %llu equivalent key entries removed, %llu retained",
             (unsigned long long)(loaded - kept), (unsigned long long)kept);
     }
     log("nvn/vk: loaded %llu recorded pipeline recipes from %s", (unsigned long long)g_pipeline_key_records.size(),
@@ -391,7 +391,7 @@ void record_pipeline_key(const PipelineKey& key) {
     if (key.fs) std::copy(std::begin(key.fs->local_size), std::end(key.fs->local_size), rec.fs_local);
     std::memcpy(&rec.key, &key, sizeof key);
     rec.key.vs = rec.key.fs = nullptr;
-    canonicalize_pipeline_blend(rec.key);
+    canonicalize_pipeline_key(rec.key);
     const std::string id = pipeline_record_id(rec);
     if (g_pipeline_key_ids.insert(id).second) {
         g_pipeline_key_records.push_back(rec);
@@ -1075,7 +1075,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     PipelineKey state_key{};
     std::memcpy(&state_key, &key, sizeof key);
     state_key.vs = state_key.fs = nullptr;
-    canonicalize_pipeline_blend(state_key);
+    canonicalize_pipeline_key(state_key);
     std::memcpy(k.b + 32, &state_key, sizeof state_key);
     // A stage that gained an integer texture record has another module (nvn_spirv_int_textures.cpp).
     const uint32_t generations[2] = {int_texture_generation(key.vs), key.fs ? int_texture_generation(key.fs) : 0u};

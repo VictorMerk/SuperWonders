@@ -15,6 +15,7 @@ int main(int argc,char** argv) {
     const bool pipelined=std::stoi(argv[5])!=0;
     nx::lan::SessionOptions config;
     config.port=0; config.players=2; config.key=nx::lan::pairing_key("private-latency-experiment");
+    config.input_lead=pipelined?1:0;
     config.build[0]=42; config.save[0]=7; config.epoch=1700000000; config.seed=42;
     config.timeout=std::chrono::seconds(10);
     std::promise<uint16_t> listening; auto ready=listening.get_future();

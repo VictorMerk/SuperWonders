@@ -42,8 +42,36 @@ class RealtimePatch(unittest.TestCase):
     def test_unexpected_camera_instructions_fail_closed(self):
         module = self.module()
         struct.pack_into("<I", module.image, patch.ASPECT_SITE, 0)
+        before = bytes(module.image)
         with self.assertRaisesRegex(ValueError, "perspective-aspect patch expects game version"):
             patch.patch_wonder_realtime(module)
+        self.assertEqual(bytes(module.image), before)
+        self.assertFalse(hasattr(module, "frame_step_offset"))
+
+    def test_product120_preserves_interleaved_adrp_and_register_setup(self):
+        size = patch.ASPECT_SITE_120 + 0x100
+        module = SimpleNamespace(name="main", build_id=patch.BUILD_120, text=(0, size),
+                                 image=bytearray(size), bss=(size, 0x1200))
+        for at in patch.BRANCHES_120:
+            struct.pack_into('<9I', module.image, at, *patch.ORIGINAL_120)
+        struct.pack_into('<4I', module.image, patch.ASPECT_SITE_120, *patch.ASPECT_ORIGINAL)
+        patch.patch_wonder_realtime(module)
+        for at in patch.BRANCHES_120:
+            words = struct.unpack_from('<9I', module.image, at)
+            self.assertEqual(words[2], patch.ORIGINAL_120[2])
+            self.assertEqual(words[4:7], patch.ORIGINAL_120[4:7])
+            self.assertEqual(words[1], 0xBD400100)
+            self.assertEqual(words[3], 0xBD400501)
+        self.assertEqual(module.wonder_version, 'Product.120')
+        self.assertEqual(module.frame_step_offset % 4096, 0)
+
+    def test_unknown_build_is_rejected_before_writing(self):
+        module = self.module()
+        module.build_id = 'unknown'
+        before = bytes(module.image)
+        with self.assertRaisesRegex(ValueError, 'no verified layout'):
+            patch.patch_wonder_realtime(module)
+        self.assertEqual(bytes(module.image), before)
 
     def test_camera_site_outside_text_is_rejected(self):
         module = self.module()

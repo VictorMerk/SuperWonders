@@ -26,7 +26,7 @@ namespace nx {
 
 // Raised whenever the boundary changes: what the generated code calls, these structs, or the layout of CPU. A library
 // built for another version is refused (the program says to build the game code again) rather than run.
-constexpr uint32_t kGameLibAbi = 1;
+constexpr uint32_t kGameLibAbi = 2;
 
 // Both sides check it: an older or newer cpu.h with the same kGameLibAbi still can't load.
 constexpr uint64_t gamelib_layout() {

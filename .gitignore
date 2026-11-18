@@ -30,3 +30,7 @@ nx.log
 
 # Personal strings the release privacy check refuses (tools/pack_release.py): local only, never committed.
 tools/privacy-extra.txt
+
+# Packed game dumps also stay local.
+*.nup
+*.nx

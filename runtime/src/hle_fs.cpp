@@ -371,7 +371,8 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
     const int64_t length = file_io::size(file->f);
     if (length < 0) { c.x[0] = kTargetNotFound; return; }
     st<int64_t>(c.x[0],length);
-    if (g_trace) log("fs: size %s = %lld", file->path.c_str(),(long long)length);
+    if (g_trace || (trace_fs() && file->path.find("ResourceSizeTable.") != std::string::npos))
+        log("fs: size %s = %lld", file->path.c_str(),(long long)length);
     c.x[0] = kOk;
 }
 
@@ -404,7 +405,8 @@ uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
         }
     }
     uint64_t ms = read_ns / 1'000'000;
-    if (g_trace) log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
+    if (g_trace || (trace_fs() && file.path.find("ResourceSizeTable.") != std::string::npos))
+        log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
                      (unsigned long long)n);
     if (trace_fs() && file.path.find(".bwav") != std::string::npos) {  // streamed audio: is it being consumed?
         static std::mutex m;

@@ -28,13 +28,13 @@
 #define _WIN32_WINNT 0x0A00
 #endif
 #include <windows.h>
+#include "user_data_lock.h"
 #include <windowsx.h>
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <xaudio2.h>
 #include <xinput.h>
 #include <SDL3/SDL.h>
-#include "user_data_lock.h"
 
 #define VK_NO_PROTOTYPES
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -59,6 +59,10 @@ namespace nx {
 HWND g_window = nullptr;
 void boot();
 }  // namespace nx
+
+namespace nx::nvn {
+void log_upload_fault_context();
+}
 
 namespace nx::plat {
 
@@ -1119,7 +1123,7 @@ void read_pad(PadState& p) {
         const int source = g_controller_bindings[action].load(std::memory_order_relaxed);
         if (source >= 0 && source < int(physical.size()) && physical[size_t(source)]) nav.buttons |= kPadActionBits[action];
     }
-    const bool menu_open = pc_menu_open() || (overlay::enabled() && overlay::is_open());
+    const bool menu_open = pc_menu_open() || (overlay::enabled() && overlay::wants_keyboard());
     static thread_local input::KeyboardActionState keyboard_state;
     if(menu_open || !g_window || GetForegroundWindow()!=g_window)keyboard_state={};
     if (pc_menu_open()) {
@@ -1155,7 +1159,7 @@ void read_pad(PadState& p) {
         view.buttons |= p.buttons;
         const bool had = view.buttons != 0;
         overlay::filter_pad(view);  // Minus + Plus toggles; while open the menu takes the pad
-        if (overlay::is_open() || (had && view.buttons == 0)) p = {};
+        if (overlay::wants_keyboard() || (had && view.buttons == 0)) p = {};
     }
 }
 
@@ -1339,6 +1343,7 @@ LONG WINAPI crash_handler(EXCEPTION_POINTERS* e) {
     uint64_t info = r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0;
     nx::log("CRASH: exception %08lx at %s (tools/symbolize.py for the exe), data address %llx", r->ExceptionCode,
             host_where(uint64_t(r->ExceptionAddress)).c_str(), (unsigned long long)info);
+    nx::nvn::log_upload_fault_context();
     host_backtrace(*e->ContextRecord);
     dump_guest(nx::current_cpu());
     return EXCEPTION_EXECUTE_HANDLER;

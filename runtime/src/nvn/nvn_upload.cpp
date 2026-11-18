@@ -22,8 +22,35 @@ using namespace nx::vk;
 
 namespace {
 std::atomic<bool> g_texture_cache_on{true};
+
+// Keep plain thread-local metadata for the faulting thread. Unlike full upload tracing,
+// this neither logs on the hot path nor walks memory maps, so it can diagnose timing-sensitive faults.
+struct UploadFaultContext {
+    bool active = false;
+    uint64_t memory = 0, size = 0, pool = 0, offset = 0;
+    uint32_t width = 0, height = 0, depth = 0, target = 0, format = 0, levels = 0, stride = 0, block_height = 0;
+};
+thread_local UploadFaultContext upload_fault;
+struct UploadFaultScope {
+    UploadFaultContext previous = upload_fault;
+    explicit UploadFaultScope(const Texture& t) {
+        upload_fault = {true, t.memory, t.storage_size, t.pool, t.offset,
+            t.width, t.height, t.depth, t.target, t.format, t.levels, t.stride, t.block_height_gobs};
+    }
+    ~UploadFaultScope() { upload_fault = previous; }
+};
 }
 void set_texture_cache(bool enabled) { g_texture_cache_on.store(enabled, std::memory_order_relaxed); }
+
+// Called by the Windows crash handler on the faulting thread; do not look up objects or acquire GPU locks here.
+void log_upload_fault_context() {
+    const auto& f = upload_fault;
+    if (!f.active) return;
+    log("crash texture-source: memory %llx size %llx pool %llx offset %llx shape %ux%ux%u "
+        "target %u format %#x levels %u stride %u block-height %u",
+        (unsigned long long)f.memory, (unsigned long long)f.size, (unsigned long long)f.pool,
+        (unsigned long long)f.offset, f.width, f.height, f.depth, f.target, f.format, f.levels, f.stride, f.block_height);
+}
 
 namespace {
 
@@ -471,6 +498,31 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     img.uploaded = true;
     if (gpu_profile_on()) gpu_profile_mark(cb, "texture uploads");
     if (!t.memory || !t.storage_size) return;
+    UploadFaultScope fault_scope(t);
+    // Metadata only: unlike NX_TRACE_UPLOADS this is safe before touching a suspect source range.
+    static const bool trace_source = std::getenv("NX_TEXTURE_UPLOAD_TRACE") != nullptr;
+    if (trace_source)
+        log("texture-source: memory %llx size %llx pool %llx offset %llx shape %ux%ux%u target %u "
+            "format %#x levels %u stride %u block-height %u image %ux%u layers %u levels %u",
+            (unsigned long long)t.memory, (unsigned long long)t.storage_size,
+            (unsigned long long)t.pool, (unsigned long long)t.offset,
+            t.width, t.height, t.depth, t.target, t.format, t.levels, t.stride, t.block_height_gobs,
+            img.width, img.height, img.layers, img.levels);
+    if (trace_source) {
+        if (auto* pool = get<MemoryPool>(t.pool))
+            log("texture-source-pool: memory %llx size %llx flags %#x mappings %zu",
+                (unsigned long long)pool->memory, (unsigned long long)pool->size, pool->flags, pool->mappings.size());
+        uint64_t cursor = t.memory, end = t.memory + t.storage_size;
+        if (end < cursor) fatal("Texture source range overflow");
+        while (cursor < end) {
+            const auto region = vm_query(cursor);
+            if (!(region.perm & 1) || region.addr + region.size <= cursor)
+                fatal("Texture source unreadable at %llx (region %llx size %llx state %x perm %x)",
+                    (unsigned long long)cursor, (unsigned long long)region.addr,
+                    (unsigned long long)region.size, region.state, region.perm);
+            cursor = std::min(end, region.addr + region.size);
+        }
+    }
     if (std::getenv("NX_TRACE_UPLOADS") && t.storage_size >= (1u << 20)) {
         const uint8_t* m = reinterpret_cast<const uint8_t*>(t.memory);
         size_t nz = 0;

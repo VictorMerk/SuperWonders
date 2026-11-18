@@ -99,6 +99,16 @@ void account(Service& s) {
     s.cmds[51] = [](IpcCtx& c) { push_uid(c); return 0u; };         // TrySelectUserWithoutInteraction
     s.cmds[100] = [](IpcCtx&) { return 0u; };                       // InitializeApplicationInfo (old)
     s.cmds[101] = [](IpcCtx& c) { c.push_object(manager_for_application()); return 0u; };
+    // A cold PC launch has no user context pushed by a previous application.
+    // Product.120 calls PopOpenUsers before opening the preselected user. Its
+    // SDK counts nonzero UIDs in this buffer; empty-success leaves stack bytes
+    // looking like retained accounts and can construct invalid UserHandles.
+    s.cmds[131] = [](IpcCtx& c) {  // ListOpenContextStoredUsers
+        const Buffer out = c.out_buf(0);
+        if (out.addr && out.size) std::memset(reinterpret_cast<void*>(out.addr), 0, out.size);
+        return 0u;
+    };
+    s.cmds[130] = [](IpcCtx&) { return 0xD07Cu; };  // LoadOpenContext: no retained account context
     s.cmds[140] = [](IpcCtx&) { return 0u; };  // InitializeApplicationInfo
     s.cmds[141] = [](IpcCtx& c) { write_uid_list(c); return 0u; };  // ListQualifiedUsers (SDK 16)
     s.cmds[160] = [](IpcCtx&) { return 0u; };                       // InitializeApplicationInfoV2 (SDK 16)

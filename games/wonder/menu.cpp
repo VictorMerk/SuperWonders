@@ -23,6 +23,7 @@
 #include <nx/runtime.h>
 
 #include "platform.h"
+#include "version.h"
 
 
 namespace nx::wonder {
@@ -102,6 +103,18 @@ void install(Hook& h) {
 
 void menu_init() {
     if (plat::setting("quit_game") == "0") return;  // NX_QUIT_GAME=0: the game's menus as they are
+    if (source_version() == Version::Product120) {
+        // From the Product.120 enum registration at main+0x586064, not a
+        // guessed delta from 1.0.0. Title update identified by its waiting-state code.
+        g_pause.offset = 0x1d3415c;
+        g_pause.code[7] = 0x940016e4;
+        g_title.offset = 0x1d2519c;
+        g_title.code[0] = 0x9000d4c8;
+        g_title.code[1] = 0xf9431908;
+    } else if (source_version() != Version::Original100) {
+        log("menu: source build is unknown; no version-specific menu hooks installed");
+        return;
+    }
     install(g_pause);
     install(g_title);
 }

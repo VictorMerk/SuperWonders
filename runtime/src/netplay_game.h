@@ -16,6 +16,7 @@ struct LobbyRequest {
     uint16_t port = 27846;
     uint8_t players = 2;
     bool pipeline = false;
+    uint8_t frame_rate = 60;
 };
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 // Development opt-in. Transport success alone does not establish simulation sync.
@@ -27,7 +28,10 @@ void next_frame();
 uint64_t seed();
 uint64_t epoch();
 uint32_t local_player();
+uint32_t simulation_rate();
+bool player_probe_ready();
 TimingSnapshot timing();
+PeerFrameTiming peer_timing(uint32_t player);  // frame time outside LAN wait, including pacing/render/scheduling
 void flush_diagnostics() noexcept;
 void set_tick_seed_filter(TickSeedFilter);
 uint64_t guest_tick(uint64_t caller,uint64_t real_tick);
@@ -45,7 +49,10 @@ inline void next_frame() {}
 inline uint64_t seed() { return 0; }
 inline uint64_t epoch() { return 0; }
 inline uint32_t local_player() { return 0; }
+inline uint32_t simulation_rate() { return 60; }
+inline bool player_probe_ready() { return false; }
 inline TimingSnapshot timing() { return {}; }
+inline PeerFrameTiming peer_timing(uint32_t) { return {}; }
 inline void flush_diagnostics() noexcept {}
 inline void set_tick_seed_filter(TickSeedFilter) {}
 inline uint64_t guest_tick(uint64_t,uint64_t real_tick) { return real_tick; }

@@ -144,6 +144,12 @@ Frame traces also append `present_pace_requested_ms` and `present_pace_actual_ms
 
 The reporter sums both values when reconstructing original-picture intervals. Only actual time beyond the requested duration can contribute a `present_pace_oversleep` label; an intentional long wait is not automatically a hitch cause. This is measured wait correlation, not proof of an OS timer defect. Older traces without these fields remain supported, and their unknown hitches cannot be retrospectively attributed.
 
+## Driver pipeline-cache export diagnostics
+
+`NX_PIPELINE_CACHE_TRACE=1` logs each driver cache-size query with its revision, size and elapsed time. It also logs periodic polls skipped after an unchanged-size observation. This is optional background-export logging, separate from frame-trace attribution. A long query can correlate with a hitch without establishing that it blocked the presentation thread.
+
+Successful same-size observations suppress further periodic queries until a pipeline changes the cache. They still owe a forced shutdown save, because serialized size alone cannot establish that the bytes are unchanged. Failed size queries, snapshots and file commits remain retryable; changes arriving during a successful save remain pending. Shutdown waits for the background writer before deciding whether a final export is owed.
+
 ## Rules
 
 - Two runs per scenario at least; compare medians.

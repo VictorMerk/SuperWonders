@@ -1,4 +1,5 @@
 #include "pipeline_cache_data.h"
+#include "pipeline_cache_progress.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -7,6 +8,31 @@ void check(bool ok, const char* message) {
 }
 int main() {
     using namespace nx::nvn;
+    PipelineCacheProgress progress;
+    check(!progress.dirty() && !progress.periodic_due(), "loaded cache needs no export");
+    progress.changed();
+    const auto first = progress.revision();
+    check(progress.periodic_due(), "new pipelines need a periodic inspection");
+    progress.not_grown(first);
+    for (int poll = 0; poll < 1000; ++poll)
+        check(!progress.periodic_due() && progress.dirty(), "same-size cache skips unchanged polls but still owes shutdown save");
+    progress.failed();
+    check(progress.periodic_due(), "failed forced export remains retryable");
+    progress.not_grown(first);
+    progress.changed();
+    check(progress.periodic_due(), "same-size observation cannot hide later mutations");
+    const auto second = progress.revision();
+    progress.changed();  // a compiler worker finishes while the driver snapshot is being read
+    progress.saved(second);
+    check(progress.dirty() && progress.periodic_due(), "concurrent mutation survives successful save");
+    const auto third = progress.revision();
+    progress.not_grown(third);
+    check(progress.dirty() && !progress.periodic_due(), "new no-growth observation defers only periodic polling");
+    progress.saved(third);
+    check(!progress.dirty() && !progress.periodic_due(), "successful forced save settles current revision");
+    progress.changed();
+    progress.failed();
+    check(progress.periodic_due(), "failed size/snapshot/file export retries without another mutation");
     VkPhysicalDeviceProperties gpu{};
     gpu.vendorID = 0x1002; gpu.deviceID = 0x67df; gpu.pipelineCacheUUID[0] = 42;
     VkPipelineCacheHeaderVersionOne header{sizeof header, VK_PIPELINE_CACHE_HEADER_VERSION_ONE, gpu.vendorID, gpu.deviceID, {42}};

@@ -11,6 +11,7 @@
 namespace nx::nvn {
 
 struct GpuImage {
+    bool uw = false;  // The host image belongs to an ultrawide render target.
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint64_t allocation_size = 0;  // Vulkan allocation size for VRAM diagnostics
@@ -59,13 +60,29 @@ void set_fsr(bool on, float sharpness_stops);
 bool fsr_active();
 // Upscales `src` into swapchain image `dst` (left in TRANSFER_DST_OPTIMAL) when FSR is on and `src` is smaller than
 // `extent`; false otherwise (the caller blits).
-bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D extent, const int32_t* crop);
+bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D extent, const int32_t* crop, VkOffset2D offset = {});
+void set_preserve_aspect(bool preserve);
+bool preserve_aspect();
+void set_texture_cache(bool enabled);  // bounded disk cache for the low-VRAM ASTC-to-BC3 conversion
+bool texture_conversion_probe();  // original ASTC blocks; uncached/cold/warm BC3 bytes must match exactly
 GpuImage* fsr_output();  // the last upscaled image, for frame dumps with NX_DUMP_FSR=1 (else null)
 void fsr_release();      // the swapchain goes away
 // nvn_fxaa.cpp: FXAA on the presented image (NX_FXAA, the overlay menu's Anti-aliasing setting).
 void set_fxaa(bool on);
 GpuImage* fxaa_record(VkCommandBuffer cb, GpuImage& src);  // the anti-aliased image, or null (off, or not RGBA8)
 void fxaa_release();
+// Optional 2x..8x picture-based interpolation. Called under the GPU lock.
+void set_framegen(bool on, int multiplier = 2);
+void set_render_ahead(int pictures);  // 1 low latency, 2 balanced, drained on changes
+bool framegen_enabled();
+struct FramegenFrames {
+    GpuImage* images[8]{};  // chronological intermediates, then the current original
+    uint32_t count = 0;
+};
+bool framegen_record(VkCommandBuffer cb, GpuImage& src, const int32_t* crop, FramegenFrames& frames);
+void framegen_release(bool destroy_pipelines = false);
+bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant);
+bool framegen_probe_check();
 // nvn_sampler.cpp: the player's anisotropic filtering (0 the game's, 2..16); read at the first sampler (a restart).
 void set_anisotropy(int level);
 // The player's VSync (0 On: FIFO, 1 Fast: MAILBOX else IMMEDIATE, 2 Adaptive: FIFO_RELAXED, 3 Off: IMMEDIATE);
@@ -96,7 +113,8 @@ GpuImage* latest_overlapping_shadow_image(uint64_t texture, GpuImage* image);
 // NX_1D_IMAGES=1 (bisecting, nvn_pipeline.cpp): NVN 1D and 1D-array textures as Vulkan 1D images, the old way. By
 // default they are 2D / 2D-array images of height 1, which the translated shaders (1D sampled as 2D) can view (G8).
 bool vk_1d_images();
-void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to);
+// synchronize also orders repeated accesses when the layout already matches.
+void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to, bool synchronize = false);
 // nvn_present.cpp: the window texture drawn into the swapchain (rotated, fit, alpha 1) instead of blitted.
 bool present_pass_wanted();
 bool present_pass_targets(VkFormat format, const std::vector<VkImage>& images, VkExtent2D extent,
@@ -218,6 +236,7 @@ void prep_progress(uint64_t done, uint64_t total, bool visible, int kind);
 // Before the game runs (the launcher): Vulkan started if it isn't yet, then one frame of the overlay alone presented
 // (a cleared image with the overlay's screen on top). False: no device or no overlay.
 bool present_ui_frame();
+bool presentation_probe();  // original synthetic picture through the real PC output path
 bool debug_snapshots_pending();  // NX_SNAP_*: this submit recorded snapshots (it is then waited for)
 
 // nvn_draw.cpp: replays one draw-related command; ends the render pass it may have open when asked.

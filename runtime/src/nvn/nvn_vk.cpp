@@ -21,10 +21,15 @@
 #include <vector>
 
 #include "nvn_vk.h"
+#include "present_geometry.h"
+#include "nvn_ultrawide.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
 #include "nvn_shader_prepare.h"
 #include "platform.h"
+#include "frametrace.h"
+#include "nvn_draw_state.h"
+#include "controllers.h"
 
 #include <nx/game.h>
 
@@ -329,6 +334,7 @@ bool init() {
 void* g_window = nullptr;
 uint64_t g_window_gen = 0;
 std::atomic<int> g_vsync_wanted{1};  // set_vsync; the swapchain is re-made when it differs from g_vsync_made
+std::atomic<bool> g_preserve_aspect{true};
 int g_vsync_made = -1;
 
 int vsync_mode() {
@@ -374,6 +380,7 @@ bool make_swapchain() {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
     }
@@ -476,6 +483,8 @@ bool make_swapchain() {
 }  // namespace
 
 void set_vsync(int mode) { g_vsync_wanted.store(mode < 0 || mode > 3 ? 1 : mode); }
+void set_preserve_aspect(bool preserve) { g_preserve_aspect.store(preserve, std::memory_order_relaxed); }
+bool preserve_aspect() { return g_preserve_aspect.load(std::memory_order_relaxed); }
 
 void flush_pipeline_cache() {
     std::lock_guard<std::recursive_mutex> lock(g_gpu);
@@ -682,8 +691,11 @@ void gpu_submit(const std::vector<std::shared_ptr<CmdList>>& lists, std::shared_
     draw_end_rendering(g_cb);
     const FrameTimes f1 = frame_times();  // the first part's submit and ring waits are not replay time
     g_timing.submits++;
-    g_timing.replay_ns += plat::monotonic_ns() - t0 - (f1.encode_ns - f0.encode_ns) - (f1.fence_ns - f0.fence_ns);
+    const uint64_t replay_ns = plat::monotonic_ns() - t0 - (f1.encode_ns - f0.encode_ns) - (f1.fence_ns - f0.fence_ns);
+    g_timing.replay_ns += replay_ns;
+    ft::add(ft::kReplayNs,replay_ns);
     g_timing.upload_bytes += async ? frame_upload_used() : g_upload_used;
+    ft::add(ft::kUploadBytes,async ? frame_upload_used() : g_upload_used);
     gpu_profile_mark(g_cb, "end");
     if (async)  // the profile, zero-draw queries and snapshots read this submit's results right below: waited for
         frame_submit(VK_NULL_HANDLE, VK_NULL_HANDLE, draw_take_write_backs(),
@@ -707,7 +719,22 @@ void present_headless(uint64_t texture) {
     if (std::getenv("NX_DRAW_STATS") && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
     if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
     if (std::getenv("NX_DRAW_STATS") && presents % 300 == 0) zero_draws_log();
-    if (!frame_dump_due(presents)) return;
+    const bool due = frame_dump_due(presents);
+    if (framegen_enabled() && src && src->layout != VK_IMAGE_LAYOUT_UNDEFINED && begin()) {
+        FramegenFrames frames;
+        const bool made = framegen_record(g_cb,*src,nullptr,frames);
+        GpuImage* shown = made ? frames.images[std::getenv("NX_DUMP_FRAMEGEN") ? 0 : frames.count-1] : src;
+        bool dump = false;
+        if (due) {
+            transition(g_cb,*shown,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            dump = frame_dump_record(g_cb,*shown);
+        }
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},dump);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        if (dump) frame_dump_write(*shown,presents);
+        return;
+    }
+    if (!due) return;
     if (src && src->layout != VK_IMAGE_LAYOUT_UNDEFINED && begin()) {
         GpuImage* shown = src;  // NX_PRESENT_TEST: what the present pass would put on a display (nvn_present.cpp)
         if (GpuImage* test = present_pass_test_target(); test && present_pass_record(g_cb, *src, nullptr, 0))
@@ -780,7 +807,16 @@ static void present_overlay_frame() {
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
     r = p_vkQueuePresentKHR(g_queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) make_swapchain();
+    // Launcher/settings presentations must follow window resizing just as gameplay does.
+    // Some drivers keep presenting the old extent with SUBOPTIMAL rather than OUT_OF_DATE.
+    bool remake=r==VK_ERROR_OUT_OF_DATE_KHR;
+    if(r==VK_SUBOPTIMAL_KHR) {
+        VkSurfaceCapabilitiesKHR caps{};
+        p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_physical,g_surface,&caps);
+        remake=caps.currentExtent.width!=g_sc_current.width || caps.currentExtent.height!=g_sc_current.height ||
+            (present_pass_wanted() && !present_pass_failed() && caps.currentTransform!=g_sc_transform);
+    }
+    if(remake)make_swapchain();
 }
 
 void prep_progress(uint64_t done, uint64_t total, bool visible, int kind) {
@@ -794,6 +830,249 @@ void prep_progress(uint64_t done, uint64_t total, bool visible, int kind) {
     present_overlay_frame();
 }
 
+bool framegen_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    bool ok = true;
+    for (uint32_t variant = 0; variant < 24; ++variant) {
+        if (!begin()) return false;
+        const bool recorded = framegen_probe_record(g_cb, variant);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        ok = framegen_probe_check() && recorded && ok;
+    }
+    framegen_release(true);
+    return ok;
+}
+
+bool overlay_input_probe() {
+    if (!present_ui_frame()) return false;  // real ImGui context and Vulkan swapchain
+    const auto startup = overlay::current_settings();
+    overlay::mark_game_started();
+    bool ok = !overlay::is_open();
+    overlay::key_event(27,overlay::KeyEscape,true);
+    ok = overlay::is_open() && ok;
+    plat::PadState pad{}; pad.buttons = plat::kA;
+    overlay::filter_pad(pad);
+    ok = pad.buttons == 0 && ok;  // the game must not receive menu input
+    if (!present_ui_frame()) return false;
+    overlay::key_event(27,overlay::KeyEscape,false);
+    overlay::key_event(27,overlay::KeyEscape,true);
+    if (!present_ui_frame()) return false;
+    ok = !overlay::is_open() && ok;
+    overlay::key_event(0,overlay::KeyF1,true);
+    ok = overlay::is_open() && ok;
+    pad = {}; overlay::filter_pad(pad);  // release previous controller state
+    pad.buttons = plat::kPlus|plat::kMinus; overlay::filter_pad(pad);
+    ok = !overlay::is_open() && pad.buttons == 0 && ok;
+    overlay::filter_pad(pad);
+    pad.buttons = plat::kPlus|plat::kMinus; overlay::filter_pad(pad);
+    ok = overlay::is_open() && pad.buttons == 0 && ok;
+    if (!present_ui_frame()) return false;
+    overlay::key_event(27,overlay::KeyEscape,true);
+    if (!present_ui_frame()) return false;
+    ok = !overlay::is_open() && ok;
+    log("overlay input probe: Esc open/close, F1, controller chord, input isolation: %s",ok ? "PASS" : "FAIL");
+    auto pending = startup;
+    pending.internal_resolution = (startup.internal_resolution + 1) % 7;
+    pending.low_vram_profile = !startup.low_vram_profile;
+    pending.language = 2;
+    overlay::apply_settings(pending, false);
+    overlay::open_settings();
+    // A stable native capture exercises the pending-restart banner and its page layout.
+    for (int frame = 0; frame < 30; ++frame) if (!present_ui_frame()) return false;
+    overlay::apply_settings(startup, false);
+    for (int frame = 0; frame < 30; ++frame) if (!present_ui_frame()) return false;
+    overlay::toggle();
+    // Verify the platform's applied bindings, not just the menu's requested
+    // settings. In particular, Win32 used to clamp Circle-confirm back to the
+    // Nintendo preset even though the shared settings correctly retained 2.
+    for (int preset : {0, 1, 2}) {
+        auto requested = startup;
+        requested.controller_preset = preset;
+        requested.controller_custom_mask = 0;
+        overlay::apply_settings(requested, false);
+        bool applied = false;
+        const auto deadline = plat::monotonic_ns() + 1'000'000'000ull;
+        do {
+            if (!present_ui_frame()) return false;
+            applied = true;
+            for (size_t action = 0; action < 4; ++action)
+                applied = applied && plat::current_controller_binding(action) == overlay::default_controller_binding(action, preset);
+            if (applied) break;
+            plat::sleep_ns(1'000'000);
+        } while (plat::monotonic_ns() < deadline);
+        log("controller bridge probe preset %d: %s", preset, applied ? "PASS" : "FAIL");
+        ok = applied && ok;
+    }
+    overlay::apply_settings(startup, false);
+    if (!present_ui_frame()) return false;
+    return ok;
+}
+
+bool presentation_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!present_ui_frame()) return false;
+    auto settings = overlay::current_settings();
+    settings.metrics_enabled = false;
+    overlay::apply_settings(settings, false);
+    std::array<uint8_t,32*18*4> texels{};
+    constexpr uint64_t id = 0x7fff00000400ull;
+    auto& texture = make<Texture>(id);
+    texture.target = 1; texture.format = 0x25; texture.flags = 8;
+    texture.width = 32; texture.height = 18; texture.depth = texture.levels = texture.samples = 1;
+    texture.memory = reinterpret_cast<uintptr_t>(texels.data()); texture.storage_size = texels.size();
+    GpuImage* image = image_of(id);
+    if (!image || !begin(true)) return false;
+    transition(g_cb, *image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    const VkClearColorValue colour{{0.25f, 0.5f, 0.75f, 1}};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    p_vkCmdClearColorImage(g_cb, image->image, image->layout, &colour, 1, &range);
+    if (async_gpu()) frame_submit(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, true);
+    else end_and_wait(VK_NULL_HANDLE, VK_NULL_HANDLE);
+    set_framegen(false);
+    for (bool fit : {true, false}) for (bool fsr : {false, true}) for (bool aa : {false, true}) {
+        set_preserve_aspect(fit); set_fsr(fsr, 1); set_fxaa(aa);
+        gpu_present(id, nullptr, 1);
+        log("presentation probe: fit %d FSR %d FXAA %d recorded at %ux%u", int(fit), int(fsr), int(aa),
+            g_sc_extent.width, g_sc_extent.height);
+    }
+    set_preserve_aspect(true); set_fsr(true, 1); set_fxaa(false);
+    const int32_t cropped[] = {8, 0, 16, 18}, invalid[] = {-1, 0, 32, 18};
+    gpu_present(id, cropped, 1);
+    gpu_present(id, invalid, 1);
+    p_vkDeviceWaitIdle(g_device);
+    destroy(id); drain_objects();
+    log("presentation probe: 10 host outputs recorded; verify native readback pictures separately");
+    return true;
+}
+
+bool counter_clear_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    // Original synthetic storage, registered exactly like an NVN pool/texture.
+    // No driver getters or game/firmware library are needed for this test.
+    alignas(64) std::array<uint64_t,8> counters{};
+    std::array<uint8_t,16*16*4> texels{};
+    constexpr uint64_t pool_id = 0x7fff00000100ull, texture_id = 0x7fff00000200ull;
+    auto& pool = make<MemoryPool>(pool_id);
+    pool.memory = reinterpret_cast<uintptr_t>(counters.data());
+    pool.size = sizeof counters; pool.gpu = gpu_alloc(pool.size); pool_register(&pool);
+    constexpr uint64_t alias_id = 0x7fff00000300ull;
+    auto& alias = make<MemoryPool>(alias_id);
+    alias.memory = pool.memory; alias.size = pool.size; alias.gpu = gpu_alloc(alias.size); pool_register(&alias);
+    auto& texture = make<Texture>(texture_id);
+    texture.target = 1; texture.format = 0x25; texture.flags = 8;
+    texture.width = texture.height = 16; texture.depth = texture.levels = texture.samples = 1;
+    texture.memory = reinterpret_cast<uintptr_t>(texels.data()); texture.storage_size = texels.size();
+    GpuImage* image = image_of(texture_id);
+    if (!image) return false;
+    constexpr uint64_t small_id = 0x7fff00000500ull;
+    auto& small = make<Texture>(small_id);
+    small.target = 1; small.format = 0x25; small.flags = 8;
+    small.width = small.height = 8; small.depth = small.levels = small.samples = 1;
+    if (!image_of(small_id)) return false;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    uint8_t* mapped = nullptr;
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = texels.size(); bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (p_vkCreateBuffer(g_device,&bi,nullptr,&buffer) != VK_SUCCESS) return false;
+    VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,buffer,&req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (p_vkAllocateMemory(g_device,&ai,nullptr,&memory) != VK_SUCCESS ||
+        p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
+        p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;
+    bool ok = true;
+    for (unsigned variant = 0; variant < 9; ++variant) {
+        if (!begin(true)) { ok = false; break; }
+        draw_begin_submit();
+        counters = {}; counters[0] = variant == 5 ? 0x100000000ull : 1;
+        CmdList list;
+        auto enable = [&](bool on) { Cmd c{Cmd::SetRenderEnable}; c.n = on; list.cmds.push_back(c); };
+        auto clear = [&](bool red) {
+            Cmd c{Cmd::ClearColor}; c.mask = 15; c.f[red ? 0 : 2] = c.f[3] = 1;
+            list.cmds.push_back(c);
+        };
+        auto condition = [&](uint32_t mode) {
+            Cmd c{Cmd::SetRenderEnableConditional}; c.n = mode; c.a[0] = variant == 6 ? alias.gpu : pool.gpu; list.cmds.push_back(c);
+        };
+        auto report = [&] { Cmd c{Cmd::ReportCounter}; c.n = 16; c.a[0] = pool.gpu; list.cmds.push_back(c); };
+        enable(true);
+        Cmd target{Cmd::SetRenderTargets}; target.n = 1; target.a[0] = texture_id; list.cmds.push_back(target);
+        clear(false);  // blue baseline
+        bool red = false;
+        if (variant == 0) { report(); condition(1); clear(true); }
+        if (variant == 1) { condition(1); clear(true); report(); clear(false); red = true; }
+        if (variant == 2) { enable(false); clear(true); }
+        if (variant == 3) {
+            report();
+            Cmd update{Cmd::UpdateUniformBuffer}; update.a[0] = pool.gpu; update.a[1] = 32;
+            list.blobs.emplace_back(sizeof(uint64_t)); const uint64_t one = 1;
+            std::memcpy(list.blobs.back().data(),&one,sizeof one); list.cmds.push_back(update);
+            condition(1); clear(true); red = true;
+        }
+        if (variant == 4) { report(); condition(0); clear(true); red = true; }
+        if (variant == 5) { condition(0); clear(true); }
+        if (variant == 6) { report(); condition(1); clear(true); }
+        enable(true);
+        Targets targets;
+        replay_list(g_cb,targets,list,0);
+        if (variant == 7) {
+            draw_end_rendering(g_cb);
+            // Two overlapping WriteTexels updates in one batch: the later red
+            // pixels must win, even while both copies use TRANSFER_DST.
+            for (bool is_red : {false, true}) {
+                Texture::TexelWrite write{}; write.w = write.h = 16; write.d = 1;
+                write.data.resize(texels.size());
+                for (size_t at = 0; at < write.data.size(); at += 4)
+                    write.data[at + (is_red ? 0 : 2)] = write.data[at + 3] = 255;
+                texture.writes.push_back(std::move(write));
+            }
+            texture.has_writes = true;
+            ensure_contents(g_cb, texture_id);
+            red = true;
+        }
+        if (variant == 8) {
+            draw_end_rendering(g_cb);
+            Targets unequal; unequal.color_count = 2;
+            unequal.colors[0] = texture_id; unequal.colors[1] = small_id;
+            pass_begin(g_cb, unequal);
+            Cmd full_clear{Cmd::ClearColor}; full_clear.mask = 15; full_clear.f[0] = full_clear.f[3] = 1;
+            // A 16x16 clear cannot fit the shared 8x8 render area: this takes
+            // the real transfer-clear fallback, then reloads the GENERAL image.
+            draw_clear(g_cb, unequal, full_clear);
+            pass_begin(g_cb, unequal);
+            red = true;
+        }
+        // No CPU-visible timestamp completion while the commands are only encoded.
+        bool pass = variant == 5 ? counters[0] == 0x100000000ull : counters[0] == 1;
+        draw_end_rendering(g_cb);
+        transition(g_cb,*image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy copy{}; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        copy.imageExtent = {16,16,1};
+        p_vkCmdCopyImageToBuffer(g_cb,image->image,image->layout,buffer,1,&copy);
+        VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,draw_take_write_backs(),true);
+        else { end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE); draw_end_submit(); }
+        for (size_t p = 0; p < texels.size(); p += 4)
+            pass = pass && mapped[p] == (red ? 255 : 0) && mapped[p+1] == 0 && mapped[p+2] == (red ? 0 : 255) && mapped[p+3] == 255;
+        if (variant == 0 || variant == 1 || variant == 4 || variant == 6) pass = pass && counters[0] == 0;
+        if (variant == 3) pass = pass && counters[0] == 1;
+        log("counter/clear GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");
+        ok = pass && ok;
+    }
+    p_vkDeviceWaitIdle(g_device);
+    p_vkUnmapMemory(g_device,memory); p_vkDestroyBuffer(g_device,buffer,nullptr); p_vkFreeMemory(g_device,memory,nullptr);
+    pool_unregister(&pool); pool_unregister(&alias);
+    destroy(texture_id); destroy(small_id); destroy(pool_id); destroy(alias_id); drain_objects();
+    return ok;
+}
+
 bool present_ui_frame() {
     std::lock_guard lk(g_gpu);
     drain_objects();
@@ -802,7 +1081,7 @@ bool present_ui_frame() {
     return true;
 }
 
-void gpu_present(uint64_t texture, const int32_t* crop) {
+void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, uint64_t input_sample_ns) {
     plat::perf_hint_thread();  // the thread that presents takes part in the frame (perf_hint.cpp)
     std::lock_guard lk(g_gpu);
     PresentTimer timer;
@@ -814,7 +1093,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         prepare_recorded_pipelines();
     }
     if (!async_gpu() || pipelined()) free_retired_images(async_gpu() ? frame_completed() : UINT64_MAX);
-    if (plat::headless()) return present_headless(texture);
+    if (plat::headless() && !std::getenv("NX_HEADLESS_PRESENT")) return present_headless(texture);
     if (plat::window_minimized()) return;
     if (plat::window_generation() != g_window_gen) {  // Android: a new window after home or the lock screen
         if (async_gpu()) frame_wait_all();
@@ -823,6 +1102,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         if (g_swapchain) p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
         log("nvn/vk: new window: surface and swapchain re-made");
@@ -835,6 +1115,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         overlay::release();
         fsr_release();
         fxaa_release();
+        framegen_release();
         p_vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
         g_swapchain = VK_NULL_HANDLE;
         log("nvn/vk: VSync changed: swapchain re-made");
@@ -842,7 +1123,9 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
     if (!g_swapchain && !make_swapchain()) return;
     uint32_t index = 0;
     VkSemaphore acquired = async_gpu() ? frame_acquire_semaphore() : g_acquired;
+    uint64_t acquire_from = plat::monotonic_ns();
     VkResult r = p_vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index);
+    uint64_t acquire_ns = plat::monotonic_ns()-acquire_from;
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         make_swapchain();
         return;
@@ -860,12 +1143,56 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
             p_vkCmdClearColorImage(g_cb, src->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &v, 1, &rr);
         }
     }
+    const uint64_t started = plat::monotonic_ns();
+    const uint64_t interval_ns = game_present_period_ns(present_interval);
+    static uint64_t last_original_ns = 0;
+    // Include replay/flow work in the display period. Starting a new half-period
+    // sleep after that work makes its cost accumulate on top of the game cadence.
+    const uint64_t base_ns = last_original_ns && started-last_original_ns < interval_ns*3
+        ? last_original_ns : started;
+    FramegenFrames frames;
+    if (src && framegen_record(g_cb, *src, crop, frames)) {
+        src = frames.images[0];
+        crop = nullptr;  // history snapshots already include the scaled crop
+    }
+    const int display_count = frames.count ? int(frames.count) : 1;
+    for (int display = 0; display < display_count; ++display) {
+        if (display) {
+            acquired = async_gpu() ? frame_acquire_semaphore() : g_acquired;
+            acquire_from = plat::monotonic_ns();
+            r = p_vkAcquireNextImageKHR(g_device,g_swapchain,UINT64_MAX,acquired,VK_NULL_HANDLE,&index);
+            acquire_ns = plat::monotonic_ns()-acquire_from;
+            if (r == VK_ERROR_OUT_OF_DATE_KHR) { make_swapchain(); break; }
+            if (!check(r,"vkAcquireNextImageKHR (generated frame)") || !begin()) break;
+            src = frames.images[display];
+            dst = {};
+            dst.image = g_sc_images[index]; dst.format = g_sc_format;
+        }
     bool drawn = src && present_pass_record(g_cb, *src, crop, index);  // nvn_present.cpp: leaves dst PRESENT_SRC
     // FSR 1 when the image is smaller than the window (nvn_fsr.cpp): leaves dst TRANSFER_DST, as the blit does.
     // FXAA first when on (nvn_fxaa.cpp): its output stands in for the game's image from here.
     GpuImage* in = src && !drawn ? fxaa_record(g_cb, *src) : nullptr;
     if (!in) in = src;
-    const bool upscaled = in && !drawn && fsr_record(g_cb, *in, dst, g_sc_extent, crop);
+    PictureRect box{0, 0, g_sc_extent.width, g_sc_extent.height};
+    if (in && !drawn) {
+        uint32_t width = in->logical_width ? in->logical_width : in->width;
+        uint32_t height = in->logical_height ? in->logical_height : in->height;
+        if (valid_picture_crop(crop, width, height)) width = uint32_t(crop[2]), height = uint32_t(crop[3]);
+        if (in->uw) width = uw_widen(width);
+        box = fit_picture(width, height, g_sc_extent.width, g_sc_extent.height, preserve_aspect());
+        if (box.width != g_sc_extent.width || box.height != g_sc_extent.height) {
+            transition(g_cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            const VkClearColorValue black{{0, 0, 0, 1}};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            p_vkCmdClearColorImage(g_cb, dst.image, dst.layout, &black, 1, &range);
+            VkMemoryBarrier ordered{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            ordered.srcAccessMask = ordered.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            p_vkCmdPipelineBarrier(g_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   0, 1, &ordered, 0, nullptr, 0, nullptr);
+        }
+    }
+    const bool upscaled = in && !drawn && fsr_record(g_cb, *in, dst, {box.width, box.height}, crop,
+                                                   {int32_t(box.x), int32_t(box.y)});
     if (in && !drawn && !upscaled) transition(g_cb, *in, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     if (!drawn) transition(g_cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     if (in && !drawn && !upscaled) {
@@ -875,8 +1202,7 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         // nvnWindowSetCrop is in guest pixels; convert its rectangle to the upscaled Vulkan image.
         const uint32_t logical_width = in->logical_width ? in->logical_width : in->width;
         const uint32_t logical_height = in->logical_height ? in->logical_height : in->height;
-        if (crop && crop[2] > 0 && crop[3] > 0 && crop[0] + crop[2] <= int32_t(logical_width) &&
-            crop[1] + crop[3] <= int32_t(logical_height)) {
+        if (valid_picture_crop(crop, logical_width, logical_height)) {
             const float scale_x = float(in->width) / float(logical_width);
             const float scale_y = float(in->height) / float(logical_height);
             const int32_t x0 = int32_t(std::lround(crop[0] * scale_x));
@@ -886,7 +1212,8 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
             blit.srcOffsets[0] = {x0, y0, 0}, blit.srcOffsets[1] = {x1, y1, 1};
         }
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {int32_t(g_sc_extent.width), int32_t(g_sc_extent.height), 1};
+        blit.dstOffsets[0] = {int32_t(box.x), int32_t(box.y), 0};
+        blit.dstOffsets[1] = {int32_t(box.x + box.width), int32_t(box.y + box.height), 1};
         p_vkCmdBlitImage(g_cb, in->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
     }
@@ -894,9 +1221,6 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
     overlay::record(g_cb, index, g_sc_images, g_sc_format, g_sc_extent);  // the F1 menu and metrics (overlay/)
     static uint64_t presents = 0;
     presents++;
-    if (std::getenv("NX_DRAW_STATS") && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
-    if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
-    if (std::getenv("NX_DRAW_STATS") && presents % 300 == 0) zero_draws_log();
     frame_sig_flush(presents);
     const bool due = frame_dump_due(presents);
     GpuImage* shown = src;  // NX_DUMP_FSR: the image as presented (after FXAA and FSR 1)
@@ -929,8 +1253,18 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
+    if (display_count > 1) {
+        const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/uint64_t(display_count);
+        const uint64_t now = plat::monotonic_ns();
+        if (target > now) plat::sleep_ns(target-now);
+    }
+    const uint64_t present_from = plat::monotonic_ns();
     r = p_vkQueuePresentKHR(g_queue, &pi);
+    const uint64_t queue_present_ns = plat::monotonic_ns()-present_from;
+    if (display+1 == display_count) last_original_ns = plat::monotonic_ns();
     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
+    const FrameTimes totals = frame_times();
+    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count);
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
     bool remake = r == VK_ERROR_OUT_OF_DATE_KHR;
@@ -940,7 +1274,16 @@ void gpu_present(uint64_t texture, const int32_t* crop) {
         remake = caps.currentExtent.width != g_sc_current.width || caps.currentExtent.height != g_sc_current.height ||
                  (present_pass_wanted() && !present_pass_failed() && caps.currentTransform != g_sc_transform);
     }
-    if (remake) make_swapchain();
+    if (remake) { make_swapchain(); break; }
+    }  // original and optional generated presentation
+    // Generated pictures must not multiply cache-save frequency or make game
+    // replay/submission statistics appear divided by the interpolation factor.
+    static uint64_t game_presents = 0;
+    ++game_presents;
+    if (std::getenv("NX_DRAW_STATS") && game_presents % (game_presents < 300 ? 60 : 300) == 0) draw_log_stats();
+    if (game_presents % 60 == 0) log_timing(60), gpu_profile_log(60);
+    if (std::getenv("NX_DRAW_STATS") && game_presents % 300 == 0) zero_draws_log();
+    overlay::rendered(plat::monotonic_ns(), display_count > 1);
 }
 
 }  // namespace nx::nvn

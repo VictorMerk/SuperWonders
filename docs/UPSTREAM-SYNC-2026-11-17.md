@@ -1,0 +1,70 @@
+# Official upstream synchronization
+
+The official repository was fetched over HTTPS from `https://github.com/vfjoo888/SuperWonders.git`.
+The reviewed main tip is `19c25c4e5c228720bcefe4823b4ea45d04a86fd1`, including 13 commits absent from the fork at
+`ae02698`. A local backup branch, `backup/pre-upstream-20261117-ae02698`, retains that pre-merge state.
+The merge retains upstream ancestry instead of replacing the fork with a downloaded release.
+
+A final refresh found two additional commits, `974a372` and merge `64bebcc7bf42b31d0b3ee83cb04b4dbcf5b5b084`.
+They are included too, for 15 incoming commits in total. This latest main tip corrects language-service responses
+and expands localized overlay font coverage. Its 16-file diff includes five new/updated Noto font subsets and OFL
+notices. The font files have valid SFNT headers, bounded table directories and expected cmap/head tables; the
+font-coverage check passes for 767 required characters. No host executable or dependency download was added.
+
+## Incoming changes and review
+
+The diff has 45 source/documentation/licence files, with no added host binaries, dependency manifests, Git hooks,
+CI workflows or submodules. Review covered the new layout-generation scripts and their local file publication,
+game/camera hooks, renderer/pipeline changes, startup configuration and setup integration. No added download,
+remote-code execution, credential collection, startup persistence or antivirus-disabling behavior was found.
+This is a scoped source review, not a malware-free guarantee or a full vulnerability audit. After the user's
+recompilation finished, Microsoft Defender custom-scanned copies of 55 changed source files and the newly built
+runtime EXE (10,987,911 bytes total) with remediation disabled: no threats, exit 0. The old full kit was not rescanned.
+The prior r8 scan results are separate evidence and do not certify this changed binary.
+
+Notable incoming behavior: experimental 21:9/32:9 camera/render-target/HUD support, generated wide layouts,
+first-house high-FPS dialogue protection, launcher recipe-cache preservation, reduced periodic draw logging,
+and Linux aspect startup configuration. The Intel depth workaround was added then reverted upstream; the final
+upstream state is retained rather than re-enabling that reverted change.
+
+Ultrawide remains opt-in with original 16:9 as default. Its camera search includes a background raw guest-heap
+scan and writes to matched camera fields; performance, thread safety and scene coverage need focused validation.
+In particular, camera/culling differences with LAN have not been established safe. The feature is not promoted
+to a stable all-course or LAN default simply because it is now in upstream main.
+
+## Preserving the fork
+
+Seven conflicted files were resolved by combining the changes. The merge keeps fixed 60 Hz LAN simulation and
+the native two-instance/save-isolation path; 2x–8x frame generation; capture diagnostics; Fit/Stretch and crop
+validation; texture conversion/cache bounds; targeted upload/clear synchronization; Circle-confirm/Esc controls;
+one-folder setup and literal bracket paths; busy-sidebar scope balancing; FPS/LAN metrics; mod/save/cache UI;
+and experimental audio prefetch off by default.
+
+Additional integration adjustments preserve saved custom window heights in the original profile, respect explicit
+Windows aspect/resolution environment overrides, account for wide source dimensions in the fork's Fit/FSR/blit
+rectangle, feed aspect changes through the shared pending-settings path, and mark aspect resources as requiring
+restart. The new layout-preparation wildcard uses an escaped literal root, and runtime packing retains the added
+ultrawide licence. Generated interpolation images already have physical capture dimensions; they are not widened
+again by blindly inheriting the guest target flag.
+
+## Validation status
+
+Conflict markers and whitespace checks are clear. After the user's first build completed, the merged Windows
+runtime built and all 30 non-GPU CTest targets passed (12.14 seconds). Coverage includes the existing LAN, input,
+cache, shader and file-I/O units; aspect-resource restart tracking; seven literal-path/progress regressions; and
+five synthetic camera/frame-step patch cases. The latter independently decode the ADRP target page and check
+expected instructions, out-of-text rejection, unsupported instruction rejection and untouched SDK modules.
+
+After that language/font merge, the Windows build and all 31 non-GPU CTest targets pass (10.56 seconds), including
+the new settings-service target. The font-coverage check was run separately with the existing bundled Python,
+because the system Python used by CTest lacks FontTools. A second scoped Defender scan of only those 16 new/changed
+files and the updated EXE (10,449,840 bytes total) also reports no threats, exit 0. These checks do not prove native
+glyph appearance, all language flows or GPU/game behavior.
+
+The [setup progress follow-up](SETUP-PROGRESS.md) now identifies reading, analysis and generation, shows actual
+function counts when known, and reserves 99–100% for the final layout preparation rather than jumping backward.
+
+GPU probes and native gameplay/UW/LAN integration checks on this merged build remain deferred while the user's
+game is active. The installed r8 runtime, immutable ZIPs and the brother's current test installation are untouched.
+No merged runtime has been deployed or handed to either LAN PC. A future complete kit must regenerate its kit ID
+and game code because upstream changed the recompiler/camera patch; old r8 results do not validate that new kit.

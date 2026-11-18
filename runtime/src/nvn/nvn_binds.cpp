@@ -11,10 +11,12 @@
 // Only viewport/scissor/depth range 0 are replayed (one viewport).
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "nvn.h"
+#include "kernel.h"
 
 namespace nx::nvn {
 
@@ -26,6 +28,15 @@ void bind_ranges(CPU& c, Cmd::Op op) {
         Cmd cmd{op};
         cmd.i[0] = stage, cmd.i[1] = first + k;
         cmd.a[0] = ld<uint64_t>(c.x[4] + 16ull * k), cmd.a[1] = ld<uint64_t>(c.x[4] + 16ull * k + 8);
+        static int terrain_logs = 0;
+        const char* terrain_trigger = std::getenv("NX_TERRAIN_BIND_TRACE");
+        FILE* terrain_file = terrain_trigger && terrain_logs < 8 && op == Cmd::BindUniformBuffer && stage == 0 && first + k == 4 && cmd.a[1] == 57408 ? std::fopen(terrain_trigger, "rb") : nullptr;
+        if (terrain_file) {
+            std::fclose(terrain_file);
+            ++terrain_logs;
+            log("terrain bind plural: address=%llx size=%llu lr=%s", (unsigned long long)cmd.a[0], (unsigned long long)cmd.a[1], describe(c.x[30]).c_str());
+            backtrace(c);
+        }
         record(c.x[0], cmd);
     }
 }
@@ -122,12 +133,12 @@ void SetRenderEnable(CPU& c) {
         log("nvn: SetRenderEnable(%u) x%llu", cmd.n, (unsigned long long)n);
 }
 
-// SetRenderEnableConditional(cmd, NVNconditionalRenderMode, NVNbufferAddress): rendering on or off from values the
-// GPU wrote (occlusion results). Treated as "on": drawing what might have been culled is only extra work, while
-// staying off after a SetRenderEnable(false) dropped whole passes.
+// Preserve the report comparison until replay; earlier reports and CPU updates
+// in that stream may change its result after this command was recorded.
 void SetRenderEnableConditional(CPU& c) {
-    Cmd cmd{Cmd::SetRenderEnable};
-    cmd.n = 1;
+    Cmd cmd{Cmd::SetRenderEnableConditional};
+    cmd.n = uint32_t(c.x[1]);
+    cmd.a[0] = c.x[2];
     record(c.x[0], cmd);
 }
 

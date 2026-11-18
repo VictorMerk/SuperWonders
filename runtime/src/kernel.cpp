@@ -17,6 +17,7 @@
 
 #include "kernel_state.h"
 #include "platform.h"
+#include "netplay_game.h"
 
 namespace nx {
 
@@ -69,6 +70,12 @@ void notify_all() {
     for (KThread* t : g_sync_waiters) t->cv.notify_one();
 }
 
+void signal_event(const std::shared_ptr<EventState>& state) {
+    std::lock_guard lk(g_k);
+    state->signaled = true;
+    notify_all();
+}
+
 KThread* self_thread() { return t_self; }
 
 uint64_t heap_size() { return g_heap_size.load(std::memory_order_relaxed); }
@@ -106,7 +113,7 @@ static void hle_get_system_tick(CPU& c) {
         }
         t->last_tick_call = plat::monotonic_ns();
     }
-    c.x[0] = system_tick();
+    c.x[0] = lan::guest_tick(c.x[30],system_tick());
 }
 NX_HLE("_ZN2nn2os13GetSystemTickEv", hle_get_system_tick);
 

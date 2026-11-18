@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <filesystem>
+#include <exception>
+#include <cstring>
 
 #include <nx/game.h>
 #include <nx/gamelib.h>
@@ -15,6 +18,11 @@
 #include "launcher/launcher.h"
 #endif
 #include "platform.h"
+#include "nvn/nvn.h"
+#include "nvn/nvn_vk.h"
+#include "overlay/overlay.h"
+#include "shader_bundle.h"
+#include "netplay_game.h"
 
 namespace nx {
 
@@ -140,17 +148,46 @@ NX_HLE("__rtld_fini", rtld_fini);
 NX_HLE("__rtld_mark", rtld_mark);
 NX_HLE("__process_return", process_return);
 
+// The cache contains only player-owned shader translations and remains in the data folder.
+static bool optimize_shader_cache() {
+    const auto root = std::filesystem::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
+    const auto progress = [](uint64_t done, uint64_t total) {
+        std::printf("progress %.6f Optimizing shader loading\n",total ? double(done)/double(total) : 0.0);
+        std::fflush(stdout);
+    };
+    std::string error;
+    bool ok = false;
+    const auto started = plat::monotonic_ns();
+    try { ok = nvn::build_shader_bundle(root,error,progress); }
+    catch (const std::exception& e) { error = e.what(); }
+    log("shader bundle: preparation %s in %.2f s%s%s",ok ? "finished" : "failed",
+        double(plat::monotonic_ns()-started)/1e9,error.empty() ? "" : ": ",error.c_str());
+    if (!error.empty()) std::fprintf(stderr,"%s\n",error.c_str());
+    return ok;
+}
+
 // ---- boot -----------------------------------------------------------------------------------------------------
 
 void boot() {
     if (const char* t = std::getenv("NX_TRACE")) g_trace = *t == '1';
     if (plat::setting("trace") == "1") g_trace = true;
     memory_init();
+    if (std::getenv("NX_FRAMEGEN_PROBE")) plat::exit_process(nvn::framegen_probe() ? 0 : 1);
+    if (std::getenv("NX_OVERLAY_INPUT_PROBE")) plat::exit_process(nvn::overlay_input_probe() ? 0 : 1);
+    if (std::getenv("NX_COUNTER_CLEAR_PROBE")) plat::exit_process(nvn::counter_clear_probe() ? 0 : 1);
+    if (std::getenv("NX_PRESENTATION_PROBE")) plat::exit_process(nvn::presentation_probe() ? 0 : 1);
+    if (std::getenv("NX_TEXTURE_CONVERSION_PROBE")) plat::exit_process(nvn::texture_conversion_probe() ? 0 : 1);
+    const auto args = plat::program_args();
+    if (std::find(args.begin(),args.end(),"--pack-shaders") != args.end())
+        plat::exit_process(optimize_shader_cache() ? 0 : 1);
 #if NX_GAME_LIBRARY
     // The start screen, when the game isn't set up or with --config: after the guest memory is reserved (so nothing it
     // allocates lands there), before the kernel and its watchdog start (the game hasn't, and isn't hung).
     launcher::run();
+    launcher::prepare_ultrawide_layouts();
 #endif
+    overlay::mark_game_started();
+    lan::initialize();
     kernel_init();
     const ModuleInfo* mods[] = {&main_module(), &sdk_module()};
     load_modules(mods, 2, plat::data_root() + "/analysis");

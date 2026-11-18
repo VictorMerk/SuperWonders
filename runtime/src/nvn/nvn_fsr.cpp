@@ -13,6 +13,7 @@
 #include <map>
 
 #include "nvn_vk.h"
+#include "present_geometry.h"
 #include "post_spv.h"
 
 // The FSR headers' CPU side: FsrEasuCon / FsrRcasCon, the constants the shaders take.
@@ -231,14 +232,14 @@ void set_fsr(bool on, float sharpness) {
 
 bool fsr_active() { return forced() >= 0 ? forced() == 1 : g_on.load(); }
 
-bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D extent, const int32_t* crop) {
+bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D extent, const int32_t* crop, VkOffset2D offset) {
     if (!fsr_active() || !extent.width || !extent.height) return false;
     // Upscaling only, of the whole image (a crop that is not all of it keeps the blit).
     if (src.width > extent.width || src.height > extent.height || (src.width == extent.width && src.height == extent.height))
         return false;
     const uint32_t lw = src.logical_width ? src.logical_width : src.width;
     const uint32_t lh = src.logical_height ? src.logical_height : src.height;
-    if (crop && crop[2] > 0 && crop[3] > 0 && (crop[0] || crop[1] || uint32_t(crop[2]) != lw || uint32_t(crop[3]) != lh))
+    if (valid_picture_crop(crop, lw, lh) && (crop[0] || crop[1] || uint32_t(crop[2]) != lw || uint32_t(crop[3]) != lh))
         return false;
     if (!init() || !ensure_size(extent)) return false;
     VkImageView view = source_view(src);
@@ -280,7 +281,9 @@ bool fsr_record(VkCommandBuffer cb, GpuImage& src, GpuImage& dst, VkExtent2D ext
     transition(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit blit{};
     blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    blit.srcOffsets[1] = blit.dstOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
+    blit.srcOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
+    blit.dstOffsets[0] = {offset.x, offset.y, 0};
+    blit.dstOffsets[1] = {offset.x + int32_t(extent.width), offset.y + int32_t(extent.height), 1};
     p_vkCmdBlitImage(cb, g_out.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      1, &blit, VK_FILTER_NEAREST);
     static bool logged = false;

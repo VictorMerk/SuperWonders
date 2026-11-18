@@ -28,12 +28,31 @@ enum Counter {
     kReplayNs,     // the presenting thread recording the game's command lists into Vulkan
     kUploadBytes,  // bytes through the upload buffer
     kLogLines,     // log() lines written (the report prints a hitch's lines from the NX_LOG file)
+    kLogNs, kInputPollNs,  // elapsed completed calls; totals can overlap across threads
     kCount
 };
 extern std::atomic<uint64_t> g_counter[kCount];
 inline void add(Counter k, uint64_t v = 1) { g_counter[k].fetch_add(v, std::memory_order_relaxed); }
 
 bool enabled();
+enum class TimedCall { Logging, InputPoll };
+// No clock reads when tracing is off. Records total and longest completed call
+// per host-present interval; these are diagnostic correlations, not scanout latency.
+class CallTimer {
+    TimedCall kind;
+    uint64_t started;
+public:
+    explicit CallTimer(TimedCall);
+    ~CallTimer();
+    CallTimer(const CallTimer&) = delete;
+    CallTimer& operator=(const CallTimer&) = delete;
+};
+// Diagnostic proxy only: first HID sample for a game frame -> host present.
+// Excludes device polling and the display's scanout/pixel response.
+void input_sample(uint64_t game_frame);
+// Buffered LAN inputs retain the original sampling time when applied later.
+void input_sample_at(uint64_t game_frame, uint64_t sampled_ns);
+uint64_t input_sample_time(uint64_t game_frame);
 // The game's present (nvnQueuePresentTexture, on the game's thread): replay_wait_ns is the time it waited for the
 // replay of an earlier frame (at most two queued), pace_ns the time it waited for the vsync pacing.
 void guest_present(uint64_t replay_wait_ns, uint64_t pace_ns, int interval);
@@ -41,7 +60,8 @@ void guest_present(uint64_t replay_wait_ns, uint64_t pace_ns, int interval);
 // vkAcquireNextImageKHR, queue_present_ns its vkQueuePresentKHR; encode/fence are the presenting thread's cumulative
 // vkQueueSubmit and fence-wait totals (frame_times()), differenced here.
 // Returns the row's frame number (UINT64_MAX without a trace), for displayed().
-uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t encode_total_ns, uint64_t fence_total_ns);
+uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t encode_total_ns, uint64_t fence_total_ns,
+                      uint64_t input_sample_ns = 0, bool original_picture = true);
 // When frame `frame` reached the display (vkWaitForPresentKHR returned): <NX_FRAMETRACE>.display.csv, the same
 // clock as the trace's t_ms. Where the GPU and surface support it; the report then reports what was on screen.
 void displayed(uint64_t frame, uint64_t t_ns);

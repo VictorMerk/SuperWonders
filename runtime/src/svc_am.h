@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace nx {
 
@@ -8,5 +9,6 @@ float internal_resolution_scale();
 uint32_t internal_resolution_target_width();
 void set_native_render_width(uint32_t width);  // internal resolution Native: the presented width
 void set_game_language(int language);
+uint64_t game_language_code();
 
 }  // namespace nx

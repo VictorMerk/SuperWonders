@@ -25,6 +25,12 @@
 
 namespace nx::nvn {
 
+void set_pipeline_skip_draws(bool on);
+uint64_t game_present_period_ns(int interval);
+bool framegen_probe();  // synthetic GPU regression, no game files
+bool overlay_input_probe();  // native overlay keyboard/controller regression, no game files
+bool counter_clear_probe();  // real replay/counter/clear readback, no game files
+
 // The SDK driver's implementation of an NVN proc (0 if it has none). Resolved through its own nvnBootstrapLoader.
 uint64_t real_proc(CPU& c, const char* name);
 
@@ -191,6 +197,7 @@ struct GpuImage;  // the Vulkan side of a texture (nvn_vk.cpp)
 
 struct Texture : Object {
     uint32_t target = 0, format = 0, flags = 0, levels = 0, samples = 0, depth_stencil_mode = 0;
+    bool uw = false;  // Marks an ultrawide render target; copied with the texture incarnation.
     std::atomic<bool> render_target{false};  // set when SetRenderTargets records this texture
     uint32_t width = 0, height = 0, depth = 0, stride = 0;
     uint64_t pool = 0, offset = 0, storage_size = 0;
@@ -308,6 +315,7 @@ struct Cmd {
         SetStencilRef, SetStencilMask, SetStencilValueMask, SetPolygonOffsetClamp, SetDepthBounds, SetDepthClamp,
         BindDeferred,  // mask: 0 textures, 1 images, 2 uniform buffers, 3 storage buffers; a[0] the guest array
         BindMultisampleState,  // n: alpha to coverage enabled (nvn_state.cpp)
+        SetRenderEnableConditional,
     } op;
     uint32_t n = 0, mask = 0;
     uint64_t a[9] = {};  // textures (render targets: colors then depth), handles, GPU addresses, sizes, ...
@@ -388,7 +396,7 @@ void worker_wait(uint64_t serial);
 uint64_t worker_last();
 void worker_finish();
 // guest NVNtexture* of a window texture; crop: the part shown (x, y, w, h; w 0: all), scaled to the window.
-void gpu_present(uint64_t texture, const int32_t* crop = nullptr);
+void gpu_present(uint64_t texture, const int32_t* crop = nullptr, int interval = 1, uint64_t input_sample_ns = 0);
 // With NX_ASYNC_GPU submits run while the game goes on (nvn_frames.cpp): the serial of the last one, and a wait until
 // it completed with its results in guest memory (true if it had to wait). Synchronous: 0, and nothing to wait for.
 uint64_t gpu_serial();

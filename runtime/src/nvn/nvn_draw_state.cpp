@@ -3,13 +3,58 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 
 #include "nvn_draw_state.h"
 #include "platform.h"
+#include "render_condition.h"
 
 namespace nx::nvn {
 
 using namespace replay;
+
+namespace {
+std::map<uint64_t,std::array<uint64_t,2>> g_report_values;
+std::vector<WriteBack> g_report_writes;
+void update_pending_reports(const uint8_t* destination, const uint8_t* source, size_t size) {
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(destination), end = begin+size;
+    for (auto& write : g_report_writes) {
+        const uintptr_t report = reinterpret_cast<uintptr_t>(write.to);
+        const uintptr_t lo = std::max(begin,report), hi = std::min(end,report+write.size);
+        if (lo < hi) std::memcpy(write.from+(lo-report),source+(lo-begin),hi-lo);
+    }
+    for (auto& [address,value] : g_report_values) {
+        const uintptr_t report = uintptr_t(address);
+        const uintptr_t lo = std::max(begin,report), hi = std::min(end,report+sizeof value);
+        if (lo < hi) std::memcpy(reinterpret_cast<uint8_t*>(value.data())+(lo-report),source+(lo-begin),hi-lo);
+    }
+}
+}
+void replay::reports_begin_submit() { g_report_values.clear(); g_report_writes.clear(); }
+std::vector<WriteBack> replay::reports_take_write_backs() {
+    std::vector<WriteBack> out;
+    out.swap(g_report_writes);
+    return out;
+}
+
+bool replay::rendering_enabled() {
+    if (!g_state.render_enable) return false;
+    static const bool legacy = std::getenv("NX_LEGACY_RENDER_CONDITION") != nullptr;
+    if (legacy || !g_state.render_condition_address) return true;
+    const uint8_t* p = guest_bytes(g_state.render_condition_address);
+    if (!p || guest_bytes(g_state.render_condition_address+23) != p+23) return true;
+    uint64_t a = 0, b = 0;
+    std::memcpy(&a,p,sizeof a);
+    std::memcpy(&b,p+16,sizeof b);
+    // Different GPU pool aliases can name the same report storage.
+    if (auto it = g_report_values.find(reinterpret_cast<uintptr_t>(p)); it != g_report_values.end()) a = it->second[0];
+    if (auto it = g_report_values.find(reinterpret_cast<uintptr_t>(p+16)); it != g_report_values.end()) b = it->second[0];
+    const bool on = conditional_render(g_state.render_condition_mode,a,b);
+    if (trace_capture()) log("render condition: mode %u @%llx values %llu / %llu: %s",
+        g_state.render_condition_mode,(unsigned long long)g_state.render_condition_address,
+        (unsigned long long)a,(unsigned long long)b,on ? "on" : "off");
+    return on;
+}
 
 void draw_command(VkCommandBuffer cb, const Cmd& c, const CmdList& list, const Targets& targets) {
     State& s = g_state;
@@ -25,7 +70,15 @@ void draw_command(VkCommandBuffer cb, const Cmd& c, const CmdList& list, const T
             if (c.i[0] >= 0 && c.i[0] < kStages && c.i[1] >= 0 && c.i[1] < 16) s.images[c.i[0]][c.i[1]] = c.a[0];
             break;
         case Cmd::DispatchCompute: dispatch_call(cb, c); break;
-        case Cmd::SetRenderEnable: s.render_enable = c.n != 0; break;
+        case Cmd::SetRenderEnable:
+            s.render_enable = c.n != 0;
+            s.render_condition_address = 0;
+            break;
+        case Cmd::SetRenderEnableConditional:
+            s.render_enable = true;
+            s.render_condition_address = c.a[0];
+            s.render_condition_mode = c.n;
+            break;
         case Cmd::SetScissor:
             std::memcpy(s.scissor, c.i, sizeof s.scissor), s.has_scissor = true;
             break;
@@ -112,6 +165,7 @@ void draw_command(VkCommandBuffer cb, const Cmd& c, const CmdList& list, const T
             }
             if (c.blob < list.blobs.size())
                 if (uint8_t* p = const_cast<uint8_t*>(guest_bytes(c.a[0] + off))) {
+                    update_pending_reports(p,list.blobs[c.blob].data(),list.blobs[c.blob].size());
                     std::memcpy(p, list.blobs[c.blob].data(), list.blobs[c.blob].size());
                     dedup_invalidate(p, list.blobs[c.blob].size());
                     written_cpu_write(p, list.blobs[c.blob].size());
@@ -122,11 +176,22 @@ void draw_command(VkCommandBuffer cb, const Cmd& c, const CmdList& list, const T
             static uint64_t reports = 0, types_seen = 0;
             if (c.n < 64 && !(types_seen >> c.n & 1)) types_seen |= 1ull << c.n, log("nvn: first counter report of type %u", c.n);
             if (uint8_t* p = const_cast<uint8_t*>(guest_bytes(c.a[0]))) {
+                if (guest_bytes(c.a[0]+15) != p+15) break;
                 // NX_FAKE_GPU_TIME=1: every report of a submit carries the submit's start (a GPU with no cost):
                 // the game picks its present interval from the timings it measures (bisecting its 30 fps mode).
                 static const bool fake = std::getenv("NX_FAKE_GPU_TIME") != nullptr;
-                uint64_t v[2] = {++reports, fake ? submit_start_ns() : plat::monotonic_ns()};
-                std::memcpy(p, v, sizeof v);
+                static const bool legacy = std::getenv("NX_LEGACY_RENDER_CONDITION") != nullptr;
+                const uint64_t serial = ++reports;
+                uint64_t v[2] = {legacy ? serial : report_counter_value(c.n,serial),
+                                 fake ? submit_start_ns() : plat::monotonic_ns()};
+                // Keep command-order values for later conditions, but publish
+                // reports to the CPU only after this submit's fence. Early
+                // publication lets the recording thread reuse a capture while
+                // the GPU is still reading it.
+                g_report_values[reinterpret_cast<uintptr_t>(p)] = {v[0],v[1]};
+                auto data = upload_alloc(sizeof v,8);
+                std::memcpy(data.ptr,v,sizeof v);
+                g_report_writes.push_back({static_cast<uint8_t*>(data.ptr),p,sizeof v,{}});
                 dedup_invalidate(p, sizeof v);
                 written_cpu_write(p, sizeof v);
             }

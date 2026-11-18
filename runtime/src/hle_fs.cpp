@@ -3,8 +3,10 @@
 //   save:  -> private/user/save/<mount>
 //   cache: -> private/user/cache<index>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
-#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -21,10 +23,15 @@
 #endif
 
 #include <nx/runtime.h>
+#include <nx/game.h>
 
 #include "platform.h"
+#include "file_io.h"
+#include "stream_cache.h"
+#include <optional>
 #include "frametrace.h"
 #include "play.h"
+#include "netplay_game.h"
 
 namespace fs = std::filesystem;
 
@@ -51,12 +58,25 @@ std::map<std::string, fs::path> g_mounts;
 struct File {
     FILE* f;
     std::string path;
-    File(FILE* file, std::string p) : f(file), path(std::move(p)) {}
+    streaming::MusicCache::Token music;
+    mutable std::atomic<bool> music_reported{false};
+    File(FILE* file, std::string p, streaming::MusicCache::Token cached = {}) : f(file), path(std::move(p)), music(std::move(cached)) {}
     File(const File&) = delete;  // owns the FILE: one instance only
     File& operator=(const File&) = delete;
     ~File() { std::fclose(f); }
 };
 std::map<uint64_t, std::shared_ptr<File>> g_files;
+std::atomic<streaming::MusicCache*> g_music_cache{nullptr};
+streaming::MusicCache& music_cache() {
+    static auto* cache = [] {
+        auto* value = new streaming::MusicCache;
+        g_music_cache.store(value, std::memory_order_release);
+        std::atexit([] { if (auto* value = g_music_cache.load(std::memory_order_acquire)) value->stop(); });
+        log("fs: streamed music prefetch ready (64 MiB RAM, 8 MiB/file, no disk cache)");
+        return value;
+    }();
+    return *cache;
+}
 
 // Files the runtime adds or replaces (mods): key = path under the mount point, '/' separated, lower case.
 std::map<std::string, std::string> g_virtual;
@@ -106,8 +126,22 @@ const std::vector<fs::path>& mod_roots() {
     static const std::vector<fs::path> roots = [] {
         std::vector<fs::path> mods, out;
         std::error_code ec;
-        for (auto& e : fs::directory_iterator(data_root() / "mods", ec))
-            if (e.is_directory() && utf8(e.path().filename()).rfind('-', 0) != 0) mods.push_back(e.path());
+        const char* aspect_profile = std::getenv("NX_ASPECT_PROFILE");
+        for (auto& e : fs::directory_iterator(data_root() / "mods", ec)) {
+            if (!e.is_directory()) continue;
+            std::string name = utf8(e.path().filename());
+            const bool disabled = !name.empty() && name[0] == '-';
+            const std::string clean = disabled ? name.substr(1) : name;
+            const bool map32 = clean == "00-uw-map-hud-32-9";
+            const bool screen32 = clean == "00-uw-screen-test";
+            const bool map21 = clean == "00-uw-map-hud-21-9";
+            const bool screen21 = clean == "00-uw-screen-test-21-9";
+            if (aspect_profile && (map32 || screen32 || map21 || screen21)) {
+                const bool selected = ((map32 || screen32) && std::strcmp(aspect_profile, "32:9") == 0) ||
+                                      ((map21 || screen21) && std::strcmp(aspect_profile, "21:9") == 0);
+                if (selected) mods.push_back(e.path());
+            } else if (!disabled) mods.push_back(e.path());
+        }
         std::sort(mods.begin(), mods.end());
         for (const fs::path& m : mods) {
             fs::path found;
@@ -185,7 +219,7 @@ void EnsureSaveData(CPU& c) { c.x[0] = kOk; }
 void MountSaveData(CPU& c) {
     std::lock_guard lk(g_fs);
     std::string name = cstr(c.x[0]);
-    mount(name, data_root() / "user" / "save");
+    mount(name, lan::user_root(data_root()) / "save");
     c.x[0] = kOk;
 }
 
@@ -264,21 +298,32 @@ void GetEntryType(CPU& c) {  // (DirectoryEntryType* out, path)
 }
 
 void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4 append)
-    std::lock_guard lk(g_fs);
     std::string guest = cstr(c.x[1]);
-    fs::path p = resolve(guest);
+    fs::path p;
+    std::optional<std::string> virtual_data;
+    {
+        std::lock_guard lk(g_fs);
+        p = resolve(guest);
+        if (const std::string* data = find_virtual(p)) virtual_data = *data;
+    }
+    auto publish = [&](FILE* file, streaming::MusicCache::Token cached = {}) {
+        std::lock_guard lk(g_fs);
+        const uint64_t handle = g_next++;
+        g_files[handle] = std::make_shared<File>(file,guest,std::move(cached));
+        st<uint64_t>(c.x[0],handle);
+        return handle;
+    };
     int mode = int(c.x[2]);
-    if (const std::string* v = find_virtual(p)) {  // served from memory, through a temporary file
+    if (const std::string* v = virtual_data ? &*virtual_data : nullptr) {  // copied while the table was locked
         FILE* f = std::tmpfile();
         if (!f) {
             c.x[0] = kPathNotFound;
             return;
         }
-        std::fwrite(v->data(), 1, v->size(), f);
-        std::fflush(f);
-        uint64_t h = g_next++;
-        g_files[h] = std::make_shared<File>(f, guest);
-        st<uint64_t>(c.x[0], h);
+        const bool wrote = std::fwrite(v->data(), 1, v->size(), f)==v->size();
+        const bool flushed = std::fflush(f)==0;
+        if (!wrote || !flushed) { std::fclose(f); c.x[0] = kTargetNotFound; return; }
+        const uint64_t h = publish(f);
         if (trace_fs()) log("fs: OpenFile(%s) -> virtual, %zu bytes", guest.c_str(), v->size());
         c.x[0] = kOk;
         return;
@@ -294,11 +339,15 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         c.x[0] = kPathNotFound;
         return;
     }
-    uint64_t h = g_next++;
-    g_files[h] = std::make_shared<File>(f, guest);
-    st<uint64_t>(c.x[0], h);
+    streaming::MusicCache::Token cached;
+    if (mode == 1 && streaming::enabled() && streaming::eligible_music(guest)) {
+        try { cached = music_cache().open(p); }
+        catch (...) { log("fs: music prefetch unavailable; normal streaming remains active"); }
+    }
+    const uint64_t h = publish(f,std::move(cached));
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     play::file_opened(guest);
+    game::file_opened(guest.c_str());
     c.x[0] = kOk;
 }
 
@@ -319,21 +368,41 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
         c.x[0] = kTargetNotFound;
         return;
     }
-    std::lock_guard lk(g_fs);  // the FILE position is shared with writers
-    FILE* f = file->f;
-    int64_t cur = plat::ftell64(f);
-    plat::fseek64(f, 0, SEEK_END);
-    st<int64_t>(c.x[0], plat::ftell64(f));
-    if (g_trace) log("fs: size %s = %lld", file->path.c_str(), (long long)ld<int64_t>(c.x[0]));
-    plat::fseek64(f, cur, SEEK_SET);
+    const int64_t length = file_io::size(file->f);
+    if (length < 0) { c.x[0] = kTargetNotFound; return; }
+    st<int64_t>(c.x[0],length);
+    if (g_trace) log("fs: size %s = %lld", file->path.c_str(),(long long)length);
     c.x[0] = kOk;
 }
 
 uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
     uint64_t t0 = plat::monotonic_ns();
-    uint64_t n = plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
+    uint64_t n = 0;
+    const bool cached = streaming::enabled() && file.music && music_cache().read(file.music,off,reinterpret_cast<void*>(buf),size,n);
+    if (!cached) n = plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
+    static const bool validate_music = [] { const char* e = std::getenv("NX_STREAM_CACHE_VALIDATE"); return e && e[0] == '1'; }();
+    if (cached && validate_music && n) try {
+        std::vector<uint8_t> reference(size_t(n), 0);
+        const auto actual = plat::read_at(file.f, off, reference.data(), n);
+        const bool identical = actual == n && std::memcmp(reference.data(), reinterpret_cast<void*>(buf), size_t(n)) == 0;
+        log("music RAM validation: %s (%llu bytes)", identical ? "PASS" : "FAIL", (unsigned long long)n);
+        if (!identical) {
+            if (actual) std::memcpy(reinterpret_cast<void*>(buf), reference.data(), size_t(actual));
+            n = actual;
+        }
+    } catch (...) { log("music RAM validation: unavailable; cached snapshot remains active"); }
     const uint64_t read_ns = plat::monotonic_ns() - t0;
     ft::add(ft::kFileReads), ft::add(ft::kFileBytes, n), ft::add(ft::kFileNs, read_ns);
+    if (cached) {
+        static std::atomic<uint64_t> hits{0};
+        const auto count = ++hits;
+        if (!file.music_reported.exchange(true, std::memory_order_relaxed) || count % 128 == 0) {
+            const auto stats = music_cache().stats();
+            log("fs: music RAM active for %s: %llu reads, %llu prefetched streams, %.1f MiB reserved",
+                file.path.c_str(),
+                (unsigned long long)count, (unsigned long long)stats.completed, double(stats.reserved_bytes)/(1ull<<20));
+        }
+    }
     uint64_t ms = read_ns / 1'000'000;
     if (g_trace) log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
                      (unsigned long long)n);
@@ -376,17 +445,14 @@ void WriteFile(CPU& c) {  // (FileHandle, s64 off, const void* buf, size_t size,
         c.x[0] = kTargetNotFound;
         return;
     }
-    std::lock_guard lk(g_fs);
-    plat::fseek64(file->f, int64_t(c.x[1]), SEEK_SET);
-    fwrite(reinterpret_cast<const void*>(c.x[2]), 1, c.x[3], file->f);
-    fflush(file->f);  // positional reads bypass the FILE buffer (saves only: rare and small)
-    c.x[0] = kOk;
+    const bool ok = file_io::write_at(file->f,int64_t(c.x[1]),reinterpret_cast<const void*>(c.x[2]),c.x[3]);
+    if (!ok) log("fs: positional write/flush failed for %s",file->path.c_str());
+    c.x[0] = ok ? kOk : kTargetNotFound;
 }
 
 void FlushFile(CPU& c) {
     if (auto file = open_file(c.x[0])) {
-        std::lock_guard lk(g_fs);
-        fflush(file->f);
+        if (std::fflush(file->f)!=0) { c.x[0] = kTargetNotFound; return; }
     }
     c.x[0] = kOk;
 }
@@ -472,7 +538,7 @@ void CreateCacheStorage(CPU& c) { c.x[0] = kOk; }
 void DeleteCacheStorage(CPU& c) { c.x[0] = kOk; }
 void MountCacheStorage(CPU& c) {  // (name, int index)
     std::lock_guard lk(g_fs);
-    mount(cstr(c.x[0]), data_root() / "user" / ("cache" + std::to_string(int(c.x[1]))));
+    mount(cstr(c.x[0]), lan::user_root(data_root()) / ("cache" + std::to_string(int(c.x[1]))));
     c.x[0] = kOk;
 }
 

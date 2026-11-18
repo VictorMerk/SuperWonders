@@ -1,5 +1,11 @@
 // SuperWonders Launcher (launcher.h): state, the setup job, and the screen.
 #include "launcher/launcher.h"
+#include "launcher/save_backup.h"
+#include "launcher/profile_ui.h"
+#include "profiles.h"
+#include "overlay/usability.h"
+#include "launcher/mod_catalog.h"
+#include "launcher/game_source.h"
 
 #include <algorithm>
 #include <atomic>
@@ -9,7 +15,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +41,8 @@
 #include "overlay/overlay.h"
 #include "overlay/overlay_ui.h"
 #include "platform.h"
+#include "controllers.h"
+#include "netplay_game.h"
 
 namespace fs = std::filesystem;
 
@@ -120,6 +130,16 @@ Kit find_kit() {
         "python3";
 #endif
     return k;
+}
+
+const char* setup_tools_issue(const Kit& kit) {
+    if (kit.script.empty())
+        return "This is a runtime update, without the tools for a first build. Extract the complete setup package, "
+               "keeping game-build beside wonder-launcher.exe. An already prepared installation can still play.";
+    if (!file(u8(kit.script)) || kit.python.empty() || (u8(kit.python).is_absolute() && !file(u8(kit.python))))
+        return "The setup tools are incomplete. Extract the entire setup package again, keeping game-build, its "
+               "Python and both EXEs together.";
+    return nullptr;
 }
 
 // ---- is the game set up? ----
@@ -305,28 +325,15 @@ private:
 };
 
 // ---- mods: <data root>/mods/<name>/ (hle_fs.cpp mod_roots: name order, a leading '-' turns one off) ----
-struct Mod {
-    std::string name;  // without the '-'
-    bool on;
-};
-
-std::vector<Mod> list_mods() {
-    std::vector<Mod> out;
-    std::error_code ec;
-    for (auto& e : fs::directory_iterator(u8(plat::data_root()) / "mods", ec)) {
-        if (!e.is_directory()) continue;
-        std::string n = str(e.path().filename());
-        bool on = n.rfind('-', 0) != 0;
-        out.push_back({on ? n : n.substr(1), on});
-    }
-    std::sort(out.begin(), out.end(), [](const Mod& a, const Mod& b) { return a.name < b.name; });
-    return out;
-}
+using Mod = ModInfo;
+std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods"); }
 
 bool set_mod(const Mod& m, bool on) {
     const fs::path dir = u8(plat::data_root()) / "mods";
     std::error_code ec;
-    fs::rename(dir / u8(m.on ? m.name : "-" + m.name), dir / u8(on ? m.name : "-" + m.name), ec);
+    const auto destination = dir / u8(on ? m.name : "-"+m.name);
+    if (fs::exists(destination,ec) || ec) return false;
+    fs::rename(dir / u8(m.on ? m.name : "-" + m.name), destination, ec);
     return !ec;
 }
 
@@ -441,9 +448,20 @@ struct State {
     std::atomic<int> page{PagePlay};
     std::atomic<bool> play{false}, quit{false};
     bool config_mode = false;
+    bool cache_job = false;
+    bool lan_open = false, lan_request_open = false;
+    int lan_mode = 0, lan_port = 27846, lan_players = 2;
+    char lan_address[64] = "", lan_code[65] = "";
+    bool lan_pipeline = false;
+    std::vector<std::string> lan_addresses;
+    std::string lan_error;
     Job job;
     std::mutex pick_lock;
-    std::string picked_exefs, picked_romfs;  // from the folder picker's thread
+    std::string picked_source;
+    int picked_kind = 0, finding_kind = 0;
+    std::future<source::Found> finding;
+    source::Found found;
+    bool exefs_valid = false, romfs_valid = false;
     uint64_t shown_ns = 0;
     std::string note;  // a line under the status (an error of the folder picker, a finished setup...)
     bool demo_progress = false;  // NX_LAUNCHER_TOUR's last step: the setup card, not running anything
@@ -461,6 +479,22 @@ struct State {
     std::string browse_listed;
 };
 State* g = nullptr;
+
+void start_shader_optimization() {
+    std::string self;
+#if defined(_WIN32)
+    std::wstring path(32768,L'\0');
+    const auto n = GetModuleFileNameW(nullptr,path.data(),DWORD(path.size()));
+    if (n && n < path.size()) { path.resize(n); self = str(fs::path(path)); }
+#else
+    std::error_code ec;
+    const auto path = fs::read_symlink("/proc/self/exe",ec);
+    if (!ec) self = str(path);
+#endif
+    if (self.empty()) { ui::notify("Could not locate the program to prepare the cache."); return; }
+    g->cache_job = true;
+    g->job.start({self,"--pack-shaders"});
+}
 
 void refresh_status() {
     g->status = check_status(g->kit);
@@ -495,9 +529,27 @@ bool folder_has(const std::string& dir, const char* name) {
     return !dir.empty() && fs::exists(u8(dir) / name, ec);
 }
 
+void validate_sources() {
+    g->exefs_valid = !g->config.exefs.empty() && source::exefs_ok(u8(g->config.exefs));
+    g->romfs_valid = !g->config.romfs.empty() && source::romfs_ok(u8(g->config.romfs));
+}
+
+void find_sources(std::string folder, int kind) {
+    if (folder.empty() || g->finding.valid()) return;
+    g->finding_kind = kind;
+    g->note = "Looking for main + sdk and Shader/*.zs inside the selected folder...";
+    g->finding = std::async(std::launch::async, [folder] { return source::discover(u8(folder)); });
+}
+
 void start_setup() {
-    if (g->kit.script.empty()) {
-        g->note = "This build of SuperWonders has no game-build folder, so it can't set the game up.";
+    if (const auto* issue = setup_tools_issue(g->kit)) {
+        g->note = issue;
+        return;
+    }
+    validate_sources();
+    if (!g->exefs_valid || !g->romfs_valid) {
+        g->note = !g->exefs_valid ? "ExeFS needs the files main and sdk. Choose your extracted game folder."
+                                 : "RomFS needs .zs files directly inside Shader. Choose the extracted folder containing Shader; playing first is not required.";
         return;
     }
     save_config(g->config);
@@ -515,7 +567,7 @@ void backdrop(ImDrawList* dl, ImVec2 ds) {
     dl->AddRectFilledMultiColor({0, 0}, {ds.x, ds.y * 0.5f}, th.back_top, th.back_top, th.back_mid, th.back_mid);
     dl->AddRectFilledMultiColor({0, ds.y * 0.5f}, ds, th.back_mid, th.back_mid, th.back_top, th.back_top);
     // a slow glow drifting behind the pages (the compile screen's, overlay_progress.cpp)
-    const float t = float(ImGui::GetTime());
+    const float t = overlay::usability_preferences().reduced_motion?0.f:float(ImGui::GetTime());
     const float gx = ds.x * (0.62f + 0.18f * std::sin(t * 0.3f)), gy = ds.y * 0.42f, r = ds.y * 0.6f;
     const ImU32 in = (th.accent2 & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 30), out = in & ~IM_COL32_A_MASK;
     constexpr int kSeg = 64;
@@ -551,7 +603,7 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     const float tfs = 46 * k, sfs = 26 * k;
     dl->AddRectFilled(p0, p1, th.card, 14 * k);
     dl->AddRect(p0, p1, ui::fade(th.accent, 0.55f), 14 * k, 0, 1.5f * k);
-    const char* title = "Setting up your game";
+    const char* title = g->cache_job ? "Optimizing shader loading" : "Setting up your game";
     const ImVec2 ts = tf->CalcTextSizeA(tfs, FLT_MAX, 0, title);
     dl->AddText(tf, tfs, {(p0.x + p1.x - ts.x) * 0.5f, p0.y + 36 * k}, th.accent, title);
     const ImVec2 ba(p0.x + 48 * k, p0.y + 36 * k + ts.y + 30 * k), bb(p1.x - 48 * k, ba.y + 24 * k);
@@ -562,10 +614,84 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
                   int(secs) % 60);
     const ImVec2 ls = bf->CalcTextSizeA(sfs, FLT_MAX, 0, line);
     dl->AddText(bf, sfs, {(p0.x + p1.x - ls.x) * 0.5f, bb.y + 26 * k}, th.text_dim, line);
-    const char* note = "This happens once, and again only after an update that needs it. It takes about 15 minutes.";
+    const char* note = "Overall setup progress. A single stage can take several minutes; elapsed time continues above.";
     const ImVec2 ns = bf->CalcTextSizeA(sfs * 0.9f, FLT_MAX, 0, note);
     dl->AddText(bf, sfs * 0.9f, {(p0.x + p1.x - ns.x) * 0.5f, bb.y + 26 * k + ls.y + 16 * k},
                 ui::mix(th.text_off, th.text_dim, 0.4f), note);
+}
+
+void open_lan() {
+    g->lan_open=true; g->lan_request_open=true; g->lan_error.clear();
+    try {
+        g->lan_addresses=lan::local_addresses();
+        if(!g->lan_code[0]) {
+            if(std::getenv("NX_LAN_LOBBY_TOUR")) std::snprintf(g->lan_code,sizeof g->lan_code,"LOCALPREVIEW");
+            else {
+                std::random_device random;
+                std::snprintf(g->lan_code,sizeof g->lan_code,"%08x%08x",unsigned(random()),unsigned(random()));
+            }
+        }
+    } catch(const std::exception& e) { g->lan_error=e.what(); }
+}
+
+void draw_lan(float w,float h,float k) {
+    if(g->lan_request_open) { ImGui::OpenPopup("LAN co-op"); g->lan_request_open=false; }
+    const float panel_w=std::min(900*k,w-32*k);
+    ImGui::SetNextWindowSize({panel_w,std::min(920*k,h-32*k)},ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos({w*0.5f,h*0.5f},ImGuiCond_Appearing,{0.5f,0.5f});
+    ImGui::SetNextWindowSizeConstraints({std::min(650*k,panel_w),std::min(400*k,h-32*k)},{panel_w,h-32*k});
+    if(!ImGui::BeginPopupModal("LAN co-op",nullptr,ImGuiWindowFlags_NoSavedSettings)) return;
+    const auto state=lan::lobby_status();
+    const bool waiting=state.phase==lan::LobbyPhase::Preparing || state.phase==lan::LobbyPhase::Waiting;
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"Native co-op  |  Experimental");
+    ImGui::TextWrapped("Profile: %s",profiles::active(u8(plat::data_root())).name.c_str());
+    ImGui::TextWrapped("1. Choose Host or Join.  2. Enter the shared room details.  3. Choose the same player count in Wonder.");
+    ImGui::TextWrapped("Each PC runs Wonder and controls its own co-op character. Use the same game build and mods on every PC.");
+    ImGui::TextWrapped("Synchronization is still being tested. A detected position mismatch stops the session.");
+    ImGui::Separator();
+    ImGui::BeginDisabled(waiting || state.phase==lan::LobbyPhase::Ready);
+    ImGui::RadioButton("Host a room",&g->lan_mode,0); ImGui::SameLine();
+    ImGui::RadioButton("Join a room",&g->lan_mode,1);
+    if(g->lan_mode==0) {
+        std::string addresses;
+        for(const auto& ip:g->lan_addresses) { if(!addresses.empty()) addresses+=", "; addresses+=ip; }
+        ImGui::TextWrapped("Your LAN address: %s",addresses.empty()?"No private IPv4 address found":addresses.c_str());
+        ImGui::SetNextItemWidth(180*k); ImGui::InputInt("Players",&g->lan_players);
+        g->lan_players=std::clamp(g->lan_players,2,4);
+    } else {
+        ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Host address",g->lan_address,sizeof g->lan_address);
+    }
+    ImGui::SetNextItemWidth(270*k); ImGui::InputInt("Port",&g->lan_port);
+    g->lan_port=std::clamp(g->lan_port,1,65535);
+    ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
+    if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
+    ImGui::TextWrapped("Share the address, port and exact pairing code with the other players privately.");
+    ImGui::Checkbox("Overlap LAN networking (experimental)",&g->lan_pipeline);
+    ImGui::TextWrapped("Buffers one extra input frame to overlap networking with gameplay. All PCs must select the same mode. This is not zero-latency input.");
+    ImGui::Separator();
+    ImGui::TextWrapped("Host progress is saved normally. Joining uses a separate session copy of the host's save and preserves your own save.");
+    ImGui::TextWrapped("The game starts when all players connect. Each PC uses its primary gamepad or keyboard. Choose the matching player count in Wonder.");
+    const bool valid=std::strlen(g->lan_code)>=4 && (g->lan_mode==0 || g->lan_address[0]);
+    if(!valid) ImGui::BeginDisabled();
+    if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
+        g->lan_error.clear();
+        if(g->lan_mode==0 && !backup_before_play())g->lan_error="Could not back up this profile. Open Profiles & saves to check the save folder before hosting.";
+        else lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
+            uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
+    }
+    if(!valid) ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if(!state.detail.empty()) ImGui::TextWrapped("%s",state.detail.c_str());
+    if(!g->lan_error.empty()) ImGui::TextWrapped("%s",g->lan_error.c_str());
+    if(waiting) {
+        ImGui::TextWrapped("Waiting for up to three minutes. You can cancel and create another room.");
+        if(ImGui::Button("Cancel connection")) lan::cancel_lobby();
+    } else if(state.phase==lan::LobbyPhase::Ready) {
+        g->play=true; g->lan_open=false; ImGui::CloseCurrentPopup();
+    } else if(ImGui::Button("Back to launcher")) {
+        g->lan_open=false; ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void page_play() {
@@ -579,6 +705,25 @@ void page_play() {
         g->play = true;
     if (!ready && rows::action(lt(LtSetUpGameFiles), "", "Pick your ExeFS and RomFS folders and set the game up."))
         g->page = PageFiles, rows::focus_first();
+    rows::section("Your adventure");
+    const auto profile = profiles::active(u8(plat::data_root()));
+    if (rows::action("Profiles & saves", profile.name.c_str(), "Choose a nickname and save profile, start a fresh adventure, back up progress or restore an earlier backup.")) open_profiles();
+    rows::section("Before you play");
+    if (rows::action("Graphics & performance", "Resolution & scaling", "Choose a graphics preset, resolution, scaling and frame pacing."))
+        overlay::open_settings(0);
+    if (rows::action("Controller setup", "Bindings & rumble", "Configure your controller before starting. Settings are shared with the in-game F1 menu."))
+        overlay::open_settings(2);
+    if (rows::action("Performance overlay", "FPS & frame times", "Show FPS, 1% lows, game speed and the frame-time graph."))
+        overlay::open_settings(3);
+    rows::section("Play together");
+    unsigned devices=0;for(uint32_t player=0;player<plat::kPlayerCount;++player)if(plat::player_connected(player))++devices;
+    const std::string device_summary=std::to_string(devices)+" player slots ready";
+    rows::action("Connected players",device_summary.c_str(),"Open Controller setup to inspect each player slot and test rumble. Use Keyboard as player 1 when combining a keyboard and gamepads. In LAN each PC supplies one player.",true);
+    if (rows::action("Local co-op", "2-4 players", "Connect independent controllers, or reserve the keyboard for player 1 in Controls. Choose the player count in the game for real local co-op characters."))
+        overlay::open_settings(2);
+    if (!ready) rows::disable_next();
+    if (rows::action("LAN co-op", "Host or join | Experimental", "Run a native Wonder instance on each PC, with independent co-op characters. Pair on a private network. Joining preserves your normal save. Synchronization is still being tested."))
+        open_lan();
     rows::section(lt(LtAbout));
     rows::action(lt(LtVersion), NX_VERSION_STRING,
                  "SuperWonders, a static recompilation of Super Mario Bros. Wonder (1.0.0) for PC. Nothing of the game "
@@ -600,7 +745,7 @@ std::string home_folder() {
 }
 
 void browse_open(int which) {
-    const std::string& now = which == 1 ? g->config.exefs : g->config.romfs;
+    const std::string& now = which == 2 ? g->config.romfs : g->config.exefs;
     std::error_code ec;
     std::string start = !now.empty() && fs::is_directory(u8(now), ec) ? str(u8(now).parent_path()) : home_folder();
     g->browse = which, g->browse_dir = start, g->browse_listed = "\x01";
@@ -651,17 +796,14 @@ void page_browse() {
     const bool exefs = g->browse == 1;
     const std::string& dir = g->browse_dir;
     rows::begin("##browse", ImGui::GetContentRegionAvail().y);
-    rows::section(exefs ? lt(LtChooseExeFS) : lt(LtChooseRomFS));
-    const bool ok = exefs ? folder_has(dir, "main") && folder_has(dir, "sdk") : folder_has(dir, "Shader");
+    rows::section(g->browse == 3 ? "Choose your extracted game folder" : exefs ? lt(LtChooseExeFS) : lt(LtChooseRomFS));
+    const bool ok = !dir.empty();
     const std::string where = dir.empty() ? std::string("This PC") : fit_path(dir, lt(LtUseFolder));
-    const std::string use_desc = std::string(ok ? "Use this folder." : exefs ? "Not an ExeFS folder: it has no main and sdk."
-                                                                             : "Not a RomFS folder: it has no Shader folder.") +
+    const std::string use_desc = std::string("Search this folder and its subfolders for the extracted game files. You can select their parent folder.") +
                                  (dir.empty() ? std::string() : "\n\n" + dir);
     if (!ok) rows::disable_next();
     if (rows::action(lt(LtUseFolder), where.c_str(), use_desc.c_str(), true, ok)) {
-        (exefs ? g->config.exefs : g->config.romfs) = dir;
-        save_config(g->config);
-        log("launcher: %s folder %s", exefs ? "ExeFS" : "RomFS", dir.c_str());
+        find_sources(dir, g->browse);
         browse_close();
         rows::end();
         return;
@@ -685,9 +827,9 @@ void page_browse() {
     rows::section(lt(LtOtherWays));
     if (rows::action(lt(LtSystemPicker), "", "Choose the folder in the system's own window (a mouse helps).",
                      true))
-        plat::pick_folder(exefs ? "Your ExeFS folder (main, sdk)" : "Your RomFS folder", dir, [exefs](std::string p) {
+        plat::pick_folder("Your extracted game folder (ExeFS and RomFS inside)", dir, [kind=g->browse](std::string p) {
             std::lock_guard lk(g->pick_lock);
-            (exefs ? g->picked_exefs : g->picked_romfs) = p;
+            g->picked_source = p; g->picked_kind = kind;
         });
     if (rows::action(lt(LtCancel), "", "Back, without changing the folder (B).", true)) browse_close();
     rows::end();
@@ -696,16 +838,58 @@ void page_browse() {
 void page_files() {
     if (g->browse) return page_browse();
     rows::begin("##files", ImGui::GetContentRegionAvail().y);
+    const char* kit_issue = setup_tools_issue(g->kit);
+    if (kit_issue) rows::page_note(kit_issue);
+    rows::section("Easy setup");
+    const bool finding = g->finding.valid();
+    if (finding) rows::disable_next();
+    if (rows::action("Choose game folder", finding ? "Looking for files..." : "Find ExeFS + RomFS",
+                     "Choose the extracted folder containing ExeFS and RomFS. Nested folders are detected automatically. This reads your files without moving or changing them.", true, true))
+        plat::pick_folder("Choose your extracted Wonder folder", home_folder(), [](std::string p) {
+            std::lock_guard lk(g->pick_lock); g->picked_source = p; g->picked_kind = 3;
+        });
+    if (finding) rows::disable_next();
+    if (rows::action("Browse with controller", "", "Find the same folder using the controller-friendly folder list.")) browse_open(3);
+    for (int kind : {1, 2}) {
+        const auto& choices = kind == 1 ? g->found.exefs : g->found.romfs;
+        if (choices.empty() || (choices.size() < 2 && !g->found.limited)) continue;
+        rows::section(kind == 1 ? "Multiple ExeFS folders: choose one" : "Multiple RomFS folders: choose one");
+        for (const auto& path : choices) {
+            ImGui::PushID(path.c_str());
+            const std::string label = fit_path(path, "Select");
+            const std::string help = "Choose the matching base game 1.0.0 folders.\n\n" + path;
+            if (rows::action(label.c_str(), "Select", help.c_str())) {
+                (kind == 1 ? g->config.exefs : g->config.romfs) = path;
+                validate_sources(); save_config(g->config);
+            }
+            ImGui::PopID();
+        }
+    }
+    rows::section("Installation status");
+    const char* package_issue=setup_tools_issue(g->kit);
+    rows::action("Package contents",package_issue?"Runtime update / tools missing":"Setup tools available",
+        package_issue?package_issue:"This copy contains the tools needed to build your own extracted game. Updates keep prepared data and player profiles.",true);
+    const auto built_kit=read_line(u8(plat::data_root())/"game/build-id.txt","kit");
+    const std::string compatibility="Runtime: " NX_VERSION_STRING "\nInstalled game kit: "+(built_kit.empty()?"not built":built_kit)+
+        "\nPackage kit: "+(g->kit.id.empty()?"not supplied":g->kit.id)+"\n\nLAN peers need the same runtime and enabled mods. A runtime update does not include first-build tools.";
+    rows::action("Build compatibility",g->status.ready==Ready::Yes?"Prepared":g->status.ready==Ready::Rebuild?"Rebuild required":"Setup required",compatibility.c_str(),true);
     rows::section(lt(LtYourGameFiles));
     const std::string exefs = g->config.exefs.empty() ? lt(LtChoose) : fit_path(g->config.exefs, lt(LtExeFS));
     const std::string exefs_desc =
         "The ExeFS folder of your own copy of the game (version 1.0.0). It holds main and sdk." +
         (g->config.exefs.empty() ? std::string() : "\n\nNow: " + g->config.exefs);
+    if (finding) rows::disable_next();
     if (rows::action(lt(LtExeFS), exefs.c_str(), exefs_desc.c_str(), true)) browse_open(1);
     const std::string romfs = g->config.romfs.empty() ? lt(LtChoose) : fit_path(g->config.romfs, lt(LtRomFSFolder));
     const std::string romfs_desc = "The RomFS folder of your own copy of the game." +
                                    (g->config.romfs.empty() ? std::string() : "\n\nNow: " + g->config.romfs);
+    if (finding) rows::disable_next();
     if (rows::action(lt(LtRomFSFolder), romfs.c_str(), romfs_desc.c_str(), true)) browse_open(2);
+    const std::string checked = std::string("ExeFS: ") + (g->exefs_valid ? "main + sdk found" : "main + sdk needed") +
+        "\nRomFS: " + (g->romfs_valid ? "Shader/*.zs found" : "Shader/*.zs needed") +
+        "\n\nThe build tools verify the game version during setup. Extracting requires no prior game launch.";
+    rows::action("File check", g->exefs_valid && g->romfs_valid ? "Ready to set up" : g->exefs_valid ? "RomFS needed" : g->romfs_valid ? "ExeFS needed" : "Files needed",
+        checked.c_str(), true);
     const char* const modes[] = {lt(LtUseInPlace), lt(LtCopyIt)};
     // Both RomFS rows share a translated label, so give the storage mode its own ID scope.
     ImGui::PushID("romfs-storage-mode");
@@ -714,16 +898,28 @@ void page_files() {
                  "yours. Use it in place: no copy, but SuperWonders needs your RomFS folder where it is.");
     ImGui::PopID();
     rows::section(lt(LtSetUp));
-    const bool exefs_ok = folder_has(g->config.exefs, "main") && folder_has(g->config.exefs, "sdk");
-    const bool romfs_ok = folder_has(g->config.romfs, "Shader");
-    const char* why = !exefs_ok ? "Choose your ExeFS folder first (it holds main and sdk)."
-                      : !romfs_ok ? "Choose your RomFS folder first (it holds Shader, Layout, Effect...)."
+    const bool exefs_ok = g->exefs_valid;
+    const bool romfs_ok = g->romfs_valid;
+    const char* why = kit_issue ? kit_issue : !exefs_ok ? "Choose your ExeFS folder first (it holds main and sdk)."
+                      : !romfs_ok ? "RomFS needs Shader/*.zs. Choose the folder containing Shader, or its parent extraction folder."
                                   : "Reads your game files and builds the game code and the shaders from them, in this "
                                     "PC's SuperWonders data folder. Steps that are already done are skipped.";
-    if (!exefs_ok || !romfs_ok) rows::disable_next();
+    if (finding || kit_issue || !exefs_ok || !romfs_ok) rows::disable_next();
     if (rows::action(g->status.ready == Ready::Yes ? lt(LtSetUpAgain) : lt(LtSetUpGameFiles), "", why, true,
-                     exefs_ok && romfs_ok && g->status.ready != Ready::Yes))
+                     !kit_issue && exefs_ok && romfs_ok && g->status.ready != Ready::Yes))
         start_setup();
+    if (kit_issue) {
+        if (rows::action("Get complete setup package", "Open release page",
+                         "Open the compatible v0.4.6 release page. Download and extract the complete package for your "
+                         "platform. Keep this fork's runtime update for the prepared installation afterward.", true))
+            plat::open_folder("https://github.com/vfjoo888/SuperWonders/releases/tag/v0.4.6");
+        if (rows::action("Recheck setup tools", "",
+                         "After restoring game-build beside the launcher, check again without restarting.", true)) {
+            g->kit = find_kit();
+            const char* remaining = setup_tools_issue(g->kit);
+            g->note = remaining ? remaining : "Setup tools found. Choose your ExeFS and RomFS folders to continue.";
+        }
+    }
     if (rows::action(lt(LtOpenDataFolder), "", "Where SuperWonders keeps your saves, settings and the game it built.",
                      true))
         plat::open_folder(plat::data_root());
@@ -733,28 +929,100 @@ void page_files() {
 void page_settings() {
     rows::begin("##settings", ImGui::GetContentRegionAvail().y);
     rows::section(lt(LtSettings));
-    if (rows::action(lt(LtOpenSettings), "", "Display, graphics, audio, controls and the overlay: the same settings as "
-                                          "the in-game menu (F1, or Minus + Plus held). Saved in pc-settings.ini.",
-                     true, true))
-        overlay::toggle();
+    const char* aspect_names[] = {"16:9 (original)", "21:9", "32:9"};
+    const bool italian = overlay::menu_language() == 1;
+    const char* aspect_desc = italian ? "Si applica al prossimo avvio del gioco." : "Takes effect the next time the game starts.";
+    int aspect = overlay::aspect_ratio();
+    if (rows::choice(italian ? "Formato schermo" : "Aspect ratio", &aspect, aspect_names, 3, 0, aspect_desc))
+        overlay::set_aspect_ratio(aspect);
+
+    rows::section("Quick graphics presets");
+    const char* names[] = {"Performance", "Balanced", "Quality"};
+    const char* values[] = {"720p / 60 FPS", "900p / 60 FPS", "1080p / 60 FPS"};
+    const char* descs[] = {
+        "Lower internal resolution and compressed textures for older GPUs. FSR 1 scales the picture to your display. Changes apply when you start the game.",
+        "900p rendering, FSR 1, FXAA and 4x texture filtering. Keeps all draws visible. A 60 FPS target is a cap, not a performance guarantee.",
+        "1080p rendering, FXAA and 8x texture filtering. Needs more GPU memory and processing power. Changes apply when you start the game."};
+    for (int i = 0; i < 3; ++i)
+        if (rows::action(names[i], values[i], descs[i])) {
+            auto s = overlay::current_settings();
+            overlay::apply_graphics_profile(s, static_cast<overlay::GraphicsProfile>(i));
+            overlay::apply_settings(s);
+            ui::notify("Graphics preset saved. Start or restart the game to apply all changes.");
+        }
+    rows::section("Make it yours");
+    const char* sections[] = {"Video & graphics", "Audio & language", "Controllers & keyboard", "FPS & performance", "System & memory"};
+    const char* descriptions[] = {
+        "Resolution, fullscreen, upscaling, image quality and frame pacing.",
+        "Adjust the volume and choose the game's language.",
+        "Button layouts, controller bindings, keyboard bindings and vibration.",
+        "Choose exactly which performance numbers you want on screen.",
+        "Menu language, memory settings and texture memory options."};
+    for (int i = 0; i < 5; ++i)
+        if (rows::action(sections[i], "Open", descriptions[i])) overlay::open_settings(i);
+    rows::section("Loading");
+    if (rows::action("Optimize shader loading", "Prepare local cache", "Prepare or rebuild the cache used by Fast shader loading. This can reduce file-opening delays on future launches and uses extra disk space and memory. Original shaders and saves are preserved."))
+        start_shader_optimization();
+    rows::section("Profiles & saves");
+    if (rows::action("Manage profiles & progress", profiles::active(u8(plat::data_root())).name.c_str(), "Create or rename profiles, switch independent save slots, and restore backups with a safety copy of current progress.")) open_profiles();
+    if (rows::action("Back up saves", "Create a copy", "Copy your saves into a new folder under data/backups. Existing backups and active saves are preserved. The completed backup folder opens when the copy finishes.")) {
+        std::string error;
+        const auto backup = backup_saves(profiles::storage_root(u8(plat::data_root())), error);
+        if (backup.empty()) ui::notify(error.c_str());
+        else { ui::notify("Save backup created."); plat::open_folder(str(backup)); }
+    }
+    std::error_code backup_error;
+    if (!fs::is_directory(profiles::storage_root(u8(plat::data_root())) / "backups", backup_error)) rows::disable_next();
+    if (rows::action("Open save backups", "Folder", "Browse your saved copies. Close the game before manually restoring a backup."))
+        plat::open_folder(str(profiles::storage_root(u8(plat::data_root())) / "backups"));
+    rows::page_note("These are the same settings used in-game. Open them any time with Esc, F1 or Minus + Plus.");
     rows::end();
 }
 
 void page_mods() {
     rows::begin("##mods", ImGui::GetContentRegionAvail().y);
-    rows::section(lt(LtMods));
+    rows::section("Built-in comfort presets");
+    if(rows::action("Quiet play","Apply","Mute audio and turn off controller rumble. You can change either setting separately in Settings.")) {
+        auto s=overlay::current_settings();s.muted=true;s.rumble=0;overlay::apply_settings(s);ui::notify("Quiet play applied.");
+    }
+    if(rows::action("Clean screen","Apply","Hide the performance HUD for an unobstructed picture. Open the Escape menu to turn it back on.")) {
+        auto s=overlay::current_settings();s.metrics_enabled=false;overlay::apply_settings(s);ui::notify("Performance HUD hidden.");
+    }
+    if(rows::action("Restore sound & rumble","Apply","Unmute audio and restore rumble to 100%. Your volume setting stays as configured.")) {
+        auto s=overlay::current_settings();s.muted=false;s.rumble=100;overlay::apply_settings(s);ui::notify("Sound and rumble restored.");
+    }
+    rows::section("Installed game mods");
     if (g->mods.empty())
         rows::action("No mods yet", "", "Put each mod in a folder of its own in the mods folder. A mod holds a romfs "
                                         "folder (romfs/, or contents/<title id>/romfs/ as Switch mods come).",
                      true);
+    uint64_t enabled = 0, conflicts = 0;
+    for (const auto& m : g->mods) if (m.on) { ++enabled; conflicts += m.shadowed; }
+    const std::string summary = std::to_string(enabled)+" enabled | "+std::to_string(conflicts)+" shadowed files";
+    rows::action("Load order",summary.c_str(),"Mods load in name order. The first enabled mod supplying a path wins. Shadowed files in later mods are ignored. Changes apply after restarting the game. LAN peers need identical enabled mods.",true);
+    bool rescan = false;
     for (Mod& m : g->mods) {
         bool on = m.on;
-        if (rows::toggle(m.name.c_str(), &on, true,
-                         "Its files go over the game's. Mods load in name order; the first with a file wins. "
-                         "Applies the next time the game starts.") &&
-            set_mod(m, on))
-            m.on = on;
+        std::string details = std::to_string(m.files)+" files, "+std::to_string(m.bytes/1024)+" KiB. ";
+        details += m.issue.empty() ? "RomFS layout detected. " : m.issue+" ";
+        if (m.shadowed) details += std::to_string(m.shadowed)+" files are overridden by earlier mods. ";
+        for (const auto& conflict : m.conflicts) details += "\n"+conflict;
+        details += "\nRestart after changes. Custom code patches outside RomFS are not installed by this manager.";
+        const auto phase = lan::lobby_status().phase;
+        const bool paired = lan::active() || phase == lan::LobbyPhase::Preparing || phase == lan::LobbyPhase::Waiting || phase == lan::LobbyPhase::Ready;
+        if (paired) rows::disable_next();
+        const std::string toggle_label = m.name+"###mod-"+(m.on ? "on-" : "off-")+m.name;
+        if (rows::toggle(toggle_label.c_str(), &on, true,details.c_str())) {
+            if (set_mod(m,on)) {
+                rescan = true;
+                ui::notify("Mod selection saved. Restart the game to apply it.");
+            } else ui::notify("Could not change this mod. Check for a duplicate enabled/disabled folder.");
+        }
+        std::string label = m.name+" details###mod-details-"+(m.on ? "on-" : "off-")+m.name;
+        std::string state = !m.issue.empty() ? "Check folder" : m.shadowed ? "File conflicts" : std::to_string(m.files)+" files";
+        rows::action(label.c_str(),state.c_str(),details.c_str(),true);
     }
+    if (rescan) g->mods = list_mods();
     rows::section(lt(LtFolder));
     if (rows::action(lt(LtOpenModsFolder), "", "Add, remove or rename mods there.", true))
         plat::open_folder(plat::data_root() + "/mods");
@@ -772,30 +1040,49 @@ void page_quit() {
 void screen(float w, float h) {
     if (!g) return;
     if (g->follow_hold > 0) g->follow_hold--;
-    g_k = std::clamp(h / 1080.0f, 0.5f, 3.0f);
+    g_k = std::clamp(std::min(h / 1080.0f,w / 1500.0f), 0.4f, 3.0f);
     const float k = g_k;
     const ui::Theme& th = ui::theme();
     {
         std::lock_guard lk(g->pick_lock);  // folders the picker returned
-        if (!g->picked_exefs.empty() || !g->picked_romfs.empty()) g->browse = 0;  // (the system's picker answered)
-        if (!g->picked_exefs.empty()) g->config.exefs = g->picked_exefs, g->picked_exefs.clear(), save_config(g->config);
-        if (!g->picked_romfs.empty()) g->config.romfs = g->picked_romfs, g->picked_romfs.clear(), save_config(g->config);
+        if (!g->picked_source.empty()) {
+            g->browse = 0;
+            find_sources(std::move(g->picked_source), g->picked_kind);
+            g->picked_source.clear();
+        }
+    }
+    if (g->finding.valid() && g->finding.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try {
+            g->found = g->finding.get();
+            if (g->finding_kind != 2) g->config.exefs = !g->found.limited && g->found.exefs.size() == 1 ? g->found.exefs[0] : "";
+            if (g->finding_kind != 1) g->config.romfs = !g->found.limited && g->found.romfs.size() == 1 ? g->found.romfs[0] : "";
+            validate_sources(); save_config(g->config);
+            g->note = g->exefs_valid && g->romfs_valid ? "Game folders found. Select Set up game files to continue."
+                : "Some files are missing, or several extractions were found. Choose the matching folders below. RomFS needs Shader/*.zs.";
+            if (g->found.limited) g->note += " Search limit reached; choose a folder closer to your extraction.";
+        } catch (...) { g->note = "Could not read that folder. Choose a local extracted game folder and try again."; }
     }
     static bool was_running = false;
     if (was_running && !g->job.running) {  // a setup finished
         refresh_status();
         const int r = g->job.result;
-        g->note = r == 0 ? "Your game is set up." : g->job.was_cancelled() ? "Setup cancelled." : "Setup failed.";
-        log("launcher: setup %s (exit %d)", r == 0 ? "finished" : "failed", r);
-        if (r == 0 && !g->config_mode) g->play = true;  // (a first setup goes straight into the game)
-        if (r == 0) g->page = PagePlay, rows::focus_first();
+        if (g->cache_job) {
+            g->note = r == 0 ? "Shader loading cache is ready." : g->job.was_cancelled() ? "Cache preparation cancelled." : "Cache preparation failed; original shaders are preserved.";
+            log("launcher: shader cache preparation exit %d",r);
+            g->cache_job = false;
+        } else {
+            g->note = r == 0 ? "Your game is set up." : g->job.was_cancelled() ? "Setup cancelled." : "Setup failed.";
+            log("launcher: setup %s (exit %d)", r == 0 ? "finished" : "failed", r);
+            if (r == 0 && !g->config_mode) g->play = true;
+            if (r == 0) g->page = PagePlay, rows::focus_first();
+        }
     }
     was_running = g->job.running;
 
     const ImVec2 ds{w, h};
     backdrop(ImGui::GetBackgroundDrawList(), ds);
     // fades and rises in, as the menu does
-    const float reveal = ui::smoothstep(std::min(1.0f, float(double(plat::monotonic_ns() - g->shown_ns) / 0.35e9)));
+    const float reveal = overlay::usability_preferences().reduced_motion?1.f:ui::smoothstep(std::min(1.0f, float(double(plat::monotonic_ns() - g->shown_ns) / 0.35e9)));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, reveal);
     ImGui::SetNextWindowPos({0, (1 - reveal) * 20 * k});
     ImGui::SetNextWindowSize(ds);
@@ -812,8 +1099,9 @@ void screen(float w, float h) {
     }
     menu_was_open = menu_open;
     ImGui::Begin("##launcher", nullptr, f);
+    ImGui::BeginDisabled(menu_open || profiles_open() || g->lan_open);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float margin = 56 * k, nav_w = std::max(300 * k, w * 0.24f);
+    const float margin = 36 * k, nav_w = std::min(w*.24f,330*k);
 
     // the title
     ImGui::SetCursorPos({margin, margin * 0.8f});
@@ -839,13 +1127,16 @@ void screen(float w, float h) {
         ImGui::PushID(i);
         const bool sel = g->page == i;
         const ImVec2 at = ImGui::GetCursorScreenPos();
-        const float row_h = 64 * k;
+        const float row_h = std::min(64*k,(h-top-150*k)/float(kPages));
         const float a = ui::eased(ImGui::GetID("hl"), sel ? 1.0f : 0.0f, 14.0f);
         if (a > 0.01f) {
             dl->AddRectFilled(at, {at.x + nav_w, at.y + row_h}, ui::fade(th.accent, 0.16f * a), 10 * k);
             dl->AddRectFilled(at, {at.x + 5 * k, at.y + row_h}, ui::fade(th.accent, a), 3 * k);
         }
-        if (busy && i != g->page) ImGui::BeginDisabled();
+        // The selected page may change during navigation below. Balance this
+        // scope using the entry snapshot, never a second read of the page.
+        const bool row_disabled = busy && !sel;
+        ImGui::BeginDisabled(row_disabled);
         ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::fade(th.accent, 0.10f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ui::fade(th.accent, 0.20f));
@@ -861,9 +1152,9 @@ void screen(float w, float h) {
         ImGui::PopStyleVar();
         const bool focused = ImGui::IsItemFocused();
         list_focused |= focused;
-        if (focused && i != g->page && !g->follow_hold)  // (the page follows the cursor)
+        if (focused && !row_disabled && i != g->page && !g->follow_hold)  // (the page follows the cursor)
             g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
-        if (clicked) {  // A (or a click): into the page
+        if (clicked && !row_disabled) {  // A (or a click): into the page
             if (i != g->page) g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
             rows::focus_first();
         }
@@ -875,7 +1166,7 @@ void screen(float w, float h) {
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopFont();
         ImGui::PopStyleColor(3);
-        if (busy && i != g->page) ImGui::EndDisabled();
+        ImGui::EndDisabled();
         ImGui::PopID();
     }
     ImGui::EndGroup();
@@ -893,7 +1184,7 @@ void screen(float w, float h) {
         ImGui::SetCursorPosX(margin + 26 * k);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.text_off));
         ImGui::PushTextWrapPos(margin + nav_w);
-        ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
+        if(h>=540)ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
     }
@@ -933,7 +1224,7 @@ void screen(float w, float h) {
         ImGui::EndChild();
     } else {
         ImGui::BeginChild("##page", {pw, ph}, ImGuiChildFlags_NavFlattened);
-        switch (g->page.load()) {
+        if(!menu_open) switch (g->page.load()) {
             case PagePlay: page_play(); break;
             case PageFiles: page_files(); break;
             case PageSettings: page_settings(); break;
@@ -946,15 +1237,19 @@ void screen(float w, float h) {
 
     // the controls, along the bottom
     const ui::Hint hints[] = {{"A", lt(LtSelect)}, {"B", lt(LtBack)}, {"L", ""}, {"R", lt(LtPages)}, {"+", lt(LtPlayHint)}};
-    ui::hints(dl, w * 0.5f, h - margin * 0.7f, 34 * k, hints, 5);
+    if(!menu_open && !profiles_open() && !g->lan_open)ui::hints(dl, w * 0.5f, h - 46*k, 34 * k, hints, 5);
+    ImGui::EndDisabled();
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
 
+    draw_lan(w,h,k);
+    draw_profiles(w,h);
+
     // The controller, by the player's own bindings (the pad as the overlay saw it: NpadButton bits), and the keys.
     const uint64_t pad = overlay::pad_buttons(), pressed = pad & ~g->pad_before;
     g->pad_before = pad;
-    if (menu_open) return;
+    if (menu_open || g->lan_open || profiles_open()) return;
     const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, false) ||
                        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, false) || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false);
     const bool back = (pressed & plat::kB) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
@@ -964,8 +1259,8 @@ void screen(float w, float h) {
         if (g->browse) browse_close();
         else g->focus_list = true;
     }
-    if (!busy && (pressed & (plat::kL | plat::kR))) {  // L / R: the page before / after
-        const int step = (pressed & plat::kR) ? 1 : kPages - 1;
+    if (!busy && ((pressed & (plat::kL | plat::kR)) || ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))) {  // L / R: the page before / after
+        const int step = ((pressed & plat::kR) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)) ? 1 : kPages - 1;
         g->page = (g->page + step) % kPages, g->browse = 0, g->focus_list = true, g->follow_hold = 3;
         log("launcher: page %s", kPageNames[g->page.load()]);
     }
@@ -991,12 +1286,60 @@ bool wanted(const std::vector<std::string>& args, bool& config_mode) {
         const char* e = std::getenv(n);
         return e && *e && std::strcmp(e, "0") != 0;
     };
+    if ((env_on("NX_LAUNCHER_TOUR") || env_on("NX_PROFILE_MANAGER_TOUR") || env_on("NX_QOL_RESIZE_TOUR") || env_on("NX_LAN_LOBBY_TOUR") || env_on("NX_LAN_LOBBY_AUTOSTART")) && env_on("NX_HEADLESS_PRESENT")) return true;
     if (env_on("NX_NO_LAUNCHER") || env_on("NX_HEADLESS") || env_on("NX_INPUT_SCRIPT") || env_on("NX_INPUT_REPLAY"))
         return config_mode && !env_on("NX_HEADLESS");
     return true;
 }
 
 }  // namespace
+
+void prepare_ultrawide_layouts() {
+    const char* profile = std::getenv("NX_ASPECT_PROFILE");
+    if (!profile || (std::strcmp(profile, "21:9") != 0 && std::strcmp(profile, "32:9") != 0)) return;
+    const Kit kit = find_kit();
+    fs::path root = u8(kit.script).parent_path();
+    fs::path script = root / "tools" / "wonder_uw_prepare.py";
+    if (!file(script)) script = root / "wonder_uw_prepare.py";
+    if (kit.python.empty() || !file(script)) {
+        log("ultrawide: missing layout preparation tools");
+#if defined(_WIN32)
+        MessageBoxA(nullptr, "Ultrawide setup tools are missing. Repair or reinstall the game-build kit.",
+                    "SuperWonders - Ultrawide setup", MB_OK | MB_ICONERROR);
+#endif
+        plat::exit_process(1);
+    }
+    Job job;
+    job.start({kit.python, "-u", str(script), "--data-root", plat::data_root()});
+    while (job.running) plat::sleep_ns(50'000'000);
+    if (job.result != 0) {
+        log("ultrawide: layout preparation failed (%d)", int(job.result));
+#if defined(_WIN32)
+        MessageBoxA(nullptr, "Could not prepare ultrawide layouts from your game files. See data/nx.log for details.",
+                    "SuperWonders - Ultrawide setup", MB_OK | MB_ICONERROR);
+#endif
+        plat::exit_process(1);
+    }
+}
+
+bool return_to_launcher() {
+#if defined(_WIN32)
+    const auto executable=u8(program_dir())/"wonder-launcher.exe";
+    if(!file(executable)) {ui::notify("wonder-launcher.exe is missing from the program folder.");return false;}
+    auto command=L"\""+executable.wstring()+L"\" --config --launcher-parent="+std::to_wstring(GetCurrentProcessId());
+    STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi)) {
+        ui::notify("Could not reopen the launcher. Your game is still running.");return false;
+    }
+    CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+#else
+    const auto executable=u8(program_dir())/"wonder";
+    const auto child=fork();
+    if(child<0) {ui::notify("Could not reopen the launcher.");return false;}
+    if(child==0) {execl(executable.c_str(),executable.c_str(),"--config",nullptr);_exit(127);}
+#endif
+    plat::exit_process(0);
+}
 
 void run() {
     if (!overlay::enabled()) return;
@@ -1027,7 +1370,25 @@ void run() {
     g = &state;
     g->kit = find_kit();
     g->config = load_config();
+    // A portable layout can keep its own extracted folders next to the launcher.
+    // Only the explicit layout is considered automatically; no background drive scan.
+    if (g->config.exefs.empty() && g->config.romfs.empty()) {
+        const auto here = u8(program_dir());
+        const auto exe = source::exefs_ok(here / "exefs") ? here / "exefs" : here;
+        if (source::exefs_ok(exe) && source::romfs_ok(here / "romfs")) {
+            g->config.exefs = str(exe); g->config.romfs = str(here / "romfs");
+            save_config(g->config);
+            g->note = "Found your extracted game folders beside the launcher. Select Set up game files to continue.";
+        }
+    }
+    validate_sources();
     g->config_mode = config_mode;
+    const auto arguments=plat::program_args();
+    if(std::find(arguments.begin(),arguments.end(),"--lan-ended")!=arguments.end()) {
+        std::ifstream note(u8(plat::data_root())/"lan-last-session.txt",std::ios::binary);
+        char text[2048]{}; note.read(text,sizeof(text)-1);
+        g->note=note.gcount()>0?std::string(text,size_t(note.gcount())):"The LAN session ended. You can reconnect from a new room.";
+    }
     refresh_status();
     updates_init(config_mode);
     // A regular launch always opens the launcher; RecompLauncher uses --play to bypass it.
@@ -1052,28 +1413,63 @@ void run() {
     else if (g->status.ready == Ready::Rebuild && folder_has(g->config.exefs, "main") &&
              folder_has(g->config.romfs, "Shader"))
         g->page = PageFiles, start_setup();
+    const bool lobby_tour=std::getenv("NX_LAN_LOBBY_TOUR")!=nullptr;
+    if(lobby_tour) open_lan();
+    // Isolated native QA only: show the real profile manager and quit after 120 UI frames.
+    const bool profile_tour=std::getenv("NX_PROFILE_MANAGER_TOUR")!=nullptr;
+    if(profile_tour)open_profiles();
+    // Repro hook: exercise the real asynchronous launcher-to-game path without
+    // desktop input. Normal launches configure these fields in the native popup.
+    if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART")) {
+        open_lan(); g->lan_mode=std::strcmp(mode,"host")?1:0;
+        if(const auto* code=std::getenv("NX_LAN_CODE")) std::snprintf(g->lan_code,sizeof g->lan_code,"%s",code);
+        const auto* address=std::getenv("NX_LAN_ADDRESS");
+        if(!address) address=g->lan_mode?"127.0.0.1":"0.0.0.0";
+        std::snprintf(g->lan_address,sizeof g->lan_address,"%s",address);
+        if(const auto* pipeline=std::getenv("NX_LAN_PIPELINE")) g->lan_pipeline=std::strcmp(pipeline,"1")==0;
+        if(const auto* port=std::getenv("NX_LAN_PORT")) g->lan_port=std::clamp(std::atoi(port),1,65535);
+        if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
+        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
+    }
+    const bool resize_tour=std::getenv("NX_QOL_RESIZE_TOUR")!=nullptr;
     uint64_t frames = 0;
     test_pad_start();  // (NX_TEST_PAD: a scripted controller, launcher/test_pad.h)
     for (;;) {
         const uint64_t t0 = plat::monotonic_ns();
+        if(resize_tour) {
+            if(frames==0 || frames==40 || frames==80 || frames==120) {
+                auto settings=overlay::current_settings();
+                settings.width=frames==40?960:frames==80?640:1280;settings.height=settings.width*9/16;
+                overlay::apply_settings(settings,false);
+                overlay::open_settings(2);
+            }
+            if(frames==15 || frames==55 || frames==95 || frames==135) {
+                uint32_t width=0,height=0;plat::window_size(width,height);
+                log("qol resize: client %ux%u",width,height);
+            }
+            if(frames>=160)plat::exit_process(0);
+        }
         test_pad_frame(frames);
         plat::PadState pad{};
         plat::read_pad(pad);  // (feeds the overlay's controller navigation: overlay::filter_pad)
         if (tour) {
+            g->follow_hold = 2;  // the tour owns the page even while a sidebar item has keyboard focus
             const int step = int(frames / uint64_t(tour));
             if (step < kPages - 1) g->page = step;  // (not Quit)
-            if (step == kPages - 1 && !overlay::is_open()) g->page = PageSettings, overlay::toggle();
-            if (step == kPages) {  // the setup card at 62%, its sheen sweeping
+            if (step >= kPages - 1 && step < kPages - 1 + 5)
+                g->page = PageSettings, overlay::open_settings(step - (kPages - 1));
+            if (step == kPages - 1 + 5) {  // the setup card at 62%, its sheen sweeping
                 if (overlay::is_open()) overlay::toggle();
                 g->page = PageFiles, g->demo_progress = true, g->job.progress = 0.62f;
                 if (!g->job.started_ns) g->job.started_ns = plat::monotonic_ns();
                 std::lock_guard lk(g->job.lock);
                 g->job.what = "Translating the shaders";
             }
-            if (step > kPages && !updates_busy()) plat::exit_process(0);  // (an update finishes first)
+            if (step > kPages - 1 + 5 && !updates_busy()) plat::exit_process(0);  // (an update finishes first)
         }
         if (!nvn::present_ui_frame()) plat::sleep_ns(16'000'000);
         frames++;
+        if((lobby_tour || profile_tour) && frames>=120) plat::exit_process(0);
         if (g->quit) {
             log("launcher: quit");
             plat::exit_process(0);
@@ -1081,14 +1477,17 @@ void run() {
         if (g->play && !g->job.running) {
             refresh_status();
             if (g->status.ready == Ready::Yes) {
+                if (!lan::active() && !backup_before_play()) {
+                    g->play=false; open_profiles(); continue;
+                }
 #if defined(_WIN32)
                 std::wstring self(32768, L'\0');
                 DWORD n = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
                 if (n && n < self.size()) {
                     self.resize(n);
-                    if (_wcsicmp(fs::path(self).filename().c_str(), L"wonder-launcher.exe") == 0) {
+                    if (!lan::active() && _wcsicmp(fs::path(self).filename().c_str(), L"wonder-launcher.exe") == 0) {
                         const std::wstring game = (fs::path(self).parent_path() / L"wonder.exe").wstring();
-                        std::wstring command = L"\"" + game + L"\" --play";
+                        std::wstring command = L"\"" + game + L"\" --play --launcher-parent="+std::to_wstring(GetCurrentProcessId());
                         STARTUPINFOW si{};
                         si.cb = sizeof(si);
                         PROCESS_INFORMATION pi{};

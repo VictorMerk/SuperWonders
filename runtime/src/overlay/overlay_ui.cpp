@@ -1,7 +1,11 @@
 // The overlay's look (see overlay_ui.h). Style sizes follow Savage Wind's menu (runtime/ui/menu.mm style_init, MIT);
 // the colours are SuperWonders' own and the font is Nunito (SIL OFL 1.1, third_party/fonts/Nunito).
 #include "overlay/overlay_ui.h"
-
+#include "overlay/overlay.h"
+#include "overlay/usability.h"
+#include "button_font.h"
+#include <cstring>
+#include <vector>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -46,6 +50,18 @@ const unsigned char kNotoMenuKR[] = {
 #embed "../../../third_party/fonts/NotoFallback/NotoSansKR-menu.ttf"
 };
 #endif
+#if __has_embed("../../../third_party/fonts/NotoFallback/NotoSansSC-menu.ttf")
+#define NX_NOTO_MENU_SC 1
+const unsigned char kNotoMenuSC[] = {
+#embed "../../../third_party/fonts/NotoFallback/NotoSansSC-menu.ttf"
+};
+#endif
+#if __has_embed("../../../third_party/fonts/NotoFallback/NotoSans-menu.ttf")
+#define NX_NOTO_MENU_SANS 1
+const unsigned char kNotoMenuSans[] = {
+#embed "../../../third_party/fonts/NotoFallback/NotoSans-menu.ttf"
+};
+#endif
 #if __has_embed("../../../third_party/fonts/NotoFallback/NotoSansArabic-menu.ttf")
 #define NX_NOTO_MENU_ARABIC 1
 const unsigned char kNotoMenuArabic[] = {
@@ -84,6 +100,9 @@ const char kLocalizedGlyphs[] = "ÉÖÜßàáäçèéêíñóöùúüğışАБ�
 
 const char kAdditionalLocalizedGlyphs[] = "简体繁體快速设置视频音频控制性能叠加层窗口输出大小内部解析度全屏窗口置顶游戏音量静音游戏语言重新启动游戏以应用语言按键布局下方右侧帧率上限系统内存清理阈值低显存配置纹理显示画面帧同步升频锐化抗锯齿各向异性过滤垂直同步震动退出菜单语言帧时间图表位置键盘控制器原始动态屏幕原生快速設定影片音訊效能覆蓋層視窗輸出大小內部解析度全螢幕遊戲音量靜音遊戲語言重新啟動遊戲以套用語言按鍵配置影格率上限系統記憶體清理閾值低顯示記憶體設定材質顯示畫面升頻反鋸齒過濾垂直同步震動結束選單語言影格時間圖表鍵盤控制器原始動態螢幕原生";
 const char kLauncherLocalizedGlyphs[] = "开始文件模组更新退出";
+// Korean characters used in the help descriptions as well as the menu labels.
+const char kKoreanHelpGlyphs[] = "가값강계과근꾸끄끕널넘높누느닙단당대된두듬딩록릅린묘미바번범분수습식압약없와유으은의인입있장절접줄중증직질집찢초최축충패할행확환황흐히";
+const char kAdditionalHelpGlyphs[] = "ТЧщёآあえかずせちとどなほぼみめもらりわんギザ不与丢两中为也乱会保個側儲兩关减分切利効卡即压取变可号合后和回围圍圧増壓多够夠失対将將少幀平式強强微応慢或押拡择持换接提換撕擇改数整數斜明是晰替最會板柄染案檔檻次正此毎每毫況消済減渲滑為無状现現电省码确確碼秒稍算節範糊約素細組緣縮繪细缘缩耗脑腦至與节范荷號行裂見認調請變认请调負超足軽較輪较辨边近这进选這通進遅遺邊郭释釋銳門關闭離電需頂高鮮";
 
 const char* const kScriptFonts[] = {
 #if defined(_WIN32)
@@ -124,12 +143,11 @@ ImU32 mix(ImU32 a, ImU32 b, float t) {
 
 namespace {
 
-// "Wonder Night": hot pink and sky cyan on deep indigo, after Wonder's colourful menus. The panels are dark and
-// saturated so the text reads over any scene.
+// "Flower Garden": sunflower gold and mint over ink-green panels, with warm high-contrast text.
 const Theme kTheme = {
-    "Wonder Night", IM_COL32(255, 94, 168, 255), IM_COL32(86, 214, 255, 255), IM_COL32(250, 248, 255, 255),
-    IM_COL32(208, 202, 230, 255), IM_COL32(116, 108, 142, 255), IM_COL32(22, 18, 54, 242), IM_COL32(28, 22, 66, 250),
-    IM_COL32(10, 8, 30, 255), IM_COL32(44, 24, 88, 255), IM_COL32(110, 232, 140, 255), IM_COL32(255, 206, 72, 255),
+    "Flower Garden", IM_COL32(255, 204, 72, 255), IM_COL32(105, 222, 182, 255), IM_COL32(251, 247, 230, 255),
+    IM_COL32(200, 216, 210, 255), IM_COL32(130, 155, 150, 255), IM_COL32(16, 35, 38, 246), IM_COL32(23, 46, 48, 250),
+    IM_COL32(9, 24, 29, 255), IM_COL32(23, 54, 53, 255), IM_COL32(110, 232, 140, 255), IM_COL32(255, 206, 72, 255),
     IM_COL32(255, 96, 112, 255)};
 
 }  // namespace
@@ -217,6 +235,8 @@ void load_fonts() {
     glyph_builder.AddText(kLocalizedGlyphs);
     glyph_builder.AddText(kAdditionalLocalizedGlyphs);
     glyph_builder.AddText(kLauncherLocalizedGlyphs);
+    glyph_builder.AddText(kKoreanHelpGlyphs);
+    glyph_builder.AddText(kAdditionalHelpGlyphs);
     // ImGui keeps this pointer in the font config and consumes it later, when the
     // Vulkan backend builds the atlas on its first NewFrame. Keep it alive beyond
     // this function; a local vector here leaves every merged fallback with a
@@ -224,7 +244,7 @@ void load_fonts() {
     static ImVector<ImWchar> localized_ranges;
     localized_ranges.clear();
     glyph_builder.BuildRanges(&localized_ranges);
-#if defined(NX_NOTO_MENU_JP) || defined(NX_NOTO_MENU_KR) || defined(NX_NOTO_MENU_ARABIC)
+#if defined(NX_NOTO_MENU_JP) || defined(NX_NOTO_MENU_KR) || defined(NX_NOTO_MENU_SC) || defined(NX_NOTO_MENU_SANS) || defined(NX_NOTO_MENU_ARABIC)
     ImFontConfig bundled;
     bundled.MergeMode = true;
     bundled.FontDataOwnedByAtlas = false;  // embedded static data; ImGui copies it into its atlas
@@ -246,6 +266,24 @@ void load_fonts() {
     io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuKR, int(sizeof kNotoMenuKR), kTitleBake, &bundled,
                                    localized_ranges.Data);
     nx::log("overlay: embedded Noto Sans KR glyph fallback");
+#endif
+#ifdef NX_NOTO_MENU_SC
+    bundled.DstFont = g_body;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSC, int(sizeof kNotoMenuSC), kBodyBake, &bundled,
+                                   localized_ranges.Data);
+    bundled.DstFont = g_title;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSC, int(sizeof kNotoMenuSC), kTitleBake, &bundled,
+                                   localized_ranges.Data);
+    nx::log("overlay: embedded Noto Sans SC glyph fallback");
+#endif
+#ifdef NX_NOTO_MENU_SANS
+    bundled.DstFont = g_body;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSans, int(sizeof kNotoMenuSans), kBodyBake, &bundled,
+                                   localized_ranges.Data);
+    bundled.DstFont = g_title;
+    io.Fonts->AddFontFromMemoryTTF((void*)kNotoMenuSans, int(sizeof kNotoMenuSans), kTitleBake, &bundled,
+                                   localized_ranges.Data);
+    nx::log("overlay: embedded Noto Sans glyph fallback");
 #endif
 #ifdef NX_NOTO_MENU_ARABIC
     bundled.DstFont = g_body;
@@ -279,6 +317,7 @@ ImFont* title() { return g_title; }
 float font_scale(float height) { return kBody1080 * std::clamp(height / 1080.0f, 0.5f, 3.0f) / kBodyBake; }
 
 float approach(float current, float target, float rate) {
+    if(usability_preferences().reduced_motion) return target;
     const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const float t = 1.0f - std::exp(-rate * dt);
     const float next = current + (target - current) * t;
@@ -367,6 +406,7 @@ void progress_bar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, float alpha) {
     const float lo = a.x + r * 0.5f, hi = fx - r * 0.5f;
     if (hi - lo < 4) return;
     const float w = std::max(4 * h, (fx - a.x) * 0.25f);
+    if(usability_preferences().reduced_motion)return;
     const float t = float(ImGui::GetTime());
     const float centre = lo - w * 0.5f + std::fmod(t / 1.6f, 1.0f) * (hi - lo + w);
     auto light = [&](float x) {
@@ -389,26 +429,86 @@ void progress_bar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, float alpha) {
     }
 }
 
+static bool playstation_shape(const char* label) {
+    return !std::strcmp(label,"Cross") || !std::strcmp(label,"Circle") ||
+           !std::strcmp(label,"Square") || !std::strcmp(label,"Triangle");
+}
+
+static float badge_width(float h, const char* label) {
+    if (playstation_shape(label)) return h;
+    return std::max(h, body()->CalcTextSizeA(h * 0.62f, FLT_MAX, 0, label).x + h * 0.6f);
+}
+
 float badge(ImDrawList* dl, ImVec2 pos, float h, const char* label, float alpha) {
     ImFont* f = body();
     const float fs = h * 0.62f;
     const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, label);
-    const float w = std::max(h, ts.x + h * 0.6f);
+    const float w = badge_width(h,label);
     dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), fade(theme().text, alpha), h * 0.5f);
+    if (playstation_shape(label)) {
+        const ImVec2 c(pos.x+w*.5f,pos.y+h*.5f);
+        const float r=h*.22f, stroke=std::max(1.0f,h*.065f);
+        const ImU32 ink=fade(theme().panel | IM_COL32_A_MASK,alpha);
+        if (!std::strcmp(label,"Circle")) dl->AddCircle(c,r,ink,24,stroke);
+        else if (!std::strcmp(label,"Square")) dl->AddRect(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,0,0,stroke);
+        else if (!std::strcmp(label,"Triangle"))
+            dl->AddTriangle(ImVec2(c.x,c.y-r),ImVec2(c.x+r,c.y+r),ImVec2(c.x-r,c.y+r),ink,stroke);
+        else {
+            dl->AddLine(ImVec2(c.x-r,c.y-r),ImVec2(c.x+r,c.y+r),ink,stroke);
+            dl->AddLine(ImVec2(c.x-r,c.y+r),ImVec2(c.x+r,c.y-r),ink,stroke);
+        }
+        return w;
+    }
     dl->AddText(f, fs, ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), fade(theme().panel | IM_COL32_A_MASK, alpha),
                 label);
     return w;
 }
 
-void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* list, int n, float alpha) {
+void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* input, int n, float alpha) {
+    std::vector<std::string> labels(size_t(n), std::string{});
+    std::vector<Hint> resolved(input, input + n);
+    const auto settings = overlay::current_settings();
+    auto kind = plat::controller_kind(0);
+    // The launcher also accepts a controller assigned after the keyboard slot.
+    // Match the explicit in-game icon preference when one is selected.
+    if (settings.button_icons >= 1 && settings.button_icons <= 4)
+        kind = static_cast<plat::ControllerKind>(settings.button_icons - 1);
+    else if (kind == plat::ControllerKind::Keyboard)
+        for (uint32_t player = 1; player < plat::kPlayerCount; ++player)
+            if (const auto candidate = plat::controller_kind(player); candidate != plat::ControllerKind::Keyboard) {
+                kind = candidate;
+                break;
+            }
+    for (int i = 0; i < n; ++i) {
+        if (!input[i].badge) continue;
+        const char* original = input[i].badge;
+        if (!std::strcmp(original,"Menu")) {
+            labels[i]=kind==plat::ControllerKind::Keyboard ? "F1" :
+                std::string(physical_button_name(kind,controller_binding(settings,CtlMinus)))+" + "+
+                physical_button_name(kind,controller_binding(settings,CtlPlus));
+            resolved[i].badge=labels[i].c_str();
+            continue;
+        }
+        int action = -1;
+        if (!std::strcmp(original, "A")) action = CtlA;
+        if (!std::strcmp(original, "B")) action = CtlB;
+        if (!std::strcmp(original, "L")) action = CtlL;
+        if (!std::strcmp(original, "R")) action = CtlR;
+        if (!std::strcmp(original, "+")) action = CtlPlus;
+        if (action < 0) continue;
+        if (kind == plat::ControllerKind::Keyboard)
+            labels[i] = action == CtlPlus ? "F5" : action == CtlA ? "Enter" : action == CtlB ? "Esc" : action == CtlL ? "PgUp" : "PgDn";
+        else labels[i] = physical_button_name(kind, controller_binding(settings, size_t(action)));
+        resolved[i].badge = labels[i].c_str();
+    }
+    const Hint* list = resolved.data();
     ImFont* f = body();
     const float fs = h * 0.78f, gap = h * 0.35f, spacing = h * 1.1f;
     float total = 0;
     for (int i = 0; i < n; ++i) {
         float bw = 0;
         if (list[i].badge) {
-            const ImVec2 ts = f->CalcTextSizeA(h * 0.62f, FLT_MAX, 0, list[i].badge);
-            bw = std::max(h, ts.x + h * 0.6f) + gap;
+            bw = badge_width(h,list[i].badge) + gap;
         }
         total += bw + f->CalcTextSizeA(fs, FLT_MAX, 0, list[i].text).x + (i + 1 < n ? (*list[i].text ? spacing : 0) : 0);
     }

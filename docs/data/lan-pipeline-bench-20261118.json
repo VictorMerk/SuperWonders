@@ -1,0 +1,167 @@
+{
+  "method": "80 authenticated TCP exchanges per run; three interleaved runs per mode; 5 ms configured one-way relay delay, with actual forwarding/sleep durations recorded. Two extra zero-delay controls. No game or GPU work.",
+  "limitation": "Synthetic throughput only; not game FPS, controller-to-display latency, or a measurement of the home network.",
+  "summary": {
+    "serial": {
+      "host_ms_per_tick_median": 46.791,
+      "observed_forward_delay_ms_mean": 15.37631138773816,
+      "observed_work_ms_mean": 15.345333333333333
+    },
+    "pipeline": {
+      "host_ms_per_tick_median": 31.503,
+      "observed_forward_delay_ms_mean": 15.340931413011177,
+      "observed_work_ms_mean": 15.268666666666666
+    }
+  },
+  "runs": [
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 15.469,
+      "guest_ms_per_tick": 15.467,
+      "measured_host_work_ms": 14.976,
+      "measured_guest_work_ms": 15.034,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 0.0,
+      "one_frame_pipeline": false,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 0.061369135849122264,
+        "peak": 0.1357000001007691
+      },
+      "case": "lan-delay-v2-d0-m0"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 15.487,
+      "guest_ms_per_tick": 15.485,
+      "measured_host_work_ms": 15.47,
+      "measured_guest_work_ms": 15.468,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 0.0,
+      "one_frame_pipeline": true,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 0.06113497945412978,
+        "peak": 0.1571000029798597
+      },
+      "case": "lan-delay-v2-d0-m1"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 46.79,
+      "guest_ms_per_tick": 46.407,
+      "measured_host_work_ms": 15.308,
+      "measured_guest_work_ms": 15.224,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": false,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.36570165298753,
+        "peak": 16.957200001343153
+      },
+      "case": "lan-delay-v2-d5-r1-m0"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 31.486,
+      "guest_ms_per_tick": 31.093,
+      "measured_host_work_ms": 15.265,
+      "measured_guest_work_ms": 15.224,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": true,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.349140329402152,
+        "peak": 19.961799996963236
+      },
+      "case": "lan-delay-v2-d5-r1-m1"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 46.914,
+      "guest_ms_per_tick": 46.531,
+      "measured_host_work_ms": 15.365,
+      "measured_guest_work_ms": 15.318,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": false,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.41586502065567,
+        "peak": 16.409300005761907
+      },
+      "case": "lan-delay-v2-d5-r2-m0"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 31.503,
+      "guest_ms_per_tick": 31.122,
+      "measured_host_work_ms": 15.243,
+      "measured_guest_work_ms": 15.24,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": true,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.308870370617162,
+        "peak": 16.481999999086838
+      },
+      "case": "lan-delay-v2-d5-r2-m1"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 46.791,
+      "guest_ms_per_tick": 46.41,
+      "measured_host_work_ms": 15.363,
+      "measured_guest_work_ms": 15.148,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": false,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.347367489571278,
+        "peak": 16.99400000507012
+      },
+      "case": "lan-delay-v2-d5-r3-m0"
+    },
+    {
+      "frames": 80,
+      "work_ms": 8,
+      "host_ms_per_tick": 31.547,
+      "guest_ms_per_tick": 31.158,
+      "measured_host_work_ms": 15.298,
+      "measured_guest_work_ms": 15.225,
+      "inputs_verified": true,
+      "configured_one_way_delay_ms": 5,
+      "one_frame_pipeline": true,
+      "relay_errors": [],
+      "limitation": "Synthetic exchange throughput, not game FPS or physical controller latency.",
+      "observed_forward_delay_ms": {
+        "mean": 15.364783539014214,
+        "peak": 18.716799997491762
+      },
+      "case": "lan-delay-v2-d5-r3-m1"
+    }
+  ],
+  "source_sha256_at_report": {
+    "runtime/src/netplay_pipeline.h": "2e383b97c0534bdc5d75537fa4d07c2763e860edcdb6fdc0dfca7401d42b7f59",
+    "runtime/src/netplay_session.cpp": "1a44be4d5d976f9d6ff269dbe04e65146e38d610a3fe6d3a1d7487b509308b5e",
+    "tools/perf/lan_transport_bench.cpp": "5b7340ccef0d9428d266b4bd1db46a4845107e06a45235ff9fcd3e87b20e20fa"
+  }
+}

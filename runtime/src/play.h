@@ -7,6 +7,7 @@
 #include <string>
 
 #include "platform.h"
+#include "netplay_wire.h"
 
 namespace nx::play {
 
@@ -19,5 +20,10 @@ void frame();
 const char* take_shot();
 // hle_fs: a guest file was opened (course and world names come from the files a scene loads).
 void file_opened(const std::string& guest_path);
+// Exact course/player-position bits sampled at the last completed game frame.
+// Zero means no validated player object is available; this is a partial desync
+// guard, not a checksum of all actors, RNG, physics, and scene state.
+uint64_t netplay_state_hash();
+lan::PlayerState netplay_player_state();
 
 }  // namespace nx::play

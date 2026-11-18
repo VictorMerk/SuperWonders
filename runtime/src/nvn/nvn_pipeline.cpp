@@ -18,9 +18,13 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include "map_proxy_debug.h"
 
 #include "nvn_pipeline.h"
+#include "cache_file.h"
+#include "shader_bundle.h"
 #include "nvn_pipeline_async.h"
+#include "nvn_ultrawide.h"
 #include "platform.h"
 #include "shadow_coord_debug_spv.h"
 
@@ -55,7 +59,8 @@ std::set<std::string> g_pipeline_key_ids;
 std::map<std::string, std::unique_ptr<ShaderInfo>> g_pipeline_warm_shaders;
 std::string g_pipeline_keys_path;
 uint32_t g_pipeline_vendor = 0, g_pipeline_device = 0;
-bool g_pipeline_keys_loaded = false, g_pipeline_keys_dirty = false;
+bool g_pipeline_keys_loaded = false;
+std::atomic<bool> g_pipeline_keys_dirty{false};
 
 std::string pipeline_record_id(const PipelineKeysRecord& rec) {
     std::string id(rec.vs_hash, sizeof rec.vs_hash);
@@ -125,19 +130,14 @@ ShaderInfo* load_pipeline_shader(const char hash[16], uint32_t shared, const uin
     identity.append(reinterpret_cast<const char*>(&shared), sizeof shared);
     identity.append(reinterpret_cast<const char*>(local), sizeof(uint32_t) * 3);
     if (auto it = g_pipeline_warm_shaders.find(identity); it != g_pipeline_warm_shaders.end()) return it->second.get();
-    const std::string path = plat::data_root() + "/spirv/" + h + ".spv";
-    FILE* f = plat::fopen_utf8(path, "rb");
-    if (!f) return nullptr;
-    plat::fseek64(f, 0, SEEK_END);
-    const int64_t bytes = plat::ftell64(f);
-    plat::fseek64(f, 0, SEEK_SET);
-    if (bytes < 20 || bytes > (64ll << 20) || (bytes & 3)) { std::fclose(f); return nullptr; }
+    const auto code = shader_bundle().load(h);
+    const auto bytes = code.size();
+    if (bytes < 20 || bytes > (64ull << 20) || (bytes & 3)) return nullptr;
     auto info = std::make_unique<ShaderInfo>();
     info->hash = h;
     info->spirv.resize(size_t(bytes) / 4);
-    const bool read = std::fread(info->spirv.data(), 1, size_t(bytes), f) == size_t(bytes);
-    std::fclose(f);
-    if (!read || !reflect_spirv(info->spirv.data(), info->spirv.size(), info->refl)) return nullptr;
+    std::memcpy(info->spirv.data(),code.data(),bytes);
+    if (!reflect_spirv(info->spirv.data(), info->spirv.size(), info->refl)) return nullptr;
     info->stage = info->refl.stage;
     info->control.valid = true;
     info->control.shared_size = shared;
@@ -207,26 +207,56 @@ VkShaderStageFlags stage_bit(ShaderStage s) {
 // `unwritten`: fragment input locations the vertex stage does not write (default_unwritten_inputs).
 std::map<std::tuple<const ShaderInfo*, std::string, uint32_t, std::string>, VkShaderModule> g_modules;  // module_of
 
-VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0) {
+VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0,
+                         float uw_x = 0.0f, float uw_x_offset = 0.0f) {
     auto& cache = g_modules;
     // The integer-vertex-input patch (skinned models' bone indices; without it Metal refuses every character's
     // pipeline, DEBUG.md #25/#26). NX_INT_ATTRIBS=0 turns it off.
     static const char* int_env = std::getenv("NX_INT_ATTRIBS");
     static const bool off = int_env && int_env[0] == '0';
     std::string k = kinds && !off ? std::string(reinterpret_cast<const char*>(kinds), 16) : std::string(16, '\0');
-    auto& m = cache[{s, k, unwritten, int_texture_key(s)}];  // integer textures (nvn_spirv_int_textures.cpp)
+    std::string variant = int_texture_key(s);
+    variant.push_back(uw_x > 0.0f ? '\1' : '\0');
+    if (uw_x > 0.0f) {
+        variant.append(reinterpret_cast<const char*>(&uw_x), sizeof uw_x);
+        variant.append(reinterpret_cast<const char*>(&uw_x_offset), sizeof uw_x_offset);
+    }
+    auto& m = cache[{s, k, unwritten, variant}];
     if (!m) {
         bool is_patched = false;
         const uint8_t* int_kinds = k != std::string(16, '\0') ? reinterpret_cast<const uint8_t*>(k.data()) : nullptr;
         std::vector<uint32_t> code;
-        if (shadow_coord_debug_on() && s->stage == ShaderStage::Fragment && s->hash == "1872caa47df3cd7a") {
+        const char* proxy_debug = std::getenv("NX_UW_MAP_PROXY_TEST");
+        if (proxy_debug && std::strcmp(proxy_debug, "1") == 0 && s->stage == ShaderStage::Fragment && s->hash == "0bebd775cd1a4238") {
+            code.assign(std::begin(kMapProxyDebug), std::end(kMapProxyDebug));
+            log("map proxy test: displaying composite geometry in magenta");
+        } else if (shadow_coord_debug_on() && s->stage == ShaderStage::Fragment && s->hash == "1872caa47df3cd7a") {
             code.assign(std::begin(kShadowCoordDebugSpirv), std::end(kShadowCoordDebugSpirv));
             log("nvn/vk: NX_SHADOW_COORD_DEBUG replaces fragment shader %s with projected-coordinate view",
                 s->hash.c_str());
         } else {
             code = patched_spirv(s, int_kinds, unwritten, &is_patched);
         }
+        const char* map_depth_test = std::getenv("NX_UW_MAP_DEPTH_TEST");
+        if (map_depth_test && std::strcmp(map_depth_test, "1") == 0 && s->stage == ShaderStage::Fragment &&
+            s->hash == "0bebd775cd1a4238") {
+            unsigned selects = 0; size_t select_at = 0;
+            for (size_t i = 5; i < code.size();) {
+                uint32_t len = code[i] >> 16, op = code[i] & 0xffff;
+                if (!len || i + len > code.size()) { selects = 0; break; }
+                if (op == 169 && len == 6) { ++selects; select_at = i; }
+                i += len;
+            }
+            if (selects == 1) {
+                code[select_at + 4] = code[select_at + 5];
+                log("ultrawide map depth test: forced visible branch for %s", s->hash.c_str());
+            } else log("ultrawide map depth test: expected one select, found %u", selects);
+        }
         if (s->stage == ShaderStage::Vertex) clip_z_module(s, code);  // NX_CLIP_Z_PATCH (nvn_spirv_clip.cpp)
+        if (uw_x > 0.0f && s->stage == ShaderStage::Vertex) {
+            std::vector<uint32_t> scaled;
+            if (patch_x_scale(code, scaled, uw_x, uw_x_offset)) code.swap(scaled);
+        }
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         ci.codeSize = code.size() * 4;
         ci.pCode = code.data();
@@ -392,24 +422,31 @@ namespace {
 // The file write of save_pipeline_keys: on the background writer, or on the caller at shutdown.
 void write_pipeline_keys(const std::string& path, const PipelineKeysHeader& h,
                          const std::vector<PipelineKeysRecord>& records, bool force) {
-    const std::string tmp = path + ".tmp";
-    FILE* f = plat::fopen_utf8(tmp, "wb");
-    if (!f) return;
+    CacheFile pending(path);
+    FILE* f = plat::fopen_utf8(pending.path(), "wb");
+    if (!f) { g_pipeline_keys_dirty=true; return; }
     bool ok = std::fwrite(&h, 1, sizeof h, f) == sizeof h;
     if (ok && !records.empty())
         ok = std::fwrite(records.data(), sizeof(PipelineKeysRecord), records.size(), f) == records.size();
     ok = std::fclose(f) == 0 && ok;
-    std::remove(path.c_str());
-    if (ok && std::rename(tmp.c_str(), path.c_str()) == 0)
+    if (ok && pending.commit())
         log("nvn/vk: saved %llu pipeline recipes%s", (unsigned long long)records.size(), force ? " at shutdown" : "");
-    else
+    else {
+        g_pipeline_keys_dirty=true;
         log("nvn/vk: saving pipeline recipes to %s failed", path.c_str());
+    }
 }
 
 }  // namespace
 
 void save_pipeline_keys(bool force) {
-    if (!g_pipeline_keys_dirty && !force) return;
+    // The standalone launcher also initializes Vulkan. It can shut down before
+    // the game loads its recorded keys; never replace the player's cache with
+    // that launcher's empty in-memory list. Wait for any earlier async write.
+    if (!g_pipeline_keys_loaded || !g_pipeline_keys_dirty) {
+        if (force) wait_background_writes();
+        return;
+    }
     open_pipeline_keys_path();
     PipelineKeysHeader h{};
     std::memcpy(h.magic, kPipelineKeysMagic, sizeof h.magic);
@@ -612,7 +649,8 @@ std::shared_ptr<PipelineBuild> make_build(const PipelineKey& key, const ProgramL
         auto& st = stages[nstages++];
         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         st.stage = VkShaderStageFlagBits(stage_bit(s->stage));
-        st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0);
+        st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0,
+                              s == key.vs ? key.uw_x : 0.0f, s == key.vs ? key.uw_x_offset : 0.0f);
         st.pName = "main";
         // The module's identity for the GPL library keys: the same SPIR-V and patches give the same key, whichever
         // ShaderInfo (the game's or the startup catalog's) it came from.
@@ -621,6 +659,10 @@ std::shared_ptr<PipelineBuild> make_build(const PipelineKey& key, const ProgramL
         if (s == key.vs) id.append(reinterpret_cast<const char*>(int_kinds), 16);
         else id.append(reinterpret_cast<const char*>(&unwritten), sizeof unwritten);
         id += int_texture_key(s);
+        if (s == key.vs) {
+            id.append(reinterpret_cast<const char*>(&key.uw_x), sizeof key.uw_x);
+            id.append(reinterpret_cast<const char*>(&key.uw_x_offset), sizeof key.uw_x_offset);
+        }
     }
 
     // Vertex input: each shader input location reads the attribute of the same index. Locations with no attribute
@@ -1018,6 +1060,9 @@ void gpl_log() {
 }
 
 VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& layout, bool may_skip) {
+    // A recurring render target does not prove an individual draw is safe to lose. Keep the
+    // complete image by default; background startup preparation and GPL optimization stay enabled.
+    may_skip = may_skip && pipeline_skip_draws();
     if (!draw_key.vs || draw_key.vs->hash.size() != 16 || (draw_key.fs && draw_key.fs->hash.size() != 16))
         return VK_NULL_HANDLE;
     // GPL dynamic mode: the state the draw sets on the command buffer is not part of the pipeline.
@@ -1196,7 +1241,6 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
     if (writes.empty()) return;
     img.texels = true;
     VkImageLayout back = img.layout;
-    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     bool is3d = img.view_type == VK_IMAGE_VIEW_TYPE_3D;
     for (const auto& w : writes) {
         if (w.level >= img.levels) continue;
@@ -1209,6 +1253,9 @@ void apply_texel_writes(VkCommandBuffer cb, Texture& t, GpuImage& img) {
                               w.level, is3d ? 0 : std::min(w.z, img.layers - 1), is3d ? 1 : std::min(w.d, img.layers)};
         r.imageOffset = {int32_t(w.x), int32_t(w.y), is3d ? int32_t(w.z) : 0};
         r.imageExtent = {w.w, w.h, is3d ? w.d : 1};
+        // Queued CPU texel updates can overlap one another, including in a
+        // single batch. A matching layout does not order those transfer writes.
+        transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     }
     if (back != VK_IMAGE_LAYOUT_UNDEFINED) transition(cb, img, back);

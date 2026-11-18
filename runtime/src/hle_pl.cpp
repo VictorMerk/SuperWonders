@@ -18,6 +18,8 @@
 #include <nx/runtime.h>
 
 #include "platform.h"
+#include "button_font.h"
+#include "overlay/overlay.h"
 
 namespace nx {
 
@@ -67,7 +69,15 @@ const Font& font(uint32_t type) {
     candidates.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
 #endif
     std::vector<uint8_t> ttf;
+    if (type == 5) {
+        const auto settings = overlay::current_settings();
+        std::array<std::string, 16> keys;
+        for (size_t i = 0; i < keys.size(); ++i) keys[i] = overlay::key_binding_name(settings.keyboard_bindings[i]);
+        ttf = pc_button_font(settings, plat::controller_kind(0), keys);
+        log("pl: PC button prompts loaded (%zu bytes); bindings fixed for this session", ttf.size());
+    }
     for (const auto& path : candidates) {
+        if (!ttf.empty()) break;
         ttf = read_file(path);
         if (!ttf.empty()) {
             log("pl: shared font %u <- %s (%zu bytes)", type, path.c_str(), ttf.size());

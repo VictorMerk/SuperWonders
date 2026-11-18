@@ -4,6 +4,10 @@ An average of 60 fps can hold a 160 ms frame. Players feel the slow frames: stut
 suite records every presented frame and reports those. Use it for every performance claim and every change that could
 affect frame pacing, and compare against a baseline.
 
+Hitch labels are diagnostic indicators, not proof of a root cause. In particular, upload volume is not an upload
+duration: an otherwise unexplained long frame stays `unknown` even if it uploaded several megabytes. Worst-frame
+lines show upload volume and presenting-thread CPU time alongside the timed waits so unmeasured gaps remain visible.
+
 The design follows Savage Wind's frame trace and hitch analysis (Revivedx/SavageWindRecomp: `runtime/perfcount.h`,
 `tools/perf_routes.py`, `docs/PERF-ROUTES.md`): record what each frame did, then name the cause of each slow frame.
 
@@ -26,13 +30,32 @@ at events that cost far more); nothing is written without the variable.
 | `file_reads`, `file_mb`, `file_ms` | guest file and RomFS reads |
 | `minflt`, `majflt` | page faults (Windows: one count, in `minflt`) |
 | `log_line` | log lines written so far: the report prints a hitch's log lines from the run's `NX_LOG` |
+| `sample_to_present_ms` | first HID sample associated with this game frame to its host present; -1 when unavailable. Excludes controller polling and display scanout/response. |
+| `original_picture` | 1 for the current original picture, 0 for an interpolated picture; generated pictures are not extra simulation ticks |
 
-**On screen.** With a real window and a GPU that has `VK_KHR_present_id` and `VK_KHR_present_wait`, the time each frame
-reached the display goes to `<file.csv>.display.csv` (`frame,displayed_ms`, same clock). A present that is late by a few
-ms only stutters if it misses the vblank; these times say whether it did. Not with SDL's offscreen driver (Mesa's
-headless surface offers present wait, but waiting crashes in the driver).
+**Measurement boundary.** The NVN presentation path records host-present timestamps. The display-wait helper is
+not wired into this backend, so this trace does not measure scanout, pixel response or full button-to-photon latency.
+Do not describe the CSV as proof of zero input lag. With frame generation, each displayed submission is a separate
+row; use `original_picture` to distinguish source pictures and disable frame generation for a simple stutter baseline.
+
+On Windows, `tools/trace_performance.ps1 -GameRoot '<prepared installation>'` starts a normal measured game session
+and writes `data/performance-<timestamp>.csv`. Quit normally to flush the final rows. The diagnostics collector includes
+the two newest timing reports up to 32 MiB each. No trace is recorded during normal play unless explicitly enabled.
 
 ## Reporting: `tools/perf/frametrace_report.py`
+
+The default `--pictures original` reports **original-picture cadence at host presentation**. When a trace contains
+interpolated pictures, it reconstructs consecutive original-to-original intervals and sums work counters across
+the intervening presents. Merely filtering the original rows would incorrectly retain an intermediate's short
+`frame_ms` and lose work. This measures host output cadence, not simulation ticks or physical scanout.
+Use `--pictures presented --target-fps 240` to inspect a 240-present target separately. Legacy traces without the
+picture flag retain their old row interpretation. Baselines must carry the same explicit timing domain;
+regenerate an old/unspecified baseline before using the default original-picture gate.
+
+The report includes p50/p95/p99/max HID-sample-to-present proxy values from original pictures only, omitting
+unavailable negative samples. It excludes controller transport and display response. The historical JSON field
+`missed_vsyncs` counts missed **target intervals**, not observed physical monitor refreshes. Non-finite and
+incomplete CSV rows are ignored.
 
     python tools/perf/frametrace_report.py run.csv --log run.log [--from-s 5] [--to-s 80] [--target-fps 60]
                                            [--json run.json] [--baseline base.json]
@@ -103,6 +126,17 @@ every run (checked byte for byte), and the suite refuses to start while the game
 game fullscreen on the desktop. **The default is `--display screen`** (2026-11-13, the user: tests on screen): a normal
 visible window with real presents, so compositor and display timing count. `--display offscreen` is the old hidden
 mode (Windows: `NX_HEADLESS_PRESENT=1`; Linux: SDL's offscreen driver). Take the GPU lock as for any game run.
+
+## Optional call timing in frame traces
+
+With `NX_FRAMETRACE` enabled, Windows and Linux input polling and the logger record completed-call elapsed time.
+`log_ms` / `input_poll_ms` are totals; `log_max_ms` / `input_poll_max_ms` are the longest completed call since the
+previous host present. Logging includes lock acquisition and output; polling includes controller reads and mapping.
+Tracing off performs no added clock reads. Calls on different threads may overlap, and a call can span a present,
+so these columns are correlations, not a critical-path decomposition or controller-to-photon latency measurement.
+The reporter sums totals and takes maxima when reconstructing original pictures, and accepts older CSV headers.
+It does not automatically blame a hitch on logging/input. Unit regressions check accumulation, interval reset,
+maxima and legacy reports. Native hitch attribution with these new columns remains pending.
 
 ## Rules
 

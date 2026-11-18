@@ -16,6 +16,7 @@
 #include <string>
 
 #include "nvn_draw_state.h"
+#include "nvn_ultrawide.h"
 
 namespace nx::nvn {
 
@@ -150,7 +151,7 @@ bool clears_transfer(VkCommandBuffer cb, const Targets& t) {
     for (uint32_t k = 0; k < 9; k++) {
         GpuImage* img = imgs[k];
         if (!img) continue;
-        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // as begin_rendering: rendered images stay GENERAL
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);  // repeated clears still need an execution dependency
         img->rendered = true;
         uint32_t level = std::min<uint32_t>(t.views.level[k], img->levels - 1);
         uint32_t layer = std::min<uint32_t>(t.views.layer[k], img->layers - 1);
@@ -198,6 +199,7 @@ void clears_log() {
 // targets: most of the ~25 ms per frame of GPU time "outside passes" (docs/nvn/DEBUG.md #31). Depth and stencil
 // clears honour the call's masks.
 void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
+    if (!replay::rendering_enabled()) return;
     bool color = c.op == Cmd::ClearColor;
     uint64_t guest = color ? (c.n < 8 ? t.colors[c.n] : 0) : t.depth;
     GpuImage* img = guest ? image_of(guest) : nullptr;
@@ -228,6 +230,10 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
         auto scale_coord = [&](int32_t value) { return int64_t(std::lround(value * img->render_scale)); };
         int64_t x0 = std::max<int64_t>(0, scale_coord(s[0])), y0 = std::max<int64_t>(0, scale_coord(s[1]));
         int64_t x1 = std::min<int64_t>(scale_coord(s[0] + std::max(0, s[2])), full.width);
+        if (img->uw) {
+            x0 = std::max<int64_t>(0, std::lround(double(x0) * uw_factor()));
+            x1 = std::min<int64_t>(std::lround(double(scale_coord(s[0] + std::max(0, s[2]))) * uw_factor()), full.width);
+        }
         int64_t y1 = std::min<int64_t>(scale_coord(s[1] + std::max(0, s[3])), full.height);
         if (x1 <= x0 || y1 <= y0) return;  // nothing of the target inside the scissor
         rect = {{int32_t(x0), int32_t(y0)}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
@@ -266,13 +272,16 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
         // The pass is smaller than this target (a larger shared depth buffer): clear all of it, outside the pass.
         g_scissor_lost += scissored, g_mask_fallback += masked;
         draw_end_rendering(cb, 4);
-        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);
         VkImageSubresourceRange r{a.aspectMask, std::min<uint32_t>(level, img->levels - 1), 1,
                                   std::min<uint32_t>(color ? t.views.layer[c.n] : t.views.layer[8], img->layers - 1), 1};
         if (color)
             p_vkCmdClearColorImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.color, 1, &r);
         else
             p_vkCmdClearDepthStencilImage(cb, img->image, VK_IMAGE_LAYOUT_GENERAL, &a.clearValue.depthStencil, 1, &r);
+        // pass_begin keeps rendered images GENERAL, so it cannot rely on a layout
+        // change to make this transfer write visible to the attachment load.
+        transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL, true);
         return;
     }
     if (masked && mask_clear(cb, t, c.n, c.mask & 0xF, c.f, rect)) {

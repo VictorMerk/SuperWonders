@@ -20,6 +20,7 @@ root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (sources, header, extra glslc arguments)
 OUTPUTS = [
+    (os.path.join('runtime', 'shaders', 'framegen', '*.comp'), os.path.join('runtime', 'src', 'nvn', 'framegen_spv.h'), []),
     (os.path.join('runtime', 'shaders', '*.*'), os.path.join('runtime', 'src', 'shaders_spv.h'), []),
     (os.path.join('runtime', 'shaders', 'post', '*.comp'), os.path.join('runtime', 'src', 'nvn', 'post_spv.h'),
      ['-I', os.path.join(root, 'third_party', 'fsr1')]),
@@ -44,7 +45,8 @@ def embed(glslc, pattern, header, extra):
         name = os.path.basename(src).replace('.', '_')
         with tempfile.TemporaryDirectory() as d:
             spv = os.path.join(d, 'out.spv')
-            subprocess.run([glslc, '-O', '--target-env=vulkan1.0', *extra, src, '-o', spv], check=True)
+            flags = ['-V', '-Os', '--target-env', 'vulkan1.0'] if 'glslang' in os.path.basename(glslc).lower() else ['-O', '--target-env=vulkan1.0']
+            subprocess.run([glslc, *flags, *extra, src, '-o', spv], check=True)
             data = open(spv, 'rb').read()
         words = struct.unpack(f'<{len(data) // 4}I', data)
         out.append(f'inline constexpr uint32_t k_{name}[] = {{')

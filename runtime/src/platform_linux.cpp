@@ -13,6 +13,7 @@
 // Data: NX_DATA_ROOT or games/<game>'s pc_data_root ("private/<game>"): analysis/{main,sdk}.bin, extract/romfs, user/.
 // Settings: <data root>/pc-settings.ini through the overlay menu (F1, or Minus + Plus on a controller: overlay/), and
 // NX_<KEY> environment variables, as on Windows and macOS. Input and settings: platform_linux_input.cpp.
+#include "file_io.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
@@ -50,9 +51,12 @@
 #include <nx/runtime.h>
 
 #include "kernel.h"
+#include "netplay_game.h"
 #include "nvn/nvn_vk.h"
 #include "overlay/overlay.h"
 #include "platform.h"
+#include "shader_bundle.h"
+#include "controllers.h"
 #include "platform_linux.h"
 
 #ifndef MAP_FIXED_NOREPLACE
@@ -171,7 +175,13 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 
 void exit_thread() { pthread_exit(nullptr); }
 void exit_process(int code) {
+    static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
+    if (exiting.test_and_set()) for (;;) ::pause();
+    nx::lan::flush_diagnostics();
+    nx::nvn::flush_shader_bundle();
+    close_controllers();
     nx::nvn::flush_pipeline_cache();
+    std::fflush(nullptr);
     _exit(code);
 }
 
@@ -210,16 +220,7 @@ int64_t ftell64(FILE* f) { return ftello(f); }
 int fseek64(FILE* f, int64_t off, int origin) { return fseeko(f, off, origin); }
 
 uint64_t read_at(FILE* f, int64_t off, void* buf, uint64_t size) {
-    if (size > uint64_t(SSIZE_MAX)) return 0;  // the game passes -1 as "everything": fread read nothing
-    int fd = fileno(f);
-    uint64_t done = 0;
-    while (done < size) {
-        ssize_t n = pread(fd, static_cast<uint8_t*>(buf) + done, size_t(size - done), off + int64_t(done));
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
-        done += uint64_t(n);
-    }
-    return done;
+    return file_io::read_at(f,off,buf,size);
 }
 
 bool make_dirs(const std::string& path) {
@@ -309,8 +310,21 @@ void overlay_game_speed(double percent) { overlay::game_speed(percent); }
 void overlay_presented(uint64_t now_ns) { overlay::presented(now_ns); }
 
 void window_size(uint32_t& w, uint32_t& h) {
-    w = g_pixel_w;
-    h = g_pixel_h;
+    if (g_window) {
+        w = g_pixel_w;
+        h = g_pixel_h;
+        return;
+    }
+
+    // Game hooks may run before SDL creates the window. Reuse the configured output size so
+    // camera initialization does not see the temporary 16:9 fallback.
+    int width = 1280, height = 720;
+    bool fullscreen = false;
+    linux_host::initial_window(width, height, fullscreen);
+    const std::string resolution = setting("resolution");
+    if (!resolution.empty()) std::sscanf(resolution.c_str(), "%dx%d", &width, &height);
+    w = uint32_t(std::max(0, width));
+    h = uint32_t(std::max(0, height));
 }
 
 void screen_size(uint32_t& w, uint32_t& h) { window_size(w, h); }
@@ -358,8 +372,9 @@ void SDLCALL audio_cb(void*, SDL_AudioStream* s, int additional, int) {
 
 bool audio_open(AudioDone done) {
     g_done = done;
-    // Headless test runs (and NX_MUTE=1) are silent: no device, the callers pace themselves with a timer.
-    if (headless() || std::getenv("NX_MUTE")) return false;
+    // Headless runs stay silent unless NX_HEADLESS_AUDIO=1 explicitly exercises the real device. NX_MUTE wins.
+    const char* headless_audio = std::getenv("NX_HEADLESS_AUDIO");
+    if ((headless() && (!headless_audio || headless_audio[0] != '1')) || std::getenv("NX_MUTE")) return false;
     SDL_AudioSpec spec{SDL_AUDIO_S16LE, 2, 48000};
     g_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_cb, nullptr);
     if (!g_stream) {

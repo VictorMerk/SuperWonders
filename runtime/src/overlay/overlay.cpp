@@ -15,7 +15,9 @@
 #include <nx/runtime.h>
 
 #include "overlay/overlay_internal.h"
+#include "overlay/usability.h"
 #include "overlay/overlay_ui.h"
+#include "netplay_game.h"
 
 namespace nx::overlay {
 
@@ -36,6 +38,8 @@ Host g_host;
 bool g_has_pending = false;
 Settings g_pending;   // from the platform (sync), taken by the next frame
 Settings g_settings;  // the presenting thread's copy
+Settings g_startup_settings;
+bool g_game_started = false;  // protected by g_lock
 std::atomic<bool> g_open{false};
 std::atomic<ScreenFn> g_screen{nullptr};  // a full-window screen under the menu (the launcher), or none
 // Input goes to the overlay: the menu is open, or a screen is shown.
@@ -48,6 +52,8 @@ std::atomic<bool> g_fading{false};   // the menu is still fading out
 std::atomic<uint64_t> g_pad_buttons{0};
 std::atomic<int32_t> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<int> g_tab_request{-1};
+std::atomic<double> g_render_fps{0};
+std::atomic<bool> g_interpolated{false};
 uint64_t g_previous_buttons = 0;
 
 int g_capture = -1;  // keyboard binding being captured
@@ -115,8 +121,10 @@ void draw_metrics(float height) {
     }
     const int interval = std::max(1, g_game_interval.load());
     const double speed = g_game_speed.load(std::memory_order_relaxed);
-    const double target = 60.0 / double(interval);
     const Settings& st = g_settings;
+    const bool interpolated = g_interpolated.load();
+    const double game_target = st.frame_cap > 60 ? double(st.frame_cap) : std::min(double(st.frame_cap),60.0/double(interval));
+    const double target = game_target * (interpolated ? std::clamp(st.framegen_multiplier, 2, 8) : 1);
     const float k = std::clamp(height / 1080.0f, 0.5f, 3.0f);
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float m = 16 * k;
@@ -138,8 +146,8 @@ void draw_metrics(float height) {
         constexpr float kScale = 0.74f;
         ImGui::SetWindowFontScale(kScale);
         // green at the target frame rate, amber a little under it, red well under (MangoHud colours its numbers so)
-        const auto rate = [&](double v) {
-            return ImGui::ColorConvertU32ToFloat4(v >= target * 0.95 ? th.good : v >= target * 0.75 ? th.warn : th.bad);
+        const auto rate = [&](double v, double expected) {
+            return ImGui::ColorConvertU32ToFloat4(v >= expected * 0.95 ? th.good : v >= expected * 0.75 ? th.warn : th.bad);
         };
         const ImVec4 name_c = ImGui::ColorConvertU32ToFloat4(th.accent2), plain = ImGui::ColorConvertU32ToFloat4(th.text);
         const auto line = [&](const char* name, const ImVec4& colour, const char* fmt, double v, const char* unit) {
@@ -157,10 +165,23 @@ void draw_metrics(float height) {
             }
         };
         if (ImGui::BeginTable("##m", 2, ImGuiTableFlags_SizingFixedFit)) {
-            if (st.metric_fps) line("FPS", rate(fps), "%.0f", fps, "");
+            if (st.metric_fps) line(interpolated ? "Presented FPS" : "FPS", rate(fps, target), "%.0f", fps, "");
+            if (st.metric_fps && interpolated) {
+                const double game_fps = g_render_fps.load();
+                line("Game FPS", rate(game_fps, game_target), "%.0f", game_fps, "");
+            }
             if (st.metric_fps && fps > 0) line("Frame", plain, "%.1f", 1000.0 / fps, "ms");
-            if (st.metric_one_percent_low) line("1% low", rate(low), "%.0f", low, "FPS");
+            if (st.metric_one_percent_low) line("1% low", rate(low, target), "%.0f", low, "FPS");
             if (st.metric_game_speed) line("Speed", speed >= 97 ? plain : ImGui::ColorConvertU32ToFloat4(th.warn), "%.0f", speed, "%");
+            if (lan::active()) {
+                const auto wait = lan::timing();
+                if (wait.ticks) {
+                    const bool german = st.language == 2;
+                    line(german ? "LAN Wartezeit" : "LAN input wait",
+                         ImGui::ColorConvertU32ToFloat4(wait.smoothed_ms > 50 ? th.bad : wait.smoothed_ms > 16.7 ? th.warn : th.text),
+                         "%.1f", wait.smoothed_ms, "ms");
+                }
+            }
             ImGui::EndTable();
         }
         if (st.metric_frametime_graph && count > 1) {  // the frame times, 0-50 ms, with lines at 16.7 and 33.3 ms
@@ -253,8 +274,42 @@ void settings_changed(bool persist) {
     if (h.apply) h.apply(g_settings, persist);
 }
 
+Settings current_settings() {
+    std::lock_guard lk(g_lock);
+    return g_has_pending ? g_pending : g_settings;
+}
+
+std::string key_binding_name(int key) {
+    std::lock_guard lock(g_lock);
+    return g_host.key_name ? g_host.key_name(key) : "";
+}
+
+void apply_settings(const Settings& s, bool persist) {
+    sync(s);
+    g_settings = s;
+    settings_changed(persist);
+}
+
+void mark_game_started() {
+    std::lock_guard lock(g_lock);
+    g_startup_settings = g_has_pending ? g_pending : g_settings;
+    g_game_started = true;
+}
+
+int aspect_ratio() { return std::clamp(current_settings().aspect_ratio, 0, 2); }
+
+void set_aspect_ratio(int ratio) {
+    auto settings = current_settings();
+    settings.aspect_ratio = std::clamp(ratio, 0, 2);
+    apply_settings(settings);
+}
+
 void key_event(int raw, Key key, bool down) {
     if (key == KeyF1 && down) {
+        toggle();
+        return;
+    }
+    if (key == KeyEscape && down && !taking_input()) {
         toggle();
         return;
     }
@@ -280,6 +335,10 @@ void set_open(bool open, const char* why) {
 }
 
 void toggle() { set_open(!g_open.load(), "toggle"); }
+void open_settings(int tab) {
+    g_tab_request = std::clamp(tab, 0, menu_tab_count() - 1);
+    set_open(true, "launcher shortcut");
+}
 bool is_open() { return g_open; }
 bool wants_mouse() { return taking_input(); }
 bool wants_keyboard() { return taking_input(); }
@@ -303,6 +362,20 @@ void filter_pad(plat::PadState& p) {
     }
     g_previous_buttons = p.buttons;
     if (taking_input() || combo_now) p = plat::PadState{};
+}
+
+void rendered(uint64_t now_ns, bool interpolated) {
+    static uint64_t previous = 0;
+    static std::array<uint64_t, 60> intervals{};
+    static size_t next = 0, count = 0;
+    if (previous && now_ns > previous) {
+        intervals[next++ % intervals.size()] = now_ns-previous;
+        count = std::min(count+1,intervals.size());
+        uint64_t total = 0;
+        for (size_t i = 0; i < count; ++i) total += intervals[i];
+        if (total) g_render_fps = double(count)*1e9/double(total);
+    }
+    previous = now_ns; g_interpolated = interpolated;
 }
 
 void presented(uint64_t now_ns) {
@@ -341,6 +414,16 @@ void ensure_context() {
 }
 
 ImDrawData* build_frame(uint32_t w, uint32_t h) {
+    // Unattended shutdown regression: use the same render-thread exit path as
+    // the menu button, without depending on the current navigation focus.
+    static const uint64_t quit_frame=[] {
+        const auto* value=std::getenv("NX_TEST_QUIT_FRAME");
+        return value?std::strtoull(value,nullptr,10):uint64_t(0);
+    }();
+    if (quit_frame && g_frame.load()>=quit_frame) {
+        log("overlay: scripted render-thread shutdown at frame %llu",(unsigned long long)g_frame.load());
+        plat::exit_process(0);
+    }
     ImGuiIO& io = ImGui::GetIO();
     static uint64_t last_ns = 0;
     uint64_t now = plat::monotonic_ns();
@@ -352,10 +435,14 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     ui::apply_style(float(h));
 
     std::vector<Event> events;
+    Settings startup_settings;
+    bool game_started = false;
     {
         std::lock_guard lk(g_lock);
         events.swap(g_events);
         if (g_has_pending) g_settings = g_pending, g_has_pending = false;
+        startup_settings = g_startup_settings;
+        game_started = g_game_started;
     }
     bool changed = false;
     for (const Event& e : events) {
@@ -364,6 +451,10 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
                 if (g_capture >= 0 && e.down) {  // the next key becomes the binding; Esc cancels
                     if (e.key != KeyEscape) g_settings.keyboard_bindings[size_t(g_capture)] = e.raw, changed = true;
                     g_capture = -1;
+                    break;
+                }
+                if (g_open && e.down && (e.key == KeyPageUp || e.key == KeyPageDown)) {
+                    g_tab_request = (g_tab + (e.key == KeyPageDown ? 1 : menu_tab_count()-1)) % menu_tab_count();
                     break;
                 }
                 if (e.key == KeyEscape && e.down && g_open && g_capture < 0 &&
@@ -398,7 +489,7 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     // the menu fades in over about 0.15 s and out a little faster (drawn, without input, until it's gone)
     static float reveal = 0;
     if (appearing) reveal = std::max(reveal, 0.04f);
-    reveal = ui::approach(reveal, open ? 1.0f : 0.0f, open ? 18.0f : 26.0f);
+    reveal = usability_preferences().reduced_motion ? (open?1.f:0.f) : ui::approach(reveal, open ? 1.0f : 0.0f, open ? 18.0f : 26.0f);
     g_fading = !open && reveal > 0.0f;
     const ScreenFn screen = g_screen.load();
     if (screen) screen(float(w), float(h));  // under the menu, which the screen can open (its Settings)
@@ -410,7 +501,7 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, a);
         bool still_open = open;
         MenuContext c{g_settings, g_host, g_capture, open ? g_tab_request.exchange(-1) : -1, still_open, scale,
-                      appearing, float(h), reveal};
+                      appearing, float(h), reveal, game_started ? &startup_settings : nullptr};
         draw_menu(c);
         ImGui::PopStyleVar();
         if (open && c.tab_request >= 0 && c.tab_request != g_tab) log("overlay: tab %d", c.tab_request);

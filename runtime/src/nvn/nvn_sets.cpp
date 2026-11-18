@@ -3,12 +3,15 @@
 // shared inputs. The replay's CPU shortcuts of docs/nvn/PERF-PLAN.md live here and in nvn_draw.cpp; NX_DRAW_SLOW
 // turns them off (draw_slow, nvn_draw_state.h). Everything here runs under the GPU lock, one draw at a time.
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
 
 #include "nvn_draw_state.h"
+#include "nvn_ultrawide.h"
+#include "platform.h"
 
 namespace nx::nvn::replay {
 
@@ -404,6 +407,7 @@ void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shader
     buffers.reserve(1024), images.reserve(1024), writes.reserve(2048);  // pointers into them are kept
     float vw = g_state.has_viewport ? float(g_state.viewport[2]) : 1280.0f;
     float vh = g_state.has_viewport ? float(g_state.viewport[3]) : 720.0f;
+    if (g_uw_wide && g_state.has_viewport) vw *= uw_factor();
     SupportBuffer sb;  // built when a binding gets a copy of its own
     bool sb_built = false;
     auto make_support = [&]() {
@@ -483,7 +487,27 @@ void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shader
                     // Banks the shader indexes with a computed value (clamped to 64 KB, nvn_spirv_patch.cpp): all
                     // 64 KB, so every read past the data returns 0 as on Maxwell.
                     bool indexed = b.set == 0 && b.binding < 64 && (dynamic_uniform_bindings(s) >> b.binding & 1);
-                    info = buffer_of(cb, p, p ? std::min<uint64_t>(r.size, 0x10000) : 0, indexed ? 0x10000 : 0x1000);
+                    const uint64_t size = p ? std::min<uint64_t>(r.size, 0x10000) : 0;
+                    // The F1 aspect setting can change this flag while running. Read it once per frame, not once
+                    // per uniform binding, while retaining live switching between aspect ratios.
+                    static uint64_t flag_frame = UINT64_MAX;
+                    static bool map_test = false;
+                    const uint64_t frame = g_frame.load(std::memory_order_relaxed);
+                    if (frame != flag_frame) {
+                        const char* value = std::getenv("NX_UW_MAP_COMPOSITE_TEST");
+                        map_test = value && std::strcmp(value, "1") == 0;
+                        flag_frame = frame;
+                    }
+                    if (map_test && g_uw_wide && p && size >= 68 &&
+                        s->stage == ShaderStage::Fragment && s->hash == "0bebd775cd1a4238" && b.nvn.index == 0 &&
+                        !written_overlaps(p, size)) {
+                        std::vector<uint8_t> copy(p, p + size);
+                        float reciprocal; std::memcpy(&reciprocal, copy.data() + 64, 4);
+                        reciprocal /= uw_factor(); std::memcpy(copy.data() + 64, &reciprocal, 4);
+                        info = buffer_of(cb, copy.data(), size, indexed ? 0x10000 : 0x1000, false, false);
+                        static bool logged = false;
+                        if (!logged) { logged = true; log("ultrawide map composite test: adjusted horizontal sampling reciprocal to %g", double(reciprocal)); }
+                    } else info = buffer_of(cb, p, size, indexed ? 0x10000 : 0x1000);
                     break;
                 }
                 case NvnSource::StorageBuffer: {

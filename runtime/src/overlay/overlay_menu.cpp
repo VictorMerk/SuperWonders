@@ -13,7 +13,15 @@
 #include <nx/runtime.h>
 
 #include "overlay/option_rows.h"
+#include "controllers.h"
+#include "netplay_game.h"
+#include "button_font.h"
 #include "overlay/overlay_internal.h"
+#include "overlay/usability.h"
+#include "profiles.h"
+#if NX_GAME_LIBRARY
+#include "launcher/launcher.h"
+#endif
 #include "overlay/overlay_ui.h"
 
 namespace nx::overlay {
@@ -171,10 +179,6 @@ constexpr const char* kCommon[13][12] = {
 constexpr const char* kActions[kControlCount] = {
     "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus", "L Stick", "R Stick",
     "D-pad Left", "D-pad Up", "D-pad Right", "D-pad Down",
-};
-constexpr const char* kPhysical[kControlCount] = {
-    "A / Cross", "B / Circle", "X / Square", "Y / Triangle", "LB / L1", "RB / R1", "LT / L2", "RT / R2",
-    "Start / +", "Back / -", "L3 / LS", "R3 / RS", "D-pad Left", "D-pad Up", "D-pad Right", "D-pad Down",
 };
 constexpr int kTabs = 5;
 
@@ -581,6 +585,15 @@ void video(MenuContext& c, const Labels& l) {
     const int lang = std::clamp(s.language, 0, 12);
     rows::begin("##video", c.height);
     rows::section(kCommon[lang][0]);
+    const char* aspect_names[] = {"16:9 (original)", "21:9", "32:9"};
+    int aspect = std::max(0, s.aspect_ratio);
+    const char* aspect_label = lang == 1 ? "Formato schermo" : "Aspect ratio";
+    const char* aspect_desc = lang == 1 ? "Si applica al prossimo avvio del gioco." : "Takes effect the next time the game starts.";
+    if (rows::choice(aspect_label, &aspect, aspect_names, 3, 0, aspect_desc)) {
+        s.aspect_ratio = aspect;
+        settings_changed(true);
+        ui::notify(aspect_desc);
+    }
     // the window's size: one of four, or the size it has now (dragged) as a fifth
     const char* sizes[5] = {"1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", nullptr};
     char custom[32];
@@ -595,6 +608,9 @@ void video(MenuContext& c, const Labels& l) {
     if (rows::toggle(l.fullscreen, &s.fullscreen, kDefaults.fullscreen, translated_desc(desc::fullscreen, lang))) settings_changed(true);
     if (!c.host.can_always_on_top) rows::disable_next();
     if (rows::toggle(l.topmost, &s.always_on_top, kDefaults.always_on_top, translated_desc(desc::topmost, lang))) settings_changed(true);
+    if (rows::toggle(lang == 2 ? "Seitenverhältnis beibehalten" : "Preserve aspect ratio", &s.preserve_aspect, true,
+        lang == 2 ? "Erhält die Form des Spielbilds und zentriert es bei Bedarf mit schwarzen Balken. Aus streckt es auf das Fenster. Wirkt sofort, auch mit FSR 1 und Bildgenerierung. Erweitert nicht den sichtbaren Spielbereich." :
+        "Keep the game's picture shape and centre it with black bars when needed. Off stretches it to the window. Applies immediately, including FSR 1 and frame generation. This does not expand the game's field of view.")) settings_changed(true);
     rows::section(kCommon[lang][1]);
     if (rows::choice(l.internal_resolution, &s.internal_resolution, kInternal[lang], 7, kDefaults.internal_resolution,
                      translated_desc(desc::internal, lang)))
@@ -627,6 +643,28 @@ void video(MenuContext& c, const Labels& l) {
         if (cap_values[i] == s.frame_cap) cap = i;
     if (rows::choice(l.frame_cap_label, &cap, caps, 5, 1, translated_desc(desc::frame_cap, lang)))
         s.frame_cap = cap_values[cap], settings_changed(true);
+    const char* latency_modes[] = {lang == 2 ? "Niedrig (1 Bild voraus)" : "Low (1 frame ahead)",
+                                  lang == 2 ? "Ausgewogen (2 Bilder voraus)" : "Balanced (2 frames ahead)"};
+    int ahead = std::clamp(s.render_ahead,1,2)-1;
+    if (rows::choice(lang == 2 ? "Eingabeverzögerung" : "Input latency", &ahead, latency_modes, 2, 0,
+        lang == 2 ? "Niedrig begrenzt die Renderwarteschlange auf ein Bild. Ausgewogen erlaubt zwei Bilder und mehr gleichzeitige CPU-/GPU-Arbeit. Das ist keine Messung der Eingabelatenz: VSync, Bildschirm, Bildgenerierung und LAN-Wartezeiten wirken weiterhin mit." :
+        "Low limits the game to one queued picture instead of two, reducing render-ahead latency. Balanced allows more CPU/GPU overlap and can be faster. This is not an input-lag measurement: VSync, display processing, frame generation and LAN waits still add latency.")) {
+        s.render_ahead = ahead+1; settings_changed(true);
+    }
+    const char* fg_modes[] = {lang == 2 ? "Aus" : "Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+    int fg = s.framegen ? std::clamp(s.framegen_multiplier, 2, 8)-1 : 0;
+    if (rows::choice(lang == 2 ? "Bildgenerierung" : "Frame generation", &fg, fg_modes, 8, 0,
+        lang == 2 ? "Experimentelle Zwischenbilder per Optical Flow. 4x erzeugt drei Zwischenbilder je Spielbild, ohne die Simulation zu beschleunigen. Höhere Faktoren kosten GPU-Zeit und können Bildfehler oder Verzögerung verstärken. 60 Spiel-FPS bei 4x benötigen für die volle Ausgabe einen 240-Hz-Bildschirm. Bei GPU-Limit ausgeschaltet lassen." :
+        "Experimental optical-flow interpolation. 4x makes three intermediate pictures per game frame; it does not speed up the game. Higher factors cost more GPU time and may add artifacts or latency. Use a matching high-refresh display (60 game FPS at 4x needs 240 Hz). Leave off when GPU-limited.")) {
+        s.framegen = fg != 0;
+        if (fg) s.framegen_multiplier = fg+1;
+        settings_changed(true);
+    }
+    if (rows::toggle(lang == 2 ? "Objekte beim Kompilieren auslassen" : "Skip draws while compiling", &s.pipeline_skip_draws, kDefaults.pipeline_skip_draws,
+                     lang == 2 ? "Aus erhält alle Zeichenbefehle. Neue Shader können beim ersten Auftreten kurz blockieren. Ein lässt Objekte während der Kompilierung weg und kann dadurch Flackern oder verschwundene Geometrie verursachen." :
+                     "Off keeps objects visible while new shaders compile, but may pause on first use. "
+                     "On reduces those pauses by temporarily omitting objects and can cause flickering."))
+        settings_changed(true);
     rows::page_note(l.restart_note);
     rows::end();
 }
@@ -638,6 +676,9 @@ void audio(MenuContext& c, const Labels& l) {
     rows::section(l.audio);
     if (rows::integer(l.volume, &s.volume, 0, 200, 5, kDefaults.volume, "%d%%", translated_desc(desc::volume, lang))) settings_changed(true);
     if (rows::toggle(l.mute, &s.muted, kDefaults.muted, translated_desc(desc::mute, lang))) settings_changed(true);
+    if (rows::toggle(lang == 2 ? "Audio-Vorladung (experimentell)" : "Audio prefetch (experimental)", &s.preload_music, kDefaults.preload_music,
+        lang == 2 ? "Optional: kleinere Musik- und Umgebungsstreams im Hintergrund in bis zu 64 MiB RAM vorladen (8 MiB je Datei). Die Vergleichstests zeigten keine verlässliche Verbesserung der Bildzeiten; deshalb standardmäßig aus. Klang und Format bleiben erhalten, ohne Datenträger-Cache. Normales Streaming bleibt aktiv, bis die Daten bereit sind. Gilt für zukünftige Audio-Ladevorgänge." :
+        "Optionally prefetch smaller music and ambience streams using up to 64 MiB RAM (8 MiB per file). Comparison tests did not show a consistent frame-time improvement, so this defaults off. Audio bytes and format are preserved without a disk cache. Normal streaming remains active until ready. Applies to future audio loads.")) settings_changed(true);
     rows::section(l.game_language);
     if (rows::choice(l.game_language, &s.game_language, kGameLanguageNames, int(std::size(kGameLanguageNames)),
                      kDefaults.game_language, translated_desc(desc::game_language, lang)))
@@ -649,18 +690,63 @@ void audio(MenuContext& c, const Labels& l) {
 void controls(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     const int lang = std::clamp(s.language, 0, 12);
+    // Show the actual game-action layout and live input before the editable bindings.
+    const float k=std::clamp(c.height/1080.f,.5f,3.f);
+    const auto corner=ImGui::GetCursorScreenPos();
+    const auto width=ImGui::GetContentRegionAvail().x;
+    auto* dl=ImGui::GetWindowDrawList();
+    const uint64_t buttons=pad_buttons();
+    const char* action_names[]={"X","Y","A","B"};
+    const size_t actions[]={CtlX,CtlY,CtlA,CtlB};
+    const uint64_t bits[]={plat::kX,plat::kY,plat::kA,plat::kB};
+    const auto device_kind=plat::controller_kind(0);
+    for(int i=0;i<4;++i) {
+        const ImVec2 p{corner.x+i*width/4,corner.y},q{p.x+width/4-6*k,p.y+76*k};
+        const bool held=(buttons&bits[i])!=0;
+        dl->AddRectFilled(p,q,ui::fade(held?ui::theme().accent:IM_COL32(255,255,255,18)),8*k);
+        const std::string text=std::string(action_names[i])+" / "+physical_button_name(device_kind,controller_binding(s,actions[i]));
+        dl->AddText({p.x+8*k,p.y+10*k},held?IM_COL32(12,16,24,255):ui::theme().text,text.c_str());
+        dl->AddText({p.x+8*k,p.y+42*k},held?IM_COL32(12,16,24,255):ui::theme().text_dim,held?"Pressed":"Ready");
+    }
+    ImGui::Dummy({width,84*k});
     rows::begin("##controls", c.height);
-    rows::section(kHeaders[lang][1]);
-    const char* presets[] = {"Xbox / DualSense", "Nintendo"};
-    if (rows::choice(l.control_preset, &s.controller_preset, presets, 2, kDefaults.controller_preset, translated_desc(desc::preset, lang)))
+    rows::section("Players & devices");
+    if(lan::active()) rows::disable_next();
+    if (rows::toggle("Keyboard as player 1", &s.keyboard_separate_player, false,
+        lan::active() ? "LAN uses this PC's primary gamepad or keyboard for your assigned player. The local-co-op keyboard preference applies after leaving LAN." : "Reserve player 1 for the keyboard and assign gamepads to players 2-4. Turn this off to use up to four gamepads, with keyboard input shared by player 1. Changing this reassigns controllers."))
         settings_changed(true);
+    for (uint32_t player = 0; player < plat::kPlayerCount; ++player) {
+        char label[32]; std::snprintf(label, sizeof label, "Player %u", player + 1);
+        const bool network=lan::active(), local=!network || player==lan::local_player();
+        const auto name = network ? (local ? "This PC: "+plat::controller_name(0) : lan::connected(player) ? std::string("LAN peer") : std::string("Not connected")) : plat::controller_name(player);
+        const bool connected = network ? lan::connected(player) : plat::player_connected(player);
+        if (!connected || !local) rows::disable_next();
+        if (rows::action(label, name.c_str(), network ? "Every PC contributes its primary gamepad or keyboard. Choose the matching number of players in Wonder. Select this PC's row to test local rumble." : "Connect up to four gamepads for local co-op. Player 1 also uses the keyboard. Select a connected controller to test its rumble. Unplugging one pad preserves the other player slots."))
+            plat::rumble_player(network?0:player, 0.3f, 0.3f);
+    }
+    const char* icon_names[] = {"Automatic at startup", "Keyboard", "Nintendo", "Xbox", "PlayStation"};
+    if (rows::choice("Button prompts", &s.button_icons, icon_names, 5, 0,
+        "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
+        settings_changed(true); ui::notify("Restart the game to update its button prompts.");
+    }
+    rows::section(kHeaders[lang][1]);
+    if(rows::action("Reset controller bindings","Use selected layout","Clear custom button overrides and return to the selected Xbox, Nintendo or PlayStation preset. Keyboard bindings stay as configured.")) {
+        s.controller_custom_mask=0;settings_changed(true);ui::notify("Controller bindings reset to the selected layout.");
+    }
+    const char* presets[] = {"Xbox / PlayStation: bottom confirms", "Nintendo: right confirms", "PlayStation: Circle confirms"};
+    if (rows::choice(l.control_preset, &s.controller_preset, presets, 3, kDefaults.controller_preset,
+        "Choose bottom-button confirmation (Xbox A / PlayStation Cross), Nintendo layout, or PlayStation Circle confirmation. Circle confirmation swaps Cross and Circle only. Per-action custom bindings below take priority. Restart to refresh in-game button prompts."))
+        settings_changed(true), ui::notify("Restart the game to update its button prompts.");
     if (rows::integer(kCommon[lang][8], &s.rumble, 0, 100, 10, kDefaults.rumble, "%d%%", translated_desc(desc::rumble, lang))) settings_changed(true);
+    const auto device = plat::controller_kind(0);
+    const char* physical[kControlCount];
+    for (size_t i = 0; i < kControlCount; ++i) physical[i] = physical_button_name(device, int(i));
     for (size_t a = 0; a < kControlCount; ++a) {
         int phys = controller_binding(s, a);
         const int def = default_controller_binding(a, s.controller_preset);
         char id[48];
         std::snprintf(id, sizeof id, "%s###pad%zu", kActions[a], a);
-        if (rows::choice(id, &phys, kPhysical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
+        if (rows::choice(id, &phys, physical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
             s.controller_bindings[a] = phys;
             s.controller_custom_mask |= 1u << a;
             if (phys == def) s.controller_custom_mask &= ~(1u << a);
@@ -675,7 +761,7 @@ void controls(MenuContext& c, const Labels& l) {
         const char* name = waiting ? "Press a key..." : c.host.key_name ? c.host.key_name(s.keyboard_bindings[a]) : "?";
         if (rows::action(id, name, translated_desc(desc::key, lang), true, waiting)) c.capture_action = int(a);  // overlay.cpp takes the next key
     }
-    rows::page_note(s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
+    rows::page_note(s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
     rows::end();
 }
 
@@ -702,12 +788,36 @@ void overlay_tab(MenuContext& c) {
     if (!s.metrics_enabled) rows::disable_next();
     if (rows::choice(o[5], &s.overlay_position, kPositions[lang], 4, kDefaults.overlay_position, translated_desc(desc::position, lang)))
         settings_changed(true);
+    rows::section(lang == 2 ? "Schnellauswahl" : "Quick presets");
+    const bool compact = s.metrics_enabled && s.metric_fps && !s.metric_one_percent_low &&
+                         !s.metric_game_speed && !s.metric_frametime_graph && s.overlay_position == 1;
+    if (rows::action(lang == 2 ? "Kompakte FPS-Anzeige" : "Compact FPS counter",
+                     compact ? (lang == 2 ? "Aktiv" : "Active") : (lang == 2 ? "Anwenden" : "Apply"),
+                     lang == 2 ? "Zeigt FPS und Bildzeit oben rechts ohne Diagramm. So bleibt mehr vom Spiel sichtbar. Bei LAN zeigt die Anzeige zusätzlich die gemessene Eingabe-Wartezeit; diese ist kein Netzwerk-Ping." :
+                     "Show FPS and frame time at the top right without the graph, leaving more of the game visible. During LAN play the measured input wait is also shown; it is not network ping.")) {
+        s.metrics_enabled = s.metric_fps = true;
+        s.metric_one_percent_low = s.metric_game_speed = s.metric_frametime_graph = false;
+        s.overlay_position = 1;
+        settings_changed(true);
+    }
+    if (rows::action(lang == 2 ? "Ausführliche Leistungsanzeige" : "Detailed performance panel",
+                     lang == 2 ? "Anwenden" : "Apply",
+                     lang == 2 ? "Aktiviert FPS, 1%-Lows, Spielgeschwindigkeit und das Bildzeit-Diagramm an der gewählten Position. Ändert weder Grafikqualität noch Eingabe- oder Audioeinstellungen." :
+                     "Enable FPS, 1% lows, game speed and the frame-time graph at the selected position. Graphics quality, input and audio settings stay as configured.")) {
+        s.metrics_enabled = s.metric_fps = s.metric_one_percent_low = s.metric_game_speed = s.metric_frametime_graph = true;
+        settings_changed(true);
+    }
     rows::end();
 }
 
 void system_tab(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
     rows::begin("##system", c.height);
+    rows::section("Menu & comfort");
+    auto& comfort=usability_preferences();
+    if(rows::toggle("Full-window settings",&comfort.menu_fullscreen,false,"Fill the window, or use a floating settings panel that you can move and resize.")) persist_usability();
+    if(rows::toggle("Reduced menu motion",&comfort.reduced_motion,false,"Remove menu transitions and moving highlights. Applies immediately.")) persist_usability();
+    if(rows::integer("Menu opacity",&comfort.menu_opacity,75,100,5,100,"%d%%","Adjust the settings panel background. The game remains visible around a floating panel.")) persist_usability();
     rows::section(l.system);
     const int lang = std::clamp(s.language, 0, 12);
     if (rows::choice(kCommon[lang][11], &s.language, kLanguageNames, int(std::size(kLanguageNames)), kDefaults.language, translated_desc(desc::language, lang)))
@@ -716,6 +826,13 @@ void system_tab(MenuContext& c, const Labels& l) {
         settings_changed(true);
     if (rows::toggle(l.low_vram, &s.low_vram_profile, kDefaults.low_vram_profile, translated_desc(desc::low_vram, lang)))
         settings_changed(true), ui::notify(l.restart_low_vram);
+    if (rows::toggle("Fast shader loading", &s.shader_bundle, true,
+        "Cache translated shaders as you play to speed later launches. Needs extra disk space and up to 512 MiB of memory. Modified or damaged entries fall back to the original shader files. Restart to apply.")) {
+        settings_changed(true); ui::notify("Restart the game to change shader loading.");
+    }
+    if (rows::toggle(lang == 2 ? "Textur-Konvertierungen speichern" : "Cache texture conversions", &s.texture_cache, true,
+        lang == 2 ? "Speichert Textur-Konvertierungen des Low-VRAM-Profils für spätere Ladevorgänge. Bis zu 256 MiB auf dem Datenträger; Schreibzugriffe erfolgen im Hintergrund. Fehlerhafte oder geänderte Daten werden neu konvertiert. Ändert nicht die gewählte Texturqualität. Wirkt sofort auf zukünftige Konvertierungen." :
+        "Reuse low-VRAM texture conversions on later loads. Uses up to 256 MiB on disk, with bounded background writes. Changed or damaged data falls back to conversion. This does not change the selected texture quality. Applies immediately to future conversions.")) settings_changed(true);
     // Quit: A once arms it (the row pulses, "Press again to quit"), A again within 4 s quits as closing the window does
     // (the pipeline cache is saved); progress since the game's last save is lost
     static double armed_at = -10;
@@ -725,6 +842,17 @@ void system_tab(MenuContext& c, const Labels& l) {
         if (armed) log("overlay: quit from the menu"), plat::exit_process(0);
         armed_at = ImGui::GetTime();
     }
+#if NX_GAME_LIBRARY
+    if(c.startup_settings) {
+        static double return_armed_at=-10;
+        const bool return_armed=ImGui::GetTime()-return_armed_at<4;
+        if(rows::action("Return to launcher",return_armed?"Press again to leave":"Profiles & game options",
+            "Close the game and reopen the launcher to switch profiles, manage saves or mods. Unsaved progress is lost. Leaving LAN disconnects this PC; the host leaving ends the room. Select twice within four seconds to confirm.",true,return_armed)) {
+            if(return_armed)launcher::return_to_launcher();
+            return_armed_at=ImGui::GetTime();
+        }
+    }
+#endif
     rows::page_note(l.restart_low_vram);
     rows::end();
 }
@@ -758,17 +886,36 @@ void draw_menu(MenuContext& c) {
     const Labels& l = kLabels[std::clamp(s.language, 0, 12)];
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float k = std::clamp(c.height / 1080.0f, 0.5f, 3.0f);
-    // Savage Wind's in-game Settings window: up to 1500 px wide at 1080 p, the full height less a slim margin; it
-    // rises a little as it fades in (c.reveal: 0..1).
-    const ImVec2 size{std::min(display.x * 0.92f, 1500 * k), display.y - 2 * 22 * k};
-    const float rise = (1.0f - ui::smoothstep(c.reveal)) * 26 * k;
-    ImGui::SetNextWindowPos({display.x * 0.5f, display.y * 0.5f + rise}, ImGuiCond_Always, {0.5f, 0.5f});
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-    ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+    auto& comfort=usability_preferences();
+    const float margin=comfort.menu_fullscreen?0.f:16*k;
+    const ImVec2 maximum{std::max(1.f,display.x-2*margin),std::max(1.f,display.y-2*margin)};
+    const ImVec2 minimum{std::min(maximum.x,760*k),std::min(maximum.y,620*k)};
+    static bool previous_fullscreen=false;
+    static ImVec2 floating_size{0,0};
+    if(!comfort.menu_fullscreen && previous_fullscreen && floating_size.x>0)
+        ImGui::SetNextWindowSize(floating_size);
+    previous_fullscreen=comfort.menu_fullscreen;
+    if(comfort.menu_fullscreen) {
+        ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize(display);
+    } else {
+        ImGui::SetNextWindowPos({display.x*.5f,display.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
+        ImGui::SetNextWindowSize({std::min(maximum.x,1440*k),std::min(maximum.y,900*k)},ImGuiCond_FirstUseEver);
+    }
+    ImGui::SetNextWindowSizeConstraints(minimum,maximum);
+    ImGui::SetNextWindowBgAlpha(comfort.menu_opacity/100.f);
+    ImGuiWindowFlags f=ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings;
+    if(comfort.menu_fullscreen) f|=ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize;
+    if(!c.open)f|=ImGuiWindowFlags_NoInputs;
     if (c.appearing) ImGui::SetNextWindowFocus();  // keyboard and controller navigation start in the menu
     if (!ImGui::Begin("##nx_menu", nullptr, f)) {
         ImGui::End();
         return;
+    }
+    if(!comfort.menu_fullscreen) {
+        floating_size=ImGui::GetWindowSize();
+        const auto pos=ImGui::GetWindowPos(), size=ImGui::GetWindowSize();
+        ImGui::SetWindowPos({std::clamp(pos.x,margin,std::max(margin,display.x-margin-size.x)),
+                             std::clamp(pos.y,margin,std::max(margin,display.y-margin-size.y))});
     }
     ImDrawList* wdl = ImGui::GetWindowDrawList();
     {  // a thin accent rule along the top edge
@@ -783,7 +930,37 @@ void draw_menu(MenuContext& c) {
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopFont();
     if (close_button(k)) c.open = false;
+    ImGui::TextDisabled("%s",comfort.menu_fullscreen ? "Esc / F1: resume  |  L / R: tabs" : "Drag the background to move  |  Drag a corner to resize  |  Esc: resume");
+    if(!c.startup_settings) ImGui::TextDisabled("Launcher settings");
+    else ImGui::TextDisabled("%s",lan::active()?"LAN continues while settings are open.":"Settings do not pause gameplay. Use the game's pause button first.");
 
+    if (c.startup_settings) {
+        const uint32_t changes = restart_changes(*c.startup_settings, c.settings);
+        if (changes) {
+            const bool german = s.language == 2;
+            std::string pending = german ? "Neustart ausstehend: " : "Restart pending: ";
+            const uint32_t flags[] = {RestartResolution, RestartTextures, RestartFiltering, RestartShaders, RestartLanguage, RestartPrompts, RestartAspect};
+            const char* english[] = {"internal resolution", "texture profile", "texture filtering", "shader loading", "game language", "button prompts", "aspect ratio"};
+            const char* deutsch[] = {"interne Auflösung", "Texturprofil", "Texturfilterung", "Shader-Laden", "Spielsprache", "Tastensymbole", "Seitenverhältnis"};
+            bool first = true;
+            for (int i = 0; i < 7; ++i) if (changes & flags[i]) {
+                if (!first) pending += ", ";
+                pending += german ? deutsch[i] : english[i];
+                first = false;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent));
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextUnformatted(pending.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        }
+    }
+
+    if(ImGui::Button(c.startup_settings ? "Resume game" : "Back to launcher")) c.open=false;
+    ImGui::SameLine();
+    if(ImGui::Button(s.muted?"Unmute":"Mute audio")) {s.muted=!s.muted;settings_changed(true);}
+    ImGui::SameLine();
+    if(ImGui::Button(s.metrics_enabled?"Hide FPS":"Show FPS")) {s.metrics_enabled=!s.metrics_enabled;settings_changed(true);}
     const char* names[kTabs] = {l.video, l.audio, l.controls, l.overlay, l.system};
     int current = -1;
     // Tabs follow the keyboard / controller focus: moving onto a tab with the arrows or the D-pad shows it (next
@@ -821,7 +998,7 @@ void draw_menu(MenuContext& c) {
                 page_dir = shown_tab < 0 ? 0.0f : t > shown_tab ? 1.0f : -1.0f;
                 page_a = shown_tab < 0 ? 1.0f : 0.0f, shown_tab = t;
             }
-            page_a = ui::approach(page_a, 1.0f, 14.0f);
+            page_a = comfort.reduced_motion ? 1.f : ui::approach(page_a, 1.0f, 14.0f);
             ImGui::PopStyleColor();  // (the rows want their own)
             ImGui::Dummy(ImVec2(0, 4 * k));
             const ImVec2 at = ImGui::GetCursorPos();
@@ -863,8 +1040,7 @@ void draw_menu(MenuContext& c) {
     const float fy = wp.y + ImGui::GetWindowHeight() - footer * 0.5f - 4 * k;
     wdl->AddLine(ImVec2(wp.x + 28 * k, fy - footer * 0.5f + 4 * k),
                  ImVec2(wp.x + ImGui::GetWindowWidth() - 28 * k, fy - footer * 0.5f + 4 * k), ui::fade(IM_COL32(255, 255, 255, 26)));
-    const ui::Hint list[] = {{"A", "Select"}, {"B", "Back"}, {"L", ""}, {"R", "Tab"}, {"\xe2\x80\x93 +", "Close"},
-                             {nullptr, "F1 / Esc"}};
+    const ui::Hint list[] = {{"A", "Select"}, {"B", "Back"}, {"L", ""}, {"R", "Tab"}, {"Menu", "Close"}};
     ui::hints(wdl, wp.x + ImGui::GetWindowWidth() * 0.5f, fy, 30 * k, list, int(sizeof list / sizeof list[0]));
     ImGui::End();
 }

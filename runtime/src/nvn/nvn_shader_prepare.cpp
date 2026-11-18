@@ -17,7 +17,9 @@
 #include "nvn_pipeline.h"
 #include "nvn_pipeline_async.h"
 #include "nvn_shader_prepare.h"
+#include "nvn_spirv_warp.h"
 #include "platform.h"
+#include "shader_bundle.h"
 
 namespace nx::nvn {
 
@@ -109,13 +111,9 @@ bool read_catalog(std::vector<StageRec>& stages, std::vector<ProgramRec>& progra
 }
 
 std::unique_ptr<ShaderInfo> load_catalog_shader(const StageRec& rec) {
-    const std::string path = plat::data_root() + "/spirv/" + rec.hash + ".spv";
-    FILE* f = plat::fopen_utf8(path, "rb");
-    if (!f) return nullptr;
-    plat::fseek64(f, 0, SEEK_END);
-    const int64_t size = plat::ftell64(f);
-    plat::fseek64(f, 0, SEEK_SET);
-    if (size < 20 || size > (64ll << 20) || (size & 3)) { std::fclose(f); return nullptr; }
+    const auto packed = shader_bundle().load(rec.hash);
+    const auto size = packed.size();
+    if (size < 20 || size > (64ull << 20) || (size & 3)) return nullptr;
     auto info = std::make_unique<ShaderInfo>();
     info->hash = rec.hash;
     info->stage = rec.stage;
@@ -128,9 +126,7 @@ std::unique_ptr<ShaderInfo> load_catalog_shader(const StageRec& rec) {
     info->local_size[1] = rec.local[1];
     info->local_size[2] = rec.local[2];
     info->spirv.resize(size_t(size) / 4);
-    const bool got = std::fread(info->spirv.data(), 1, size_t(size), f) == size_t(size);
-    std::fclose(f);
-    if (!got) return nullptr;
+    std::memcpy(info->spirv.data(),packed.data(),packed.size());
     std::string error;
     if (!reflect_spirv(info->spirv.data(), info->spirv.size(), info->refl, &error) || info->refl.stage != rec.stage) {
         log("nvn/vk: precompile shader %s rejected by reflection%s%s", rec.hash.c_str(), error.empty() ? "" : ": ",
@@ -320,10 +316,33 @@ void prepare_shader_catalog() {
     // With GPL (nvn_pipeline.cpp) the preparation makes each program's shader libraries instead of a whole pipeline:
     // its own marker, so switching modes prepares again.
     const bool gpl = vk_gpl() && !render_pass_objects();  // as gpl_program_job decides
-    std::snprintf(marker_name, sizeof marker_name, "/shader_prepare_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
+    std::snprintf(marker_name, sizeof marker_name, "/shader_prepare_warp32v2_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
                   props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
     const std::string marker = plat::data_root() + marker_name;
     if (marker_exists(marker)) return;
+
+    // An existing preparation on this GPU/driver/catalog needs only the compute programs whose
+    // logical-warp code changed. Do not make an upgrade re-read/re-prepare every graphics shader.
+    char legacy_name[128], previous_name[128];
+    std::snprintf(legacy_name, sizeof legacy_name, "/shader_prepare_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
+                  props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
+    std::snprintf(previous_name, sizeof previous_name, "/shader_prepare_warp32_%s%04x_%04x_%08x_%016llx.done", gpl ? "gpl_" : "",
+                  props.vendorID, props.deviceID, props.driverVersion, (unsigned long long)fingerprint);
+    g_catalog_infos.resize(stages.size());
+    if (marker_exists(plat::data_root() + legacy_name) || marker_exists(plat::data_root() + previous_name)) {
+        std::erase_if(programs, [&](const ProgramRec& program) {
+            for (uint32_t index : program.stages) {
+                if (stages[index].stage != ShaderStage::Compute) continue;
+                auto& info = g_catalog_infos[index];
+                if (!info) info = load_catalog_shader(stages[index]);
+                std::vector<uint32_t> patched;
+                if (!info || patch_warp32(info->spirv, patched)) return false;
+            }
+            return true;
+        });
+        log("nvn/vk: incremental logical-warp preparation: %zu affected programs", programs.size());
+        if (programs.empty()) { write_marker(marker, fingerprint, 0, 0); return; }
+    }
 
     const uint64_t total = programs.size();
     prep_progress(0, total, true, 0);

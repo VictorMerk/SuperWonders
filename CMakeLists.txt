@@ -77,10 +77,158 @@ foreach(shader astc_decode.comp)
     list(APPEND NX_SHADER_SOURCES "${out}")
 endforeach()
 
+# Small OFL controller-prompt fonts: ordinary C++ arrays also work on compilers without #embed.
+set(NX_PC_FONT_DATA "")
+foreach(font nintendo xbox playstation)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/third_party/fonts/PCButtons/${font}.ttf")
+    file(READ "${CMAKE_SOURCE_DIR}/third_party/fonts/PCButtons/${font}.ttf" font_hex HEX)
+    string(REGEX REPLACE "(..)" "0x\\1," font_bytes "${font_hex}")
+    string(APPEND NX_PC_FONT_DATA "const unsigned char ${font}[] = {${font_bytes}};\n")
+endforeach()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/pc_button_fonts.inc" CONTENT "${NX_PC_FONT_DATA}" @ONLY)
+set_source_files_properties(runtime/src/button_font.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_BINARY_DIR}/generated")
+
 # Unit tests of runtime pieces that build without the game (docs/nvn/WINDOWS-PLAN.md, "Test plan"): ctest.
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(friends_service_test tests/friends_service_test.cpp runtime/src/ipc.cpp runtime/src/svc_friends.cpp)
+    target_include_directories(friends_service_test PRIVATE runtime/include runtime/src)
+    add_test(NAME friends_service COMMAND friends_service_test)
+    add_executable(settings_test tests/settings_test.cpp runtime/src/overlay/settings.cpp)
+    target_include_directories(settings_test PRIVATE runtime/src/overlay runtime/src)
+    add_test(NAME settings COMMAND settings_test)
+    add_executable(mod_catalog_test tests/mod_catalog_test.cpp runtime/src/launcher/mod_catalog.cpp)
+    target_include_directories(mod_catalog_test PRIVATE runtime/src)
+    add_test(NAME mod_catalog COMMAND mod_catalog_test)
+    add_executable(game_source_test tests/game_source_test.cpp runtime/src/launcher/game_source.cpp)
+    target_include_directories(game_source_test PRIVATE runtime/src)
+    add_test(NAME game_source COMMAND game_source_test)
+    add_executable(frametrace_test tests/frametrace_test.cpp runtime/src/frametrace.cpp)
+    target_include_directories(frametrace_test PRIVATE runtime/src)
+    if(WIN32)
+        target_link_libraries(frametrace_test PRIVATE psapi)
+    endif()
+    add_test(NAME frametrace COMMAND frametrace_test)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME frametrace_report COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/frametrace_report_test.py")
+        add_test(NAME setup_paths COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/setup_paths_test.py")
+        add_test(NAME wonder_realtime COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/wonder_realtime_test.py")
+        add_test(NAME lan_trace_compare COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/lan_trace_compare_test.py")
+    endif()
+    add_executable(file_io_test tests/file_io_test.cpp)
+    target_include_directories(file_io_test PRIVATE runtime/src)
+    add_test(NAME file_io COMMAND file_io_test)
+    add_executable(profile_account_test tests/profile_account_test.cpp runtime/src/profiles.cpp runtime/src/svc_account.cpp)
+    target_include_directories(profile_account_test PRIVATE runtime/include runtime/src)
+    add_test(NAME profile_account COMMAND profile_account_test)
+    add_executable(profiles_test tests/profiles_test.cpp runtime/src/profiles.cpp runtime/src/launcher/save_backup.cpp)
+    target_include_directories(profiles_test PRIVATE runtime/src)
+    add_test(NAME profiles COMMAND profiles_test)
+    add_executable(save_backup_test tests/save_backup_test.cpp runtime/src/launcher/save_backup.cpp)
+    target_include_directories(save_backup_test PRIVATE runtime/src)
+    add_test(NAME save_backup COMMAND save_backup_test)
+    add_executable(shader_bundle_test tests/shader_bundle_test.cpp runtime/src/shader_bundle.cpp)
+    target_include_directories(shader_bundle_test PRIVATE runtime/src)
+    add_test(NAME shader_bundle COMMAND shader_bundle_test)
+    add_executable(cache_file_test tests/cache_file_test.cpp)
+    target_include_directories(cache_file_test PRIVATE runtime/src/nvn)
+    add_test(NAME cache_file COMMAND cache_file_test)
+    add_executable(pipeline_cache_data_test tests/pipeline_cache_data_test.cpp)
+    target_include_directories(pipeline_cache_data_test PRIVATE runtime/src/nvn "${NX_VULKAN_SDK}/Include")
+    add_test(NAME pipeline_cache_data COMMAND pipeline_cache_data_test)
+    add_executable(present_geometry_test tests/present_geometry_test.cpp)
+    target_include_directories(present_geometry_test PRIVATE runtime/src/nvn)
+    add_test(NAME present_geometry COMMAND present_geometry_test)
+    add_executable(texture_cache_test tests/texture_cache_test.cpp runtime/src/nvn/texture_cache.cpp)
+    target_include_directories(texture_cache_test PRIVATE runtime/src/nvn)
+    add_test(NAME texture_cache COMMAND texture_cache_test)
+    find_package(Threads REQUIRED)
+    add_executable(stream_cache_test tests/stream_cache_test.cpp runtime/src/stream_cache.cpp)
+    target_include_directories(stream_cache_test PRIVATE runtime/src)
+    target_link_libraries(stream_cache_test PRIVATE Threads::Threads)
+    add_test(NAME stream_cache COMMAND stream_cache_test)
+    if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_executable(netplay_timing_test tests/netplay_timing_test.cpp)
+        target_include_directories(netplay_timing_test PRIVATE runtime/src)
+        add_test(NAME netplay_timing COMMAND netplay_timing_test)
+        add_executable(netplay_trace_test tests/netplay_trace_test.cpp)
+        target_include_directories(netplay_trace_test PRIVATE runtime/src)
+        add_test(NAME netplay_trace COMMAND netplay_trace_test)
+        add_executable(netplay_pipeline_test tests/netplay_pipeline_test.cpp)
+        target_include_directories(netplay_pipeline_test PRIVATE runtime/src)
+        add_test(NAME netplay_pipeline COMMAND netplay_pipeline_test)
+        add_executable(wonder_lan_seed_test tests/wonder_lan_seed_test.cpp)
+        target_include_directories(wonder_lan_seed_test PRIVATE "${CMAKE_SOURCE_DIR}/games/wonder")
+        add_test(NAME wonder_lan_seed COMMAND wonder_lan_seed_test)
+        add_executable(netplay_wire_test tests/netplay_wire_test.cpp runtime/src/netplay_wire.cpp runtime/src/launcher/update_crypto.c)
+        target_include_directories(netplay_wire_test PRIVATE runtime/src)
+        add_test(NAME netplay_wire COMMAND netplay_wire_test)
+        add_executable(netplay_save_test tests/netplay_save_test.cpp runtime/src/netplay_save.cpp runtime/src/launcher/update_crypto.c)
+        target_include_directories(netplay_save_test PRIVATE runtime/src)
+        add_test(NAME netplay_save COMMAND netplay_save_test)
+        add_executable(netplay_session_test tests/netplay_session_test.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
+        target_include_directories(netplay_session_test PRIVATE runtime/src)
+        if(WIN32)
+            target_link_libraries(netplay_session_test PRIVATE ws2_32)
+        endif()
+        add_test(NAME netplay_session COMMAND netplay_session_test)
+        add_executable(netplay_latency_bench tools/perf/lan_transport_bench.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
+        target_include_directories(netplay_latency_bench PRIVATE runtime/src)
+        if(WIN32)
+            target_link_libraries(netplay_latency_bench PRIVATE ws2_32)
+        endif()
+        add_executable(netplay_lobby_test tests/netplay_lobby_test.cpp runtime/src/profiles.cpp runtime/src/netplay_game.cpp runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/launcher/update_crypto.c)
+        target_include_directories(netplay_lobby_test PRIVATE runtime/include runtime/src)
+        target_compile_definitions(netplay_lobby_test PRIVATE NX_VERSION_STRING="test")
+        if(WIN32)
+            target_link_libraries(netplay_lobby_test PRIVATE ws2_32)
+        endif()
+        add_test(NAME netplay_lobby COMMAND netplay_lobby_test)
+    endif()
+    add_executable(button_font_test tests/button_font_test.cpp runtime/src/button_font.cpp runtime/src/overlay/settings.cpp)
+    target_include_directories(button_font_test PRIVATE runtime/include runtime/src)
+    add_test(NAME button_font COMMAND button_font_test)
+    add_executable(input_script_test tests/input_script_test.cpp runtime/src/input_script.cpp)
+    target_include_directories(input_script_test PRIVATE runtime/include runtime/src)
+    add_test(NAME input_script COMMAND input_script_test)
+    set(NX_WARP_SHADER "${CMAKE_BINARY_DIR}/shaders/warp32.spv")
+    if(NX_GLSLC)
+        set(NX_WARP_GLSL_ARGS --target-env=vulkan1.1)
+    else()
+        set(NX_WARP_GLSL_ARGS -V --target-env vulkan1.1)
+    endif()
+    add_custom_command(OUTPUT "${NX_WARP_SHADER}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/shaders"
+        COMMAND "${NX_GLSL_TOOL}" ${NX_WARP_GLSL_ARGS} -o "${NX_WARP_SHADER}" "${CMAKE_SOURCE_DIR}/tests/shaders/warp32.comp"
+        DEPENDS tests/shaders/warp32.comp)
+    add_executable(warp32_test tests/warp32_test.cpp runtime/src/nvn/nvn_spirv_warp.cpp "${NX_WARP_SHADER}")
+    target_include_directories(warp32_test PRIVATE runtime/src/nvn)
+    add_test(NAME warp32 COMMAND warp32_test "${NX_WARP_SHADER}")
+    if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(warp32_gpu_test tests/warp32_gpu_test.cpp runtime/src/nvn/nvn_spirv_warp.cpp "${NX_WARP_SHADER}")
+        target_include_directories(warp32_gpu_test PRIVATE runtime/src/nvn "${NX_VULKAN_SDK}/Include")
+        if(WIN32)
+            target_link_libraries(warp32_gpu_test PRIVATE "${NX_VULKAN_SDK}/Lib/vulkan-1.lib")
+        else()
+            target_link_libraries(warp32_gpu_test PRIVATE vulkan)
+        endif()
+        add_test(NAME warp32_gpu COMMAND warp32_gpu_test "${NX_WARP_SHADER}")
+        set_tests_properties(warp32_gpu PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    add_executable(settings_service_test tests/settings_service_test.cpp runtime/src/svc_settings.cpp)
+    target_include_directories(settings_service_test PRIVATE runtime/include runtime/src)
+    add_test(NAME settings_service COMMAND settings_service_test)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import fontTools" RESULT_VARIABLE NX_FONTTOOLS_MISSING
+                        OUTPUT_QUIET ERROR_QUIET)
+        if(NOT NX_FONTTOOLS_MISSING)
+            add_test(NAME overlay_font_coverage COMMAND "${Python3_EXECUTABLE}"
+                     "${CMAKE_SOURCE_DIR}/tests/overlay_font_coverage_test.py")
+        endif()
+    endif()
     add_executable(gpu_pick_test tests/gpu_pick_test.cpp runtime/src/nvn/nvn_gpu_pick.cpp)
     target_compile_definitions(gpu_pick_test PRIVATE NX_GPU_PICK_STANDALONE)
     target_include_directories(gpu_pick_test PRIVATE runtime/src/nvn)
@@ -205,12 +353,16 @@ set(NX_RUNTIME_SOURCES
     runtime/src/kernel_watch.cpp
     runtime/src/ipc.cpp
     runtime/src/svc_am.cpp
+    runtime/src/svc_settings.cpp
     runtime/src/svc_nfp.cpp
     runtime/src/svc_misc.cpp
     runtime/src/svc_time.cpp
     runtime/src/svc_process.cpp
     runtime/src/hle_fs.cpp
+    runtime/src/stream_cache.cpp
     runtime/src/svc_account.cpp
+    runtime/src/profiles.cpp
+    runtime/src/svc_friends.cpp
     runtime/src/hle_ro.cpp
     runtime/src/hle_vi.cpp
     runtime/src/hle_hid.cpp
@@ -218,6 +370,9 @@ set(NX_RUNTIME_SOURCES
     runtime/src/hle_audio.cpp
     runtime/src/hle_pl.cpp
     runtime/src/input_script.cpp
+    runtime/src/controllers.cpp
+    runtime/src/button_font.cpp
+    runtime/src/shader_bundle.cpp
     runtime/src/play.cpp
     runtime/src/touch_layout.cpp
     runtime/src/perf_hint.cpp
@@ -261,17 +416,21 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_pipeline.cpp
     runtime/src/nvn/nvn_dummy.cpp
     runtime/src/nvn/nvn_fsr.cpp
+    runtime/src/nvn/nvn_framegen.cpp
     runtime/src/nvn/nvn_fxaa.cpp
     runtime/src/nvn/nvn_compare_twin.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_upload.cpp
+    runtime/src/nvn/texture_cache.cpp
     runtime/src/nvn/nvn_astc.cpp
     runtime/src/nvn/nvn_spirv_patch.cpp
+    runtime/src/nvn/nvn_spirv_warp.cpp
     runtime/src/nvn/nvn_spirv_int_textures.cpp
     runtime/src/nvn/nvn_spirv_locals.cpp
     runtime/src/nvn/nvn_spirv_unused.cpp
     runtime/src/nvn/nvn_pipeline_async.cpp
     runtime/src/nvn/nvn_spirv_clip.cpp
+    runtime/src/nvn/nvn_ultrawide.cpp
     runtime/src/nvn/nvn_present.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_bc.cpp
@@ -307,10 +466,16 @@ set_source_files_properties(runtime/src/nvn/nvn_fsr.cpp PROPERTIES
 set_source_files_properties(runtime/src/overlay/overlay_vk.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_VULKAN_NO_PROTOTYPES")
 file(GLOB NX_GAME_SOURCES CONFIGURE_DEPENDS "${NX_GAME_DIR}/*.cpp")
+if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    list(APPEND NX_RUNTIME_SOURCES runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/netplay_game.cpp)
+    if(NOT NX_GAME_LIBRARY)
+        list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/update_crypto.c)
+    endif()
+endif()
 list(APPEND NX_RUNTIME_SOURCES ${NX_GAME_SOURCES} ${NX_SHADER_SOURCES} runtime/src/gamelib.cpp)
 if(NX_GAME_LIBRARY)
     # SuperWonders Launcher: the start screen before the game (setup, settings, mods, updates; launcher/launcher.h)
-    list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/launcher.cpp runtime/src/launcher/updates.cpp runtime/src/launcher/test_pad.cpp
+    list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/profile_ui.cpp runtime/src/launcher/save_backup.cpp runtime/src/launcher/mod_catalog.cpp runtime/src/launcher/game_source.cpp runtime/src/launcher/launcher.cpp runtime/src/launcher/updates.cpp runtime/src/launcher/test_pad.cpp
          runtime/src/launcher/update_core.c runtime/src/launcher/update_crypto.c)
     if(NOT WIN32)
         list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/update_appimage.c)  # (an AppImage updates itself)
@@ -427,7 +592,7 @@ else()
     if(MINGW)
         # LLVM-MinGW ships the XAudio2 2.9 import library under its SDK name. Its plain "xinput" is XInput 1.3 (the
         # DirectX 2010 redistributable, missing on a clean Windows); 1.4 ships with Windows 8 and later.
-        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput1_4 xaudio2_9 ole32 psapi shell32 uuid winhttp)
+        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput1_4 xaudio2_9 ole32 psapi shell32 uuid winhttp ws2_32)
         if(NX_GAME_LIBRARY)
             # The C++ runtime shared with the game code library (one copy: LongJmp is thrown here and caught there),
             # so libc++.dll and libunwind.dll go next to the program. The UCRT stays a system DLL.
@@ -441,7 +606,7 @@ else()
             target_link_options(${NX_GAME} PRIVATE -static)
         endif()
     else()
-        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput xaudio2 ole32 psapi winhttp)
+        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput xaudio2 ole32 psapi winhttp ws2_32)
     endif()
     if(WIN32)
         target_link_libraries(${NX_GAME} PRIVATE SDL3::SDL3-static)
@@ -471,6 +636,17 @@ else()
 endif()
 
 target_include_directories(${NX_GAME} PRIVATE "${NX_SHADER_OUT}")
+if(NX_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    add_executable(controllers_test tests/controllers_test.cpp runtime/src/controllers.cpp)
+    target_include_directories(controllers_test PRIVATE runtime/include runtime/src)
+    if(WIN32)
+        target_link_libraries(controllers_test PRIVATE SDL3::SDL3-static)
+    else()
+        target_link_libraries(controllers_test PRIVATE SDL3::SDL3)
+    endif()
+    add_test(NAME controllers COMMAND controllers_test)
+    set_tests_properties(controllers PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 target_compile_definitions(${NX_GAME} PRIVATE NX_GAME_NAME="${NX_GAME}" NX_GAMELIB_FILE="${NX_GAMELIB_FILE}"
                            NX_GAME_LIBRARY=$<BOOL:${NX_GAME_LIBRARY}> NX_VERSION_STRING="${NX_VERSION}")
 # SuperWonders Update (launcher/updates.cpp): with a release key's public half (tools/sign_update.py --public), only

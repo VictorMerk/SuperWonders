@@ -26,16 +26,62 @@ HITCH_MS = (25.0, 33.4, 50.0, 100.0)
 STUTTER_MS = 4.0  # a frame this much longer than the one before it: a visible swing
 
 
-def load(path, t_from, t_to):
+def load(path, t_from, t_to, pictures="original"):
     with open(path, encoding="utf-8") as f:
         rows = []
         for r in csv.DictReader(f):
             try:
-                rows.append({k: float(v) for k, v in r.items()})
+                parsed = {k: float(v) for k, v in r.items()}
+                if all(math.isfinite(v) for v in parsed.values()):
+                    rows.append(parsed)
             except (TypeError, ValueError):  # a row cut short by a crash or a kill
                 continue
-    rows = rows[1:]  # (the first frame began before the trace)
+    rows = picture_rows(rows, pictures)
     return [r for r in rows if (t_from is None or r["t_ms"] >= t_from * 1000) and (t_to is None or r["t_ms"] <= t_to * 1000)]
+
+
+def picture_rows(rows, pictures):
+    """Original-picture host cadence, preserving work done during the intermediate presents.
+
+    Filtering original_picture alone would leave the last intermediate's short frame_ms and
+    lose its work counters. Reconstruct complete intervals before applying the time window.
+    Legacy traces and traces without generated pictures retain their existing interpretation.
+    """
+    if pictures == "presented" or not any(r.get("original_picture", 1) == 0 for r in rows):
+        return rows[1:]  # the first interval began before the trace
+    additive = ("acquire_ms", "queue_present_ms", "replay_ms", "encode_ms", "fence_ms", "upload_mb",
+                "present_cpu_ms", "guest_presents", "guest_cpu_ms", "guest_replay_wait_ms", "guest_pace_ms",
+                "pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads", "file_mb", "file_ms",
+                "minflt", "majflt", "log_ms", "input_poll_ms")
+    available = set().union(*(r.keys() for r in rows))
+    additive = tuple(k for k in additive if k in available)
+    out, pending, previous = [], [], None
+    for row in rows:
+        pending.append(row)
+        if row.get("original_picture", 1) != 1:
+            continue
+        if previous is not None and row["t_ms"] > previous["t_ms"]:
+            merged = dict(row)
+            merged["frame_ms"] = row["t_ms"] - previous["t_ms"]
+            merged["previous_log_line"] = previous.get("log_line", 0)
+            for key in additive:
+                merged[key] = sum(r.get(key, 0) for r in pending)
+            merged["guest_gap_ms"] = max(r.get("guest_gap_ms", 0) for r in pending)
+            for key in ("log_max_ms", "input_poll_max_ms"):
+                if key in available: merged[key] = max(r.get(key, 0) for r in pending)
+            out.append(merged)
+        previous, pending = row, []
+    return out
+
+
+def latency_stats(rows):
+    values = sorted(r["sample_to_present_ms"] for r in rows
+                    if r.get("original_picture", 1) == 1 and r.get("sample_to_present_ms", -1) >= 0)
+    if not values:
+        return None
+    return {"samples": len(values), "p50_ms": round(pct(values, 50), 2),
+            "p95_ms": round(pct(values, 95), 2), "p99_ms": round(pct(values, 99), 2),
+            "max_ms": round(values[-1], 2)}
 
 
 def pct(sorted_vals, p):
@@ -110,9 +156,9 @@ def classify(rows):
             cause = "pipelines_in_frame"
         elif r["minflt"] > 4 * max(1.0, medk["minflt"]) and r["minflt"] > 500 or r["majflt"] > 0:
             cause = "page_faults"
-        elif r["upload_mb"] >= 4:
-            cause = "upload"
         else:
+            # Upload volume is not a duration. A normal 11 MB/frame stream must
+            # not turn an otherwise unexplained 900 ms stall into an upload claim.
             cause = "unknown"
         out.append(dict(r, index=i, cause=cause, excess_ms=excess))
     return out, med
@@ -153,9 +199,13 @@ def main():
     ap.add_argument("--baseline")
     ap.add_argument("--top", type=int, default=12)
     ap.add_argument("--label", default="")
+    ap.add_argument("--pictures", choices=("original", "presented"), default="original",
+                    help="original-picture host cadence (default), or every host presentation; neither measures scanout")
     a = ap.parse_args()
+    if not math.isfinite(a.target_fps) or a.target_fps <= 0:
+        ap.error("--target-fps must be a finite positive number")
     target_ms = 1000.0 / a.target_fps
-    rows = load(a.trace, a.from_s, a.to_s)
+    rows = load(a.trace, a.from_s, a.to_s, a.pictures)
     st = stats(rows, target_ms)
     if not st:
         print("too few frames in %s" % a.trace)
@@ -169,15 +219,25 @@ def main():
     st["hitches"] = len(hitches)
     st["hitch_causes"] = {k: {"count": v[0], "excess_ms": round(v[1], 1)} for k, v in sorted(causes.items(), key=lambda kv: -kv[1][1])}
     st["label"] = a.label or a.trace
+    st["pictures"] = a.pictures
+    latency = latency_stats(rows)
+    if latency:
+        st["sample_to_present_proxy"] = latency
     tot = lambda k: sum(r[k] for r in rows)
     st["totals"] = {k: round(tot(k), 1) for k in ("pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads",
                                                    "file_mb", "file_ms", "majflt")}
+    for key in ("log_ms", "input_poll_ms"):
+        if any(key in r for r in rows): st["totals"][key] = round(sum(r.get(key, 0) for r in rows), 1)
 
     print("## %s\n" % st["label"])
-    print("| frames | s | avg fps | 1% low | 0.1% low | p50 | p99 | p99.9 | max ms | >25 | >33 | >50 | >100 | stutters/min | paced | missed vsyncs |")
+    print("Timing domain: %s pictures at host presentation; not physical display scanout.\n" % a.pictures)
+    print("| frames | s | avg fps | 1% low | 0.1% low | p50 | p99 | p99.9 | max ms | >25 | >33 | >50 | >100 | stutters/min | paced | missed target intervals |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     print("| {frames} | {seconds} | {avg_fps} | **{low1_fps}** | **{low01_fps}** | {p50_ms} | {p99_ms} | {p999_ms} | {max_ms} | "
           "{over_25_ms} | {over_33_ms} | {over_50_ms} | {over_100_ms} | {stutters_per_min} | {paced_pct}% | {missed_vsyncs} |".format(**st))
+    if latency:
+        print("\nOriginal-picture HID-sample-to-host-present proxy: {samples} samples; p50 {p50_ms}, p95 {p95_ms}, "
+              "p99 {p99_ms}, max {max_ms} ms. Excludes controller transport, display scanout and pixel response.".format(**latency))
     print("\nHitches (frames over 2x the median %.2f ms and over 25 ms): %d" % (med, len(hitches)))
     for k, v in st["hitch_causes"].items():
         print("  %-20s %4d frames, %8.1f ms over the median" % (k, v["count"], v["excess_ms"]))
@@ -220,14 +280,17 @@ def main():
         prev_line = {int(r["frame"]): int(r["log_line"]) for r in rows}
         for h in sorted(hitches, key=lambda h: -h["frame_ms"])[:a.top]:
             print("- frame %d at %.2f s: %.1f ms, **%s** (acquire %.1f, present %.1f, fence %.1f, replay %.1f, pipelines %d/%.1f ms, "
-                  "skipped %d, astc %.1f ms, files %d/%.1f ms, game gap %.1f cpu %.1f waits-replay %.1f, faults %d/%d)" % (
+                  "skipped %d, astc %.1f ms, files %d/%.1f ms, uploads %.1f MB, host CPU %.1f ms, game gap %.1f cpu %.1f waits-replay %.1f, faults %d/%d)" % (
                       h["frame"], h["t_ms"] / 1000, h["frame_ms"], h["cause"], h["acquire_ms"], h["queue_present_ms"],
                       h["fence_ms"], h["replay_ms"], h["pipelines"], h["pipeline_ms"], h["skipped"], h["astc_ms"],
-                      h["file_reads"], h["file_ms"], h["guest_gap_ms"], h["guest_cpu_ms"], h["guest_replay_wait_ms"],
+                      h["file_reads"], h["file_ms"], h["upload_mb"], h["present_cpu_ms"], h["guest_gap_ms"], h["guest_cpu_ms"], h["guest_replay_wait_ms"],
                       h["minflt"], h["majflt"]))
+            if "log_ms" in h:
+                print("    completed calls, total / longest: logging %.3f / %.3f ms; input poll %.3f / %.3f ms (totals may overlap across threads)" %
+                      (h.get("log_ms",0),h.get("log_max_ms",0),h.get("input_poll_ms",0),h.get("input_poll_max_ms",0)))
             if lines:
                 hi = int(h["log_line"])
-                lo = prev_line.get(int(h["frame"]) - 1, hi)
+                lo = int(h.get("previous_log_line", prev_line.get(int(h["frame"]) - 1, hi)))
                 for ln in lines[max(lo, hi - 6):hi][:6]:
                     print("    log: " + ln[:150])
 
@@ -237,6 +300,9 @@ def main():
     if a.baseline:
         with open(a.baseline, encoding="utf-8") as f:
             b = json.load(f)
+        if b.get("pictures", "presented") != a.pictures:
+            print("\nBaseline timing domain differs or is legacy/unspecified; regenerate it with the same --pictures option.")
+            return 2
         worse = []
         if st["low1_fps"] < b["low1_fps"] * 0.95:
             worse.append("1%% low %.1f -> %.1f" % (b["low1_fps"], st["low1_fps"]))

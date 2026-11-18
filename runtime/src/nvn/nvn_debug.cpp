@@ -133,6 +133,12 @@ void debug_dump_textures(uint64_t frame) {
             !src ? "no image" : src->layout == VK_IMAGE_LAYOUT_UNDEFINED ? "undefined" : "ok");
         if (!src || !src->image || src->layout == VK_IMAGE_LAYOUT_UNDEFINED || !(src->aspect & VK_IMAGE_ASPECT_COLOR_BIT))
             continue;
+        // The raw staging allocation and writer below use four bytes per texel. Restrict raw copies to the
+        // two four-byte formats used by the map depth diagnostic; e.g. RGBA16F needs eight and overruns it.
+        if (std::getenv("NX_DUMP_RAW") && src->format != VK_FORMAT_R16G16_SFLOAT && src->format != VK_FORMAT_R32_SFLOAT) {
+            log("nvn: raw dump skipped texture %llx with unsupported VkFormat %u", (unsigned long long)texture, unsigned(src->format));
+            continue;
+        }
         uint32_t w = src->width, h = src->height;
         Scratch s;
         if (!make_scratch(s, w, h)) {

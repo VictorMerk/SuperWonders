@@ -28,17 +28,21 @@ inline int pc_default_controller_binding(size_t action, int preset) {
         PcEast, PcSouth, PcNorth, PcWest, PcShoulderL, PcShoulderR, PcTriggerL, PcTriggerR,
         PcStart, PcBack, PcStickL, PcStickR, PcLeft, PcUp, PcRight, PcDown,
     };
+    if (preset == 2 && action < 2) return action == 0 ? PcEast : PcSouth;
     return action < kPcControlCount ? (preset == 1 ? nintendo[action] : standard[action]) : PcSouth;
 }
 
 struct PcMenuState {
     int width = 0;
     int height = 0;
+    int aspect_ratio = 0;  // 0 original, 1 21:9, 2 32:9
     int internal_resolution = 0;
     int volume = 100;
     int language = 0;  // English, Italian, German, French
     int game_language = 0;  // Language returned to the game at startup: en-US, it, de, fr, pt-BR
     int memory_limit_gb = 8;  // Process private-commit guard; not a dedicated VRAM budget
+    bool keyboard_separate_player = false;
+    int button_icons = 0;
     int controller_preset = 0;  // Xbox / DualSense, Nintendo
     bool muted = false;
     bool fullscreen = false;
@@ -55,10 +59,18 @@ struct PcMenuState {
     int antialiasing = 0;      // overlay menu: 0 off, 1 FXAA
     int vsync = 1;             // overlay menu: 0 On, 1 Fast, 2 Adaptive, 3 Off
     int frame_cap = 60;        // 30, 60, 90, 120, or 144 FPS
+    bool shader_bundle = true;  // sequential shader cache, applies at startup
+    bool framegen = false;  // experimental optical-flow presentation
+    int render_ahead = 1;  // maximum queued game pictures: 1 low latency, 2 balanced
+    bool preserve_aspect = true;
+    bool texture_cache = true;
+    bool preload_music = false;
+    int framegen_multiplier = 2;  // 2..8 displayed frames per game frame
+    bool pipeline_skip_draws = false;
     int anisotropy = 0;        // overlay menu: 0 the game's, else 2..16
     int rumble = 100;          // overlay menu: rumble strength, percent
     std::array<int, kPcControlCount> keyboard_bindings = {
-        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_ESCAPE, 'M', 'N',
+        VK_SPACE, VK_SHIFT, 'J', 'K', 'Q', 'E', 'Z', 'C', VK_RETURN, VK_BACK, 'M', 'N',
         VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN,
     };
     std::array<int, kPcControlCount> controller_bindings{};

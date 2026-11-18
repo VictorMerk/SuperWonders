@@ -7,6 +7,7 @@
 //
 // Data: NX_DATA_ROOT or games/<game>'s pc_data_root ("private/<game>"): analysis/{main,sdk}.bin, extract/romfs, user/.
 // Settings: NX_<KEY> environment variables, as on Windows.
+#include "file_io.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <cstdlib>
@@ -46,6 +47,8 @@
 
 #include "kernel.h"
 #include "platform.h"
+#include "shader_bundle.h"
+#include "controllers.h"
 
 namespace nx {
 void boot();
@@ -154,7 +157,7 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 }
 
 void exit_thread() { pthread_exit(nullptr); }
-void exit_process(int code) { _exit(code); }
+void exit_process(int code) { nx::nvn::flush_shader_bundle(); close_controllers(); std::fflush(nullptr); _exit(code); }
 
 void sleep_ns(int64_t ns) {
     timespec ts{time_t(ns / 1000000000), long(ns % 1000000000)};
@@ -196,16 +199,7 @@ int64_t ftell64(FILE* f) { return ftello(f); }
 int fseek64(FILE* f, int64_t off, int origin) { return fseeko(f, off, origin); }
 
 uint64_t read_at(FILE* f, int64_t off, void* buf, uint64_t size) {
-    if (size > uint64_t(SSIZE_MAX)) return 0;  // the game passes -1 as "everything": fread read nothing
-    int fd = fileno(f);
-    uint64_t done = 0;
-    while (done < size) {
-        ssize_t n = pread(fd, static_cast<uint8_t*>(buf) + done, size_t(size - done), off + int64_t(done));
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
-        done += uint64_t(n);
-    }
-    return done;
+    return file_io::read_at(f,off,buf,size);
 }
 
 bool make_dirs(const std::string& path) {

@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -48,6 +50,7 @@ thread_local const char* t_missing_name = nullptr;
 // ---- logging --------------------------------------------------------------------------------------------------
 
 void log(const char* fmt, ...) {
+    ft::CallTimer timing(ft::TimedCall::Logging);
     char buf[2048];
     va_list ap;
     va_start(ap, fmt);
@@ -350,6 +353,11 @@ void call(CPU& c, uint64_t t) {
 }
 
 void trace_sp(CPU& c, uint64_t pc) {
+    if (pc == NX_BASE + 0x160deb0ull) {
+        log("widescreen aspect: value %.7g target %llx caller %s",
+            double(c.v[0].f32[0]), (unsigned long long)c.x[8], describe(c.x[30]).c_str());
+        return;
+    }
     log("sp %llx x19 %llx at %s", (unsigned long long)c.x[31], (unsigned long long)c.x[19], describe(pc).c_str());
 }
 
@@ -380,6 +388,24 @@ void load_modules(const ModuleInfo* const* mods, size_t count, const std::string
         if (!f) fatal("missing %s (run tools/nso2bin.py)", path.c_str());
         f.read(reinterpret_cast<char*>(mi->base), std::streamsize(image));
         if (uint64_t(f.gcount()) != image) fatal("%s: expected %llx bytes", path.c_str(), (unsigned long long)image);
+        // Diagnostic comparison with StevensND / KeatonTheBot's Wonder 1.0.0 32:9 patch.
+        const char* mod_probe = std::getenv("NX_TERRAIN_MOD_ASPECT_TEST");
+        if (mod_probe && std::strcmp(mod_probe, "1") == 0 && std::strcmp(mi->name, "main") == 0 &&
+            game::kInfo.program_id == 0x010015100B514000ull && image > 0x29b5fec) {
+            uint32_t* word = reinterpret_cast<uint32_t*>(mi->base + 0x29b5fe8);
+            if (*word == 0x3fe38e3bu) {
+                float aspect = 32.0f / 9.0f;
+                const char* requested = std::getenv("NX_ULTRAWIDE");
+                unsigned width = 0, height = 0;
+                if (requested && ((std::sscanf(requested, "%ux%u", &width, &height) == 2) ||
+                                  (std::sscanf(requested, "%u:%u", &width, &height) == 2)) &&
+                    width && height && float(width) / float(height) >= 16.0f / 9.0f &&
+                    float(width) / float(height) <= 16.0f / 3.0f)
+                    aspect = float(width) / float(height);
+                std::memcpy(word, &aspect, sizeof aspect);
+                log("terrain mod aspect test: main+29b5fe8 16:9 -> %.5f before constructors", double(aspect));
+            } else log("terrain mod aspect test: incompatible original %08x; unchanged", *word);
+        }
         vm_set(mi->base + mi->text, mi->text_size, kMemCode, 5);
         vm_set(mi->base + mi->ro, mi->ro_size, kMemCode, 1);
         vm_set(mi->base + mi->data, size - mi->data, kMemCodeData, 3);

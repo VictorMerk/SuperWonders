@@ -1,0 +1,15 @@
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+layout(local_size_x = 128) in;
+layout(set = 0, binding = 0, std430) buffer Results { uvec4 values[]; };
+void main() {
+    uint lane = gl_SubgroupInvocationID;
+    uint index = gl_GlobalInvocationID.x;
+    uint warp = index >> 5u;
+    // Deliberately model the old translator: source lane 0 and ballot word .x assume 32 lanes.
+    uint shuffled = subgroupShuffle(index, 0u);
+    uint votes = subgroupBallot((index & 31u) == warp + 1u).x;
+    values[index] = uvec4(shuffled, votes, lane, gl_SubgroupLtMask.x);
+}

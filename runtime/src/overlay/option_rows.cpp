@@ -12,6 +12,7 @@
 #include "imgui_internal.h"  // SetKeyOwner, SetFocusID, NavCursorVisible
 
 #include "overlay/overlay_ui.h"
+#include "overlay/usability.h"
 
 namespace nx::overlay::rows {
 
@@ -19,10 +20,13 @@ namespace {
 
 float g_k = 1;  // style scale (1 at 1080 p)
 std::string g_desc_hover, g_desc_focus, g_desc_shown, g_desc_first, g_note;
+std::string g_desc_retained;
+ImGuiID g_desc_id = 0, g_desc_hover_id = 0, g_desc_focus_id = 0, g_desc_first_id = 0;
 float g_desc_alpha = 1;
 bool g_next_disabled = false;
 int g_indent = 0;
 bool g_focus_req = false, g_take_first = false;
+bool g_compact=false;
 
 // Capitals for the Latin-1 letters the menu languages use (é -> É); ß and the rest stay.
 std::string upper(const char* s) {
@@ -46,7 +50,13 @@ int row(const char* label, const std::string& value, bool changed, const char* d
     ImGui::PushID(label);
     if (g_indent) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + g_indent * 28 * g_k);
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * 1.9f;
+    const float w = ImGui::GetContentRegionAvail().x;
+    std::string text = up ? upper(label) : std::string(label);
+    if (const size_t cut = text.find("##"); cut != std::string::npos) text.resize(cut);
+    const float text_width=std::max(1.f,w-32*g_k);
+    const bool stacked=!value.empty() && ImGui::CalcTextSize(text.c_str()).x+ImGui::CalcTextSize(value.c_str()).x+80*g_k>w;
+    const float label_height=ImGui::CalcTextSize(text.c_str(),nullptr,false,text_width).y;
+    const float h=std::max(ImGui::GetFontSize()*1.9f,label_height+16*g_k+(stacked?ImGui::GetFontSize()*1.25f:0));
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the row's own border shows the selection)
     const bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     ImGui::PopStyleColor();
@@ -69,9 +79,10 @@ int row(const char* label, const std::string& value, bool changed, const char* d
         for (ImGuiKey k : {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight, ImGuiKey_LeftArrow, ImGuiKey_RightArrow})
             ImGui::SetKeyOwner(k, id);
     }
-    if (foc) g_desc_focus = desc ? desc : "";
-    if (hov) g_desc_hover = desc ? desc : "";
-    if (g_desc_first.empty() && desc) g_desc_first = desc;
+    if (foc) g_desc_focus = desc ? desc : "", g_desc_focus_id = id;
+    if (hov) g_desc_hover = desc ? desc : "", g_desc_hover_id = id;
+    if (g_desc_first.empty() && desc) g_desc_first = desc, g_desc_first_id = id;
+    if (id == g_desc_id && desc) g_desc_retained = desc;
 
     // the highlight eases in (and out) over about a tenth of a second
     const float t = ui::eased(id + 1, hov || foc ? 1.0f : 0.0f, 22.0f);
@@ -82,17 +93,19 @@ int row(const char* label, const std::string& value, bool changed, const char* d
     const ImU32 border = ui::mix(IM_COL32(255, 255, 255, off ? 18 : 34), off ? ((ui::theme().accent) & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 120) : ui::theme().accent, t);
     dl->AddRect(p, q, ui::fade(border), r, 0, (1.0f + t) * std::max(1.0f, g_k));
     if (highlight) {  // (a row waiting for something, e.g. a key press: a slow pulse in the accent colour)
-        const float a = 0.25f + 0.2f * std::sin(float(ImGui::GetTime()) * 6.0f);
+        const float a = usability_preferences().reduced_motion?.25f:0.25f + 0.2f * std::sin(float(ImGui::GetTime()) * 6.0f);
         dl->AddRectFilled(p, q, ui::fade(ui::theme().accent, a), r);
     }
-    std::string text = up ? upper(label) : std::string(label);
-    if (const size_t cut = text.find("##"); cut != std::string::npos) text.resize(cut);  // (the ID part)
-    const float ty = p.y + (h - fs) * 0.5f;
-    dl->AddText(ImVec2(p.x + pad, ty), ui::fade(off ? ui::theme().text_off : ui::theme().text), text.c_str());
+    const float label_y=p.y+(stacked?8*g_k:(h-label_height)*.5f);
+    const float ty=stacked?label_y+label_height+3*g_k:p.y+(h-fs)*.5f;
+    dl->AddText(ImGui::GetFont(),fs,ImVec2(p.x+pad,label_y),ui::fade(off?ui::theme().text_off:ui::theme().text),text.c_str(),nullptr,text_width);
+    const float reserve=arrows?fs*3.f:0.f;
+    const float value_width=ImGui::CalcTextSize(value.c_str()).x;
+    const float value_scale=value_width>0?std::min(1.f,std::max(1.f,text_width-reserve)/value_width):1.f;
     float right = q.x - pad;
     if (arrows && !value.empty()) {  // ◀ value ▶, drawn (no arrow glyphs needed); a click on one steps
         const float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
-        const float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(value.c_str()).x - gap - aw;
+        const float rx = right - aw, lx = rx - gap - value_width*value_scale - gap - aw;
         const ImU32 ac = off ? ui::theme().text_off : ui::mix(ui::mix(ui::theme().text_off, ui::theme().text_dim, 0.5f), ui::theme().accent, t);
         dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ui::fade(ac));
         dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ui::fade(ac));
@@ -104,8 +117,8 @@ int row(const char* label, const std::string& value, bool changed, const char* d
         right = rx - gap;
     }
     if (!value.empty()) {
-        const float vx = right - ImGui::CalcTextSize(value.c_str()).x;
-        dl->AddText(ImVec2(vx, ty), ui::fade(off ? ui::theme().text_off : changed ? ui::theme().text : ui::theme().text_dim),
+        const float vx = std::max(p.x+pad,right-value_width*value_scale);
+        dl->AddText(ImGui::GetFont(),fs*value_scale,ImVec2(vx, ty), ui::fade(off ? ui::theme().text_off : changed ? ui::theme().text : ui::theme().text_dim),
                     value.c_str());
     }
     ImGui::PopID();
@@ -128,9 +141,12 @@ void begin(const char* id, float height) {
     if (g_take_first) ImGui::NavMoveRequestCancel();
     g_indent = 0;
     g_desc_hover.clear(), g_desc_focus.clear(), g_desc_first.clear(), g_note.clear();
+    g_desc_retained.clear();
+    g_desc_hover_id = g_desc_focus_id = g_desc_first_id = 0;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::PushID(id);
-    ImGui::BeginChild("##rows", ImVec2(avail.x * 0.54f, avail.y), ImGuiChildFlags_NavFlattened);
+    g_compact=avail.x<850*g_k;
+    ImGui::BeginChild("##rows", ImVec2(g_compact?avail.x:avail.x*.60f,g_compact?std::max(60*g_k,avail.y*.68f):avail.y), ImGuiChildFlags_NavFlattened);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 5 * g_k));  // (rows close)
 }
 
@@ -182,11 +198,16 @@ void end() {
     ImGui::PopStyleVar();
     ImGui::EndChild();
     // the description: the hovered row (mouse) wins, else the selected one (controller), else the last shown
-    std::string want = !g_desc_hover.empty() ? g_desc_hover : !g_desc_focus.empty() ? g_desc_focus
-                       : !g_desc_shown.empty() ? g_desc_shown : g_desc_first;
+    // Keep a row's current description, not an old copy of its text. A language
+    // change or removed row must not leave another language/stale mod details here.
+    std::string want;
+    if (!g_desc_hover.empty()) want = g_desc_hover, g_desc_id = g_desc_hover_id;
+    else if (!g_desc_focus.empty()) want = g_desc_focus, g_desc_id = g_desc_focus_id;
+    else if (!g_desc_retained.empty()) want = g_desc_retained;
+    else want = g_desc_first, g_desc_id = g_desc_first_id;
     if (want != g_desc_shown) g_desc_shown = want, g_desc_alpha = 0;
     g_desc_alpha = ui::approach(g_desc_alpha, 1.0f, 16.0f);
-    ImGui::SameLine(0, 0);
+    if(!g_compact) ImGui::SameLine(0, 0);
     const ImVec2 p = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
     const float gap = 26 * g_k;
     ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y), ImVec2(p.x + gap * 0.5f, p.y + avail.y),

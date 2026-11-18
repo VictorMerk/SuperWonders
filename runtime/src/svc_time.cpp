@@ -3,6 +3,7 @@
 #include <ctime>
 
 #include "ipc.h"
+#include "netplay_game.h"
 
 namespace nx {
 
@@ -12,6 +13,7 @@ namespace {
 constexpr uint64_t kSourceLo = 0x4E58525443524543ull, kSourceHi = 0x484144455354494Dull;
 
 int64_t unix_now() {
+    if (lan::active()) return int64_t(lan::epoch()+g_frame.load()/60);
     return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 

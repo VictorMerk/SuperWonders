@@ -7,6 +7,7 @@
 
 #include "ipc.h"
 #include "platform.h"
+#include "svc_am.h"
 
 namespace nx {
 
@@ -43,6 +44,15 @@ void set_game_language(int language) {
     if (language < 0) language = 0;
     if (language > 11) language = 11;
     g_game_language.store(language, std::memory_order_relaxed);
+}
+
+uint64_t game_language_code() {
+    static constexpr const char* codes[] = {"en-US", "it", "de", "fr", "pt-BR", "es", "ko", "ja", "nl", "ru", "zh-Hans", "zh-Hant"};
+    const int language = g_game_language.load(std::memory_order_relaxed);
+    const char* selected = codes[language >= 0 && language < int(std::size(codes)) ? language : 0];
+    uint64_t code = 0;
+    std::memcpy(&code, selected, std::strlen(selected));
+    return code;
 }
 
 namespace {
@@ -169,16 +179,13 @@ std::shared_ptr<Service> application_functions() {
         };
         s.cmds[20] = [](IpcCtx& c) { c.push<uint64_t>(0); return 0u; };  // EnsureSaveData
         s.cmds[21] = [](IpcCtx& c) {                                      // GetDesiredLanguage
-            uint64_t code = 0;
-            // This order matches the game-language selectors and their persisted IDs.
-            static constexpr const char* codes[] = {"en-US", "it", "de", "fr", "pt-BR", "es", "ko", "ja", "nl", "ru", "zh-CN", "zh-TW"};
-            const int language = g_game_language.load(std::memory_order_relaxed);
-            const char* selected = codes[language >= 0 && language < int(std::size(codes)) ? language : 0];
-            std::memcpy(&code, selected, std::strlen(selected));
-            static int logged_language = -1;
-            if (logged_language != language) {
+            const uint64_t code = game_language_code();
+            static uint64_t logged_code = 0;
+            if (logged_code != code) {
+                char selected[9] = {};
+                std::memcpy(selected, &code, sizeof code);
                 log("oe: GetDesiredLanguage -> %s", selected);
-                logged_language = language;
+                logged_code = code;
             }
             c.push<uint64_t>(code);
             return 0u;

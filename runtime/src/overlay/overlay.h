@@ -29,8 +29,16 @@ struct Host {
 
 bool enabled();  // NX_IMGUI_MENU, default on
 int menu_language();  // selected launcher / in-game menu language, 0..12
+int aspect_ratio();
+void set_aspect_ratio(int ratio);
 void init(const Host& host, const Settings& s);  // before the first frame
 void sync(const Settings& s);                    // the platform changed settings itself (F11, window resize)
+// Launcher actions, on the presenting thread, use the same settings and persistence as F1.
+Settings current_settings();
+std::string key_binding_name(int key);
+void apply_settings(const Settings& s, bool persist = true);
+void mark_game_started();  // snapshots settings after leaving the launcher, before guest resource loading
+void open_settings(int tab = 0);  // Video, Audio, Controls, Overlay, System
 
 // ---- input (any thread) ----
 // Navigation/edit keys the menu understands, independent of the platform's key codes.
@@ -60,6 +68,7 @@ bool wants_keyboard();  // keys go to the menu, not the game
 void filter_pad(plat::PadState& p);
 
 // ---- metrics (any thread) ----
+void rendered(uint64_t now_ns, bool interpolated);  // once per game picture, separate from display FPS
 void presented(uint64_t now_ns);   // after each present (plat::overlay_presented)
 void game_interval(int interval);  // the game's swap interval in 60 Hz ticks (plat::overlay_game_interval)
 void game_speed(double percent);  // applied simulation time divided by elapsed wall time

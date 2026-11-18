@@ -121,7 +121,7 @@ uint64_t memguard_overlap_ns(uint64_t from, uint64_t to);
 // The calling thread's CPU time, page faults (major, minor) and context switches (voluntary, involuntary)
 // (frame_stats.cpp; Linux and Android, zeros elsewhere).
 void thread_counters(uint64_t& cpu_ns, long faults[2], long switches[2]);
-void input_script(PadState& p);  // NX_INPUT_SCRIPT presses (input_script.cpp), for unattended runs
+void input_script(PadState& p, uint32_t player = 0);  // NX_INPUT_SCRIPT presses (input_script.cpp), for unattended runs
 
 // Audio: s16 stereo 48 kHz. `done` is called (on any thread) when a submitted buffer has been played.
 using AudioDone = void (*)(void* ctx);

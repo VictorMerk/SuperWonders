@@ -425,7 +425,7 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(device,probe.buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(device,&ai,nullptr,&probe.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(device,probe.buffer,probe.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(device,probe.memory,0,output_bytes,0,reinterpret_cast<void**>(&probe.mapped)) != VK_SUCCESS) return false;

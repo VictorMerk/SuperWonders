@@ -52,6 +52,22 @@ void main() {
             still += abs(pa[i] - lum(lb, c + ivec2(i % SIDE, i / SIDE) * STEP, lm));
         if (still == 0.0) { imageStore(flow, g, vec4(0.0)); return; }
     }
+    // With zero start and a constant new search region, every match has
+    // the same SAD. A positive spatial penalty uniquely selects zero; its
+    // symmetric neighbours also yield zero subpixel adjustment.
+    if (SIDE == 8 && all(equal(start, ivec2(0))) && pc.a.y * pc.a.x >= 1e-6) {
+        const int SPAN = (SIDE - 1) * STEP + 1 + 2 * RADIUS;
+        ivec2 first = c - RADIUS;
+        float value = lum(lb, first, lm);
+        bool uniform_region = true;
+        for (int y = 0; y < SPAN && uniform_region; ++y)
+            for (int x = 0; x < SPAN; ++x)
+                if (lum(lb, first + ivec2(x, y), lm) != value) {
+                    uniform_region = false;
+                    break;
+                }
+        if (uniform_region) { imageStore(flow, g, vec4(0.0)); return; }
+    }
     float cost[WIN * WIN];
     float best = 1e9;
     ivec2 bv = ivec2(0);
@@ -70,6 +86,8 @@ void main() {
             bv = d;
             bk = k;
         }
+        // Zero is the global minimum; a fractional fit still needs every neighbouring cost.
+        if (SUBPIX == 0 && best == 0.0) break;
     }
     vec2 v = vec2(bv);
     if (SUBPIX != 0 && bk >= 0) {   // the minimum of a parabola through the best and its two neighbours, each axis

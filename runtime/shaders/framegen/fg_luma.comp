@@ -17,6 +17,20 @@ void main() {
     ivec2 g = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(g, imageSize(dst)))) return;
     ivec2 m = textureSize(src, 0) - 1;
+    // Fixed paths for the runtime's colour conversion and 4x4 luma reduction.
+    if (pc.a.x != 0 && pc.a.y == 1) {
+        vec3 c = texelFetch(src,min(g,m),0).rgb;
+        imageStore(dst,g,vec4(dot(c,vec3(0.299,0.587,0.114))));
+        return;
+    }
+    if (pc.a.x == 0 && pc.a.y == 4) {
+        float sum = 0.0;
+        for (int y=0;y<4;++y)
+            for (int x=0;x<4;++x)
+                sum += texelFetch(src,min(g*4+ivec2(x,y),m),0).r;
+        imageStore(dst,g,vec4(sum/16.0));
+        return;
+    }
     float s = 0.0;
     int n = pc.a.y;
     for (int y = 0; y < n; y++)

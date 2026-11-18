@@ -26,6 +26,7 @@
 #include "nvn_ultrawide.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
+#include "pipeline_draw_probe_spv.h"
 #include "nvn_pipeline_async.h"
 #include "nvn_shader_prepare.h"
 #include "platform.h"
@@ -833,15 +834,33 @@ void prep_progress(uint64_t done, uint64_t total, bool visible, int kind) {
 }
 
 bool framegen_probe() {
+    std::vector<uint32_t> variants;
+    if (const char* selected = std::getenv("NX_FRAMEGEN_PROBE_VARIANTS"); selected && *selected) {
+        bool seen[24] = {};
+        for (const char* p = selected; *p;) {
+            char* end = nullptr;
+            const unsigned long v = std::strtoul(p,&end,10);
+            if (end == p || v >= 24 || (*end != ',' && *end != '\0') || (*end == ',' && !end[1])) {
+                log("framegen probe: invalid variant list (expected comma-separated indices 0..23)");
+                return false;
+            }
+            if (!seen[v]) { variants.push_back(uint32_t(v)); seen[v] = true; }
+            p = *end ? end+1 : end;
+        }
+        log("framegen probe: %zu selected variants (full suite has 24)",variants.size());
+    } else {
+        for (uint32_t v = 0; v < 24; ++v) variants.push_back(v);
+    }
     std::lock_guard lock(g_gpu);
     if (!init()) return false;
     bool ok = true;
-    for (uint32_t variant = 0; variant < 24; ++variant) {
+    for (uint32_t variant : variants) {
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
         else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
         ok = framegen_probe_check() && recorded && ok;
+        if (!recorded) break;
     }
     framegen_release(true);
     return ok;
@@ -970,6 +989,150 @@ bool pipeline_recipe_probe() {
     save_pipeline_keys(true);
     log("pipeline recipe probe: replay complete; inspect ready/skipped counts and Vulkan errors");
     return true;
+}
+
+bool pipeline_draw_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    if (render_pass_objects() || vk_gpl() || !vk_features().independentBlend) {
+        log("pipeline draw probe: requires dynamic rendering, independent blending and monolithic pipelines");
+        return false;
+    }
+    constexpr uint32_t width = 16, height = 16, bytes = width*height*4;
+    constexpr uint64_t ids[2] = {0x7fff00001000ull,0x7fff00001100ull};
+    std::array<std::array<uint8_t,bytes>,2> pixels{};
+    struct Fixture {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        uint8_t* mapped = nullptr;
+        ~Fixture() {
+            p_vkDeviceWaitIdle(g_device);
+            if (mapped) p_vkUnmapMemory(g_device,memory);
+            if (buffer) p_vkDestroyBuffer(g_device,buffer,nullptr);
+            if (memory) p_vkFreeMemory(g_device,memory,nullptr);
+            destroy(0x7fff00001000ull); destroy(0x7fff00001100ull); drain_objects();
+            trim_reusable_image_cache(); free_retired_images(UINT64_MAX);
+        }
+    } fixture;
+    GpuImage* images[2] = {};
+    for (unsigned i = 0; i < 2; ++i) {
+        auto& texture = make<Texture>(ids[i]);
+        texture.target = 1; texture.format = 0x25; texture.flags = 8;
+        texture.width = width; texture.height = height;
+        texture.depth = texture.levels = texture.samples = 1;
+        texture.memory = reinterpret_cast<uintptr_t>(pixels[i].data()); texture.storage_size = bytes;
+        images[i] = image_of(ids[i]);
+        if (!images[i] || images[i]->format != VK_FORMAT_R8G8B8A8_UNORM || images[i]->width != width || images[i]->height != height)
+            return false;
+    }
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = 2*bytes; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (p_vkCreateBuffer(g_device,&bi,nullptr,&fixture.buffer) != VK_SUCCESS) return false;
+    VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,fixture.buffer,&req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (p_vkAllocateMemory(g_device,&ai,nullptr,&fixture.memory) != VK_SUCCESS ||
+        p_vkBindBufferMemory(g_device,fixture.buffer,fixture.memory,0) != VK_SUCCESS ||
+        p_vkMapMemory(g_device,fixture.memory,0,2*bytes,0,reinterpret_cast<void**>(&fixture.mapped)) != VK_SUCCESS) return false;
+    auto shader = [](ShaderInfo& s, ShaderStage stage, const uint32_t* code, size_t size) {
+        s.stage = stage; s.control.valid = true;
+        s.spirv.assign(code,code+size/4);
+        Sha1 sha; sha.update(code,size); uint8_t digest[20]; sha.finish(digest);
+        static constexpr char hex[] = "0123456789abcdef";
+        for (unsigned i = 0; i < 8; ++i) { s.hash.push_back(hex[digest[i]>>4]); s.hash.push_back(hex[digest[i]&15]); }
+        return reflect_spirv(s.spirv.data(),s.spirv.size(),s.refl);
+    };
+    ShaderInfo vs,fs,multi;
+    if (!shader(vs,ShaderStage::Vertex,k_pipeline_draw_vert,sizeof k_pipeline_draw_vert) ||
+        !shader(fs,ShaderStage::Fragment,k_pipeline_draw_frag,sizeof k_pipeline_draw_frag) ||
+        !shader(multi,ShaderStage::Fragment,k_pipeline_draw_multi_frag,sizeof k_pipeline_draw_multi_frag)) return false;
+    bool ok = true;
+    VkPipeline handles[10] = {};
+    for (unsigned variant = 0; variant < 10; ++variant) {
+        const unsigned count = variant >= 5 && variant < 9 ? 2 : 1;
+        PipelineKey key; std::memset(&key,0,sizeof key);
+        key.vs = &vs; key.fs = count == 2 ? &multi : &fs;
+        key.topology = 4; key.polygon.mode = 2; key.color_count = count;
+        for (unsigned i = 0; i < count; ++i) { key.color_formats[i] = images[i]->format; key.mask.mask[i] = 15; }
+        if (variant == 1 || variant == 6) {
+            key.blend[count-1] = {7,5,6,7,8,2,3};
+            key.blend[6] = {6,5,6,2,1,1,1}; key.color.blend_enable[6] = 1; key.mask.mask[6] = 1;
+        }
+        if (variant == 2 || variant == 3 || variant == 7) {
+            const unsigned target = variant == 7 ? 1 : 0;
+            key.color.blend_enable[target] = 1;
+            key.blend[target] = {target,variant == 3 ? 2u : 5u,variant == 3 ? 2u : 6u,2,1,1,1};
+        }
+        if (variant == 4) key.mask.mask[0] = 1;
+        if (variant == 8) key.mask.mask[1] = 2;
+        if (variant == 9) key.depth.reserved = 0xa5;
+        const auto& layout = program_layout({key.vs,key.fs});
+        const uint64_t before = ft::g_counter[ft::kPipelines].load(std::memory_order_relaxed);
+        VkPipeline pipeline = graphics_pipeline(key,layout);
+        const uint64_t made = ft::g_counter[ft::kPipelines].load(std::memory_order_relaxed)-before;
+        const int alias = variant == 1 || variant == 9 ? 0 : variant == 6 ? 5 : -1;
+        const bool identity = pipeline && made == (alias >= 0 ? 0u : 1u) &&
+                              (alias < 0 || pipeline == handles[alias]);
+        handles[variant] = pipeline;
+        log("pipeline draw probe identity %u: %s (%llu new pipelines)",variant,identity ? "PASS" : "FAIL",(unsigned long long)made);
+        ok = identity && ok;
+        if (!pipeline || !begin(true)) return false;
+        VkRenderingAttachmentInfo attachments[2] = {};
+        for (unsigned i = 0; i < count; ++i) {
+            transition(g_cb,*images[i],VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            attachments[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            attachments[i].imageView = images[i]->view; attachments[i].imageLayout = images[i]->layout;
+            attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachments[i].clearValue.color.float32[2] = attachments[i].clearValue.color.float32[3] = 1;
+        }
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea.extent = {width,height}; ri.layerCount = 1;
+        ri.colorAttachmentCount = count; ri.pColorAttachments = attachments;
+        p_vkCmdBeginRendering(g_cb,&ri);
+        p_vkCmdBindPipeline(g_cb,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+        VkViewport viewport{0,0,float(width),float(height),0,1}; VkRect2D scissor{{0,0},{width,height}};
+        p_vkCmdSetViewport(g_cb,0,1,&viewport); p_vkCmdSetScissor(g_cb,0,1,&scissor);
+        const float constants[4] = {}; p_vkCmdSetBlendConstants(g_cb,constants); p_vkCmdSetDepthBias(g_cb,0,0,0);
+        p_vkCmdSetStencilReference(g_cb,VK_STENCIL_FACE_FRONT_AND_BACK,0);
+        p_vkCmdSetStencilCompareMask(g_cb,VK_STENCIL_FACE_FRONT_AND_BACK,0xff);
+        p_vkCmdSetStencilWriteMask(g_cb,VK_STENCIL_FACE_FRONT_AND_BACK,0xff);
+        p_vkCmdDraw(g_cb,3,1,0,0); p_vkCmdEndRendering(g_cb);
+        for (unsigned i = 0; i < count; ++i) {
+            ++images[i]->content_version; images[i]->rendered = true;
+            transition(g_cb,*images[i],VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy copy{}; copy.bufferOffset = bytes*i;
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; copy.imageExtent = {width,height,1};
+            p_vkCmdCopyImageToBuffer(g_cb,images[i]->image,images[i]->layout,fixture.buffer,1,&copy);
+        }
+        VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        uint64_t hash = 0xcbf29ce484222325ull;
+        for (unsigned i = 0; i < count; ++i) {
+            int expected[4] = {255,0,0,128};
+            if (variant == 2) { expected[0]=128; expected[2]=128; }
+            if (variant == 3) expected[2]=255;
+            if (variant == 4) { expected[2]=255; expected[3]=255; }
+            if (i == 1) {
+                expected[0]=0; expected[1]=255; expected[2]=0; expected[3]=64;
+                if (variant == 7) { expected[1]=64; expected[2]=191; }
+                if (variant == 8) { expected[2]=255; expected[3]=255; }
+            }
+            bool pass = true;
+            for (unsigned b = 0; b < bytes; ++b) {
+                const uint8_t value = fixture.mapped[bytes*i+b];
+                pass = pass && std::abs(int(value)-expected[b%4]) <= 1;
+                hash = (hash^value)*0x100000001b3ull;
+            }
+            log("pipeline draw probe pixels %u/%u: %s",variant,i,pass ? "PASS" : "FAIL");
+            ok = pass && ok;
+        }
+        log("pipeline draw probe digest %u: %016llx",variant,(unsigned long long)hash);
+    }
+    return ok;
 }
 
 bool counter_clear_probe() {

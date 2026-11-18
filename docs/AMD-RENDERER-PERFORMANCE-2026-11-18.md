@@ -1,6 +1,6 @@
 # AMD renderer performance pass ? 18 November 2026
 
-This pass changes code at the same graphics quality. It builds on the previously merged synthesis cutoff and blend-state pipeline reuse. Testing used a Radeon RX 570 Series on Windows. Results below distinguish individual renderer operations from actual game cadence; they do not certify every course or NVIDIA hardware.
+This pass changes code at the same graphics quality. It builds on the previously merged synthesis cutoff and blend-state pipeline reuse. Testing used a Radeon RX 570 Series on Windows. The actual-game runs in this report use the matching r8 library ABI. Results below distinguish individual renderer operations from actual game cadence; they do not certify every course or NVIDIA hardware.
 
 ## Changes retained
 
@@ -14,7 +14,7 @@ The earlier depth-padding fix is already merged separately; see [pipeline depth 
 
 ## Pixel and API checks
 
-All 43 CPU-only CTests pass. The write-back differential test covers 16,392 size/alignment cases, including guest changes after recording, GPU-changed words, partial tails and untouched surrounding bytes. A separate native benchmark uses GPU-filled mapped memory and checks unchanged, sparse-change and all-change patterns against their known expected output, with synchronization validation enabled.
+The integrated main build passes all 51 CPU-only CTests; the r8 build passes its three targeted pipeline/write-back regressions. The write-back differential test covers 16,392 size/alignment cases, including guest changes after recording, GPU-changed words, partial tails and untouched surrounding bytes. A separate native benchmark uses GPU-filled mapped memory and checks unchanged, sparse-change and all-change patterns against their known expected output, with synchronization validation enabled.
 
 The shader exploration matrix ran 160 validation-enabled processes over eight original picture patterns at 320?180 and 127?75. Its 1,760 output checks and 2,880 finite motion-field checks match each reference, with no Vulkan validation errors. Patterns include horizontal, diagonal and fractional movement, HUD, occlusion, flat old/new pictures and a synthetic palette change. Palette/occlusion readbacks are hash comparisons, not a claim that their analytic image is an interpolation-quality oracle.
 
@@ -61,7 +61,7 @@ Four runs used the same scripted course route, native 1080p, uncompressed textur
 
 These short samples do not establish an average-FPS or overall hitch-rate improvement. B2 still contains one 65.9 ms interval whose excess is unattributed: it has no pipeline creation, skipped draw, ASTC decode, file read, completed logging call or long input poll. It must not be presented as a solved shader-compilation hitch.
 
-All four runs exited normally and skipped no draws in the measured window. Their twenty title/map/course captures were visually inspected without obvious black surfaces or missing scenery. Captures cannot rule out brief artifacts between frames. Extended pause/resume and memory-stability testing is in progress.
+All four runs exited normally and skipped no draws in the measured window. Their twenty title/map/course captures were visually inspected without obvious black surfaces or missing scenery. Captures cannot rule out brief artifacts between frames. A further 20-minute course session with repeated pause/resume completed and exited normally. Its logs contain no device loss, GPU hang, VRAM allocation failure or pipeline failure. Sampled private memory was 5.041?5.054 GiB during the last ten minutes. Pause and resumed captures were inspected: the game menu applies its blue/green effect, and resumed gameplay returns to normal colours. A separate fifteen-minute actual-game run with the Khronos layer and synchronization validation enabled also completed and exited normally, with zero validation errors. The rebuilt latest main passes all 51 CPU-only tests and repeats the embedded-shader checks in all three submission modes.
 
 ## Cache replay
 
@@ -69,4 +69,4 @@ Both legacy fixtures replay with every retained recipe ready and zero skipped re
 
 Three restored-input, non-validation samples gave larger-snapshot prewarm medians of 2,137.9 ms before and 1,865.1 ms after the padding fix. The smaller fixture was effectively unchanged (1,150.3 vs 1,173.6 ms, overlapping ranges). There is no universal startup-time or gameplay-FPS claim from the recipe counts.
 
-Game files, private traces, saves and machine-local paths are excluded from this repository. See [GPU probe instructions](RENDERER-GPU-PROBES.md) and acquire the machine-wide reservation before native tests.
+Aggregate samples are in [the measurement data](data/amd-renderer-performance-20261118.json). Game files, private traces, saves and machine-local paths are excluded from this repository. See [GPU probe instructions](RENDERER-GPU-PROBES.md) and acquire the machine-wide reservation before native tests.

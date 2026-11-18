@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 
 namespace nx::nvn {
 using namespace nx::vk;
@@ -289,8 +290,14 @@ struct Probe {
 }
 bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     probe = {};
-    const uint32_t width = variant >= 3 ? 1280 : variant == 1 ? 160 : 192;
-    const uint32_t height = variant >= 3 ? 720 : variant == 1 ? 96 : 128;
+    uint32_t width = variant >= 3 ? 1280 : variant == 1 ? 160 : 192;
+    uint32_t height = variant >= 3 ? 720 : variant == 1 ? 96 : 128;
+    if (variant >= 3) {
+        uint32_t w = 0, h = 0;
+        const char* size = std::getenv("NX_FRAMEGEN_PROBE_SIZE");
+        if (size && std::sscanf(size, "%ux%u", &w, &h) == 2 && w >= 64 && w <= 4096 && h >= 64 && h <= 4096)
+            width = w, height = h;
+    }
     const size_t bytes = size_t(width)*height*4;
     if (!image(probe.source,width,height,VK_FORMAT_R8G8B8A8_UNORM)) return false;
     auto colour = [](int x, uint32_t y) {
@@ -383,6 +390,13 @@ bool framegen_probe_check() {
             }
             const double channels = double(expected.size()/4*3);
             const bool pass = opaque && ((probe.still || probe.cut) ? generated==0 : generated < .9*std::min(before,after));
+            if (std::getenv("NX_FRAMEGEN_PROBE_DIGEST")) {
+                uint64_t hash = 0xcbf29ce484222325ull;
+                for (size_t i = 0; i < expected.size(); ++i) hash = (hash ^ actual[i]) * 0x100000001b3ull;
+                log("framegen probe digest %ux %ux%u %s %zu: %016llx", probe.factor, probe.source.width,
+                    probe.source.height, probe.cut ? "cut" : probe.still ? "still" : "moving", frame + 1,
+                    (unsigned long long)hash);
+            }
             ok = pass && ok;
             log("framegen probe %ux %ux%u %s %zu/%u: error %.3f, input errors %.3f / %.3f: %s",
                 probe.factor,probe.source.width,probe.source.height,probe.cut ? "cut" : probe.still ? "still" : "moving",

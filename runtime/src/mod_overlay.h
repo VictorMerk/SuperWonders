@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,8 +13,9 @@ struct Root {
     std::string name;
 };
 bool enabled(std::string_view name, std::string_view aspect = {});
-std::filesystem::path find_romfs(const std::filesystem::path& folder);
-std::vector<Root> selected(const std::filesystem::path& folder, std::string_view aspect = {});
+std::filesystem::path find_romfs(const std::filesystem::path& folder, const std::function<void()>& checkpoint = {});
+std::vector<Root> selected(const std::filesystem::path& folder, std::string_view aspect = {},
+                           const std::function<void()>& checkpoint = {});
 bool linked(const std::filesystem::directory_entry& entry);
 
 // Snapshot the file names at boot. Contents remain on disk; removals still fall through

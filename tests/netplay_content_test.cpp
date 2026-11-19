@@ -1,4 +1,5 @@
 #include "netplay_content.h"
+#include "mod_overlay.h"
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -19,6 +20,8 @@ int main() {
     write(root/"game/build-id.txt","kit2");write(root/"game"/library_name,"generated game");write(root/"runtime.exe","runtime");
     auto hash=[&](const char* aspect=""){return nx::lan::content_fingerprint(root,root/"runtime.exe","test",aspect);};
     const auto clean=hash();
+    const std::array<unsigned char,32> expected={0x02,0xc2,0x01,0x11,0xcf,0x6b,0xc0,0x1e,0x8b,0xb6,0x18,0x43,0x14,0x8a,0x8c,0x41,0x59,0x09,0x56,0x73,0x82,0x56,0xba,0x9d,0x1c,0x17,0xd8,0xfa,0x9a,0x72,0x10,0x45};
+    check(clean==expected,"stable content keeps the documented domain-4 fingerprint format");
     write(root/"mods/-off/romfs/Stage/ignored.bin","disabled");
     write(root/"mods/readme-only/readme.txt","not a mod");
     check(clean==hash(),"disabled and non-loadable mods do not block LAN matching");
@@ -74,6 +77,28 @@ int main() {
             fs::last_write_time(root/"analysis/main.bin")+std::chrono::seconds(2));
     }); } catch(const std::exception&) { mutated=true; }
     check(mutated,"same-size file mutation while hashing fails closed");
+    // Trigger a later mutation only after an earlier core file has completed.
+    bool late=false;checkpoints=0;
+    try { nx::lan::content_fingerprint(root,root/"runtime.exe","test","",[&] {
+        if(++checkpoints==8) fs::last_write_time(root/"analysis/main.bin",
+            fs::last_write_time(root/"analysis/main.bin")+std::chrono::seconds(2));
+    }); } catch(const std::exception&) {late=true;}
+    check(late,"an earlier core file changing during later hashing is rejected");
+    bool discovery_cancelled=false;
+    try { nx::mods::selected(root/"mods","",[]{throw std::runtime_error("discovery cancelled");}); }
+    catch(const std::runtime_error& e){discovery_cancelled=std::string(e.what())=="discovery cancelled";}
+    check(discovery_cancelled,"mod discovery accepts cancellation before filesystem work");
+    // A large later override keeps hashing in progress after the initial manifest
+    // has been collected. Add a new file while that later content is read.
+    fs::create_directories(root/"mods/05-large/romfs");
+    { std::ofstream out(root/"mods/05-large/romfs/large.bin",std::ios::binary);
+      const std::string block(16u<<20,'x');out.write(block.data(),block.size()); }
+    checkpoints=0;bool added=false,inventory_failed=false;
+    try { nx::lan::content_fingerprint(root,root/"runtime.exe","test","",[&] {
+        if(++checkpoints==128) {write(root/"mods/01-first/romfs/added.bin","new file");added=true;}
+    }); } catch(const std::exception&) {inventory_failed=true;}
+    check(added&&inventory_failed,"adding a mod file after enumeration rejects the stale manifest");
+    fs::remove_all(root/"mods/05-large");fs::remove(root/"mods/01-first/romfs/added.bin");
     auto deep=root/"mods/04-deep/romfs";
     for(int i=0;i<66;++i) deep/="d";
     fs::create_directories(deep);

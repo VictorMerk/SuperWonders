@@ -50,7 +50,8 @@ bool enabled(std::string_view name,std::string_view aspect) {
         return (wide32&&aspect=="32:9") || (wide21&&aspect=="21:9");
     return !off;
 }
-fs::path find_romfs(const fs::path& folder) {
+fs::path find_romfs(const fs::path& folder,const std::function<void()>& checkpoint) {
+    if(checkpoint) checkpoint();
     std::error_code ec;
     const auto direct=host_path(folder/"romfs");
     if(fs::is_directory(direct,ec)) return direct;
@@ -58,6 +59,7 @@ fs::path find_romfs(const fs::path& folder) {
     std::vector<fs::path> candidates;
     size_t visited=0;
     for(fs::recursive_directory_iterator it(host_path(folder),ec),end; !ec&&it!=end;it.increment(ec)) {
+        if(checkpoint) checkpoint();
         if(++visited>100000) throw std::runtime_error("Mod folder inspection limit exceeded");
         if(it.depth()>=3 || linked(*it)) it.disable_recursion_pending();
         if(it->is_directory(ec) && lower(text(it->path().filename()))=="romfs" &&
@@ -70,7 +72,8 @@ fs::path find_romfs(const fs::path& folder) {
     std::sort(candidates.begin(),candidates.end());
     return candidates.empty()?fs::path{}:candidates.front();
 }
-std::vector<Root> selected(const fs::path& folder,std::string_view aspect) {
+std::vector<Root> selected(const fs::path& folder,std::string_view aspect,const std::function<void()>& checkpoint) {
+    if(checkpoint) checkpoint();
     std::error_code ec;
     if(!fs::exists(host_path(folder),ec)) {
         if(ec) throw fs::filesystem_error("Could not inspect mods",folder,ec);
@@ -79,12 +82,13 @@ std::vector<Root> selected(const fs::path& folder,std::string_view aspect) {
     std::vector<Root> result;
     size_t inspected=0;
     for(const auto& entry:fs::directory_iterator(host_path(folder))) {
+        if(checkpoint) checkpoint();
         if(++inspected>4096) throw std::runtime_error("Too many entries in the mods folder (limit 4096)");
         const auto name=text(entry.path().filename());
         if(entry.is_directory() && enabled(name,aspect)) result.push_back({entry.path(),{},name});
     }
     std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){return a.folder<b.folder;});
-    for(auto& root:result) root.romfs=find_romfs(root.folder);
+    for(auto& root:result) root.romfs=find_romfs(root.folder,checkpoint);
     return result;
 }
 Overlay::Overlay(const std::vector<Root>& roots,size_t entry_limit) {

@@ -1,4 +1,5 @@
 #include "netplay_save.h"
+#include "host_path.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +41,39 @@ int main() {
     check(rejects([&]{restore_save(duplicate,root/"duplicate");}),"case-colliding save names are rejected on every platform");
     const auto empty=capture_save(root/"missing"); restore_save(empty,root/"empty");
     check(fs::is_empty(root/"empty"),"a new game can use an empty save");
+    int checks=0;
+    check(rejects([&]{capture_save(root/"source",[&]{if(++checks==3)throw std::runtime_error("cancelled");});}),
+          "host save capture can be cancelled");
+    checks=0;
+    check(rejects([&]{restore_save(snapshot,root/"cancelled",[&]{if(++checks==3)throw std::runtime_error("cancelled");});}),
+          "client restore can be cancelled after creating its destination");
+    check(!fs::exists(root/"cancelled"),"cancelled restore removes its partial destination");
+    check(capture_save(root/"restored")==snapshot,"rollback preserves unrelated existing saves");
+    write(root/"one-file/a.sav","stable");checks=0;
+    check(rejects([&]{capture_save(root/"one-file",[&]{
+        if(++checks==3)write(root/"one-file/b.sav","added after enumeration");
+    });}),"save additions after enumeration cannot produce a stale snapshot");
+    fs::create_directories(root/"large");
+    {std::ofstream out(root/"large/large.sav",std::ios::binary);const std::string data(256u<<10,'s');out.write(data.data(),data.size());}
+    const auto large=capture_save(root/"large");restore_save(large,root/"large-restored");
+    check(capture_save(root/"large-restored")==large,"multi-block session saves roundtrip without byte changes");
+    checks=0;
+    check(rejects([&]{capture_save(root/"large",[&]{if(++checks==6)throw std::runtime_error("cancelled");});}),
+          "cancellation interrupts multi-block host reads");
+    checks=0;bool partial_written=false;
+    check(rejects([&]{restore_save(large,root/"partial-large",[&]{if(++checks==5){
+        partial_written=fs::file_size(root/"partial-large/large.sav")>0;throw std::runtime_error("cancelled");
+    }});}),"cancellation interrupts multi-block client writes");
+    check(partial_written&&!fs::exists(root/"partial-large"),"rollback removes a copy after bytes were written");
+    auto deep=root/"deep";
+    for(int i=0;i<66;++i)deep/="d";
+    fs::create_directories(nx::host_path(deep));
+    check(rejects([&]{capture_save(root/"deep");}),"directory-only deep saves are bounded");
+    auto long_root=root/fs::path(u"long-\u65e5\u672c\u8a9e");
+    for(int i=0;i<5;++i)long_root/=std::string(55,'a'+i);
+    fs::create_directories(nx::host_path(long_root));
+    restore_save(snapshot,long_root/"restored");
+    check(capture_save(long_root/"restored")==snapshot,"long Unicode parent paths preserve nested save restoration");
     check(fs::weakly_canonical(root).parent_path()==fs::weakly_canonical(fs::temp_directory_path()) && root.filename().string().starts_with("wonder-lan-save-test-"),"cleanup is confined to this test directory");
     fs::remove_all(root); std::puts("LAN saves: deterministic roundtrip, isolation, bounds and unsafe-path rejection passed");
 }

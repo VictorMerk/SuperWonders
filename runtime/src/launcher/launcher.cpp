@@ -1402,7 +1402,8 @@ void run() {
     validate_sources();
     g->config_mode = config_mode;
     const auto arguments=plat::program_args();
-    if(std::find(arguments.begin(),arguments.end(),"--lan-ended")!=arguments.end()) {
+    const bool lan_ended=std::find(arguments.begin(),arguments.end(),"--lan-ended")!=arguments.end();
+    if(lan_ended) {
         std::ifstream note(u8(plat::data_root())/"lan-last-session.txt",std::ios::binary);
         char text[2048]{}; note.read(text,sizeof(text)-1);
         g->note=note.gcount()>0?std::string(text,size_t(note.gcount())):"The LAN session ended. You can reconnect from a new room.";
@@ -1438,7 +1439,7 @@ void run() {
     if(profile_tour)open_profiles();
     // Repro hook: exercise the real asynchronous launcher-to-game path without
     // desktop input. Normal launches configure these fields in the native popup.
-    if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART")) {
+    if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART"); mode && !lan_ended) {
         open_lan(); g->lan_mode=std::strcmp(mode,"host")?1:0;
         if(const auto* code=std::getenv("NX_LAN_CODE")) std::snprintf(g->lan_code,sizeof g->lan_code,"%s",code);
         const auto* address=std::getenv("NX_LAN_ADDRESS");

@@ -70,6 +70,25 @@ def compare(left, right):
             "mean": sum(work) / len(work) if work else None,
             "p95": work[min(len(work)-1, int(len(work)*.95))] if work else None,
             "peak": work[-1] if work else None})
+    report["presentation_progress"] = []
+    report["warnings"] = []
+    for rows in (left, right):
+        samples = [int(rows[tick]["frame"]) for tick in common
+                   if "frame" in rows[tick] and rows[tick]["committed"] == "1"]
+        longest = current = 0
+        previous = None
+        for frame in samples:
+            current = current + 1 if frame == previous else 1
+            longest = max(longest, current)
+            previous = frame
+        report["presentation_progress"].append({
+            "samples": len(samples),
+            "frames_advanced": samples[-1] - samples[0] if samples else None,
+            "longest_same_frame_exchanges": longest,
+        })
+    a, b = report["presentation_progress"]
+    if a["samples"] and b["samples"] and abs(a["frames_advanced"] - b["frames_advanced"]) >= 60:
+        report["warnings"].append("Presented-frame progress differs by at least 60 frames across matching input ticks; inspect loading barriers or a stalled renderer. Matching inputs do not establish synchronized gameplay.")
     return report
 
 

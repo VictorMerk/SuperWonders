@@ -45,6 +45,21 @@ class Comparison(unittest.TestCase):
         with self.assertRaises(ValueError):
             trace.compare({1: row()}, {2: row()})
 
+    def test_matching_inputs_warn_when_one_pc_stops_presenting(self):
+        host = {i: row(frame="100") for i in range(120)}
+        client = {i: row(frame=str(101 + i)) for i in range(120)}
+        result = trace.compare(host, client)
+        self.assertIsNone(result["first_difference"])
+        self.assertEqual(result["presentation_progress"][0]["longest_same_frame_exchanges"], 120)
+        self.assertEqual(result["presentation_progress"][1]["frames_advanced"], 119)
+        self.assertTrue(result["warnings"])
+
+    def test_async_one_frame_offset_is_not_a_progress_warning(self):
+        host = {i: row(frame=str(100 + i)) for i in range(120)}
+        client = {i: row(frame=str(101 + i)) for i in range(120)}
+        result = trace.compare(host, client)
+        self.assertEqual(result["warnings"], [])
+
     def test_nonfinite_position_is_a_difference(self):
         result = trace.compare({7: row(state_valid="1", x="nan")}, {7: row(state_valid="1")})
         self.assertIn("x", result["first_difference"]["fields"])

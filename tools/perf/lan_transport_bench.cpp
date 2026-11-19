@@ -39,6 +39,7 @@ int main(int argc,char** argv) {
     config.input_lead=pipelined?1:0;
     config.build[0]=42; config.save[0]=7; config.epoch=1700000000; config.seed=42;
     config.timeout=std::chrono::seconds(10);
+    if(const char* timeout=std::getenv("NX_LAN_BENCH_FRAME_TIMEOUT_MS")) config.frame_timeout=std::chrono::milliseconds(std::stoi(timeout));
     std::promise<uint16_t> listening; auto ready=listening.get_future();
     std::mutex lock; bool failed=false; double elapsed[2]{}, measured_work[2]{},sample_to_commit[2]{};
     auto run=[&](int role) {
@@ -59,12 +60,14 @@ int main(int argc,char** argv) {
                 const auto work_start=Clock::now();
                 simulate_work(work);
                 measured_work[role]+=std::chrono::duration<double,std::milli>(Clock::now()-work_start).count()/frames;
-                nx::plat::PadState pad{uint64_t(role+1),tick,-tick,0,0};
-                const auto sampled=Clock::now();
+                auto sample=[&] {return Job{{uint64_t(role+1),tick,-tick,0,0},uint64_t(tick+1),Clock::now()};};
                 if(pipelined) {
-                    const auto previous=pipeline.submit({pad,uint64_t(tick+1),sampled});
+                    const auto previous=pipeline.submit_sampled(sample);
                     if(previous) verify(*previous,tick-1);
-                } else { verify(session.exchange(pad,uint64_t(tick+1)),tick); sample_to_commit[role]+=std::chrono::duration<double,std::milli>(Clock::now()-sampled).count()/frames; }
+                } else {
+                    auto job=sample();verify(session.exchange(job.pad,job.hash),tick);
+                    sample_to_commit[role]+=std::chrono::duration<double,std::milli>(Clock::now()-job.sampled).count()/frames;
+                }
             }
             if(pipelined) verify(*pipeline.receive(),frames-1);
             elapsed[role]=std::chrono::duration<double,std::milli>(Clock::now()-start).count()/frames;

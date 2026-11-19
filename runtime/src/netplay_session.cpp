@@ -417,17 +417,15 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
             s.probe_ready=verified;
             const auto commit=s.message(Message::Commit,0,s.tick,encode_commit(frame));
             for(uint8_t role=1;role<s.count;++role) s.send(s.peers[role].get(),commit,until);
-            for(uint8_t role=1;role<s.count;++role) {
-                if(!s.expected(s.peers[role].get(),Message::Ack,role,s.tick,until).payload.empty())
-                    throw std::runtime_error("Invalid LAN acknowledgement");
-            }
+            // Input N+1 can only be sent after Commit N was authenticated and
+            // consumed. It acknowledges that commit on the same ordered TCP
+            // stream; a separate per-tick Ack only adds another packet/wait.
         } else {
             s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state,work,event)),until);
             const auto commit=s.expected(s.peers[0].get(),Message::Commit,0,s.tick,until);
             frame=decode_commit(commit.payload); frame.tick=s.tick;
             if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !s.position_probes[0].observe(event || frame.loading_events[0]?PlayerState{}:state,frame.state,s.options.probe_warmup)) throw std::runtime_error("LAN simulation state mismatch");
             s.probe_ready=s.position_probes[0].ready();
-            s.send(s.peers[0].get(),s.message(Message::Ack,s.local_role,s.tick),until);
         }
         s.loading=std::any_of(frame.loading_events.begin(),frame.loading_events.end(),[](uint64_t marker){return marker!=0;});
         ++s.tick; return frame;

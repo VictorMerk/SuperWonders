@@ -347,6 +347,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
     }
     const uint64_t h = publish(f,std::move(cached));
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
+    lan::test_file_delay(guest.c_str());
     play::file_opened(guest);
     game::file_opened(guest.c_str());
     c.x[0] = kOk;

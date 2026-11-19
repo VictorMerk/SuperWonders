@@ -179,6 +179,8 @@ void boot() {
     if (std::getenv("NX_COUNTER_CLEAR_PROBE")) plat::exit_process(nvn::counter_clear_probe() ? 0 : 1);
     if (std::getenv("NX_PRESENTATION_PROBE")) plat::exit_process(nvn::presentation_probe() ? 0 : 1);
     if (std::getenv("NX_TEXTURE_CONVERSION_PROBE")) plat::exit_process(nvn::texture_conversion_probe() ? 0 : 1);
+    if (std::getenv("NX_SAMPLER_PROBE")) plat::exit_process(nvn::sampler_probe() ? 0 : 1);
+    if (std::getenv("NX_IMAGE_VIEW_PROBE")) plat::exit_process(nvn::image_view_probe() ? 0 : 1);
     const auto args = plat::program_args();
     if (std::find(args.begin(),args.end(),"--pack-shaders") != args.end())
         plat::exit_process(optimize_shader_cache() ? 0 : 1);

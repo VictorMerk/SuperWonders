@@ -72,6 +72,7 @@ VkSemaphore g_acquired = VK_NULL_HANDLE, g_rendered = VK_NULL_HANDLE;
 VkBool32 g_depth_clip_control = VK_FALSE;
 bool g_gpl = false, g_cache_control = false;  // vk_gpl(), vk_pipeline_cache_control()
 VkPhysicalDeviceFeatures g_features{};  // the core features enabled (vk_features())
+bool g_mirror_clamp = false;
 VkDescriptorPool g_descriptors = VK_NULL_HANDLE;
 
 // The per-submit upload buffer (nvn_vk.h): one host-visible buffer, bump-allocated, reset at every submit.
@@ -271,6 +272,7 @@ bool init() {
     VkBool32 mirror_clamp = f12.samplerMirrorClampToEdge, draw_params = f11.shaderDrawParameters;
     f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, f12.pNext};
     f12.samplerMirrorClampToEdge = mirror_clamp;
+    g_mirror_clamp = mirror_clamp != VK_FALSE;
     f11 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, f11.pNext};
     f11.shaderDrawParameters = draw_params;
     log("nvn/vk: samplerMirrorClampToEdge %u, shaderDrawParameters %u", mirror_clamp, draw_params);
@@ -508,6 +510,7 @@ bool vk_depth_clip_control() { return g_depth_clip_control; }
 bool vk_gpl() { return g_gpl; }
 bool vk_pipeline_cache_control() { return g_cache_control; }
 const VkPhysicalDeviceFeatures& vk_features() { return g_features; }
+bool vk_mirror_clamp() { return g_mirror_clamp; }
 
 uint32_t memory_type(uint32_t bits, VkMemoryPropertyFlags want) {
     for (uint32_t k = 0; k < g_memory.memoryTypeCount; k++)
@@ -984,6 +987,15 @@ bool pipeline_recipe_probe() {
     save_pipeline_keys(true);
     log("pipeline recipe probe: replay complete; inspect ready/skipped counts and Vulkan errors");
     return true;
+}
+
+bool sampler_probe() {
+    std::lock_guard lock(g_gpu);
+    return init() && sampler_state_probe();
+}
+bool image_view_probe() {
+    std::lock_guard lock(g_gpu);
+    return init() && sampled_view_state_probe();
 }
 
 bool pipeline_draw_probe() {

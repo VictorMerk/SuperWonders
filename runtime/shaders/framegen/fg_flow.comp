@@ -120,8 +120,31 @@ void main() {
             bv = d;
             bk = k;
         }
-        // Zero is the global minimum; a fractional fit still needs every neighbouring cost.
-        if (SUBPIX == 0 && best == 0.0) break;
+        // A zero match cannot be beaten by nonnegative costs. For the
+        // fractional fit, evaluate only missing neighbours of that winner.
+        if (best == 0.0) {
+            if (SUBPIX == 0) break;
+            if (pc.a.y * pc.a.x >= 0.0 && pc.a.z >= 0.0) {
+                if (bk >= 0) {
+                    int x = bk % WIN, y = bk / WIN;
+                    for (int n = 0; n < 4; ++n) {
+                        // Edge winners do not receive an axis fit at all.
+                        if (n < 2 ? (x == 0 || x == WIN - 1) : (y == 0 || y == WIN - 1)) continue;
+                        int nk = bk + (n == 0 ? -1 : n == 1 ? 1 : n == 2 ? -WIN : WIN);
+                        if (nk <= k) continue;
+                        ivec2 nd = start + ivec2(nk % WIN, nk / WIN) - RADIUS;
+                        float nsad = 0.0;
+                        for (int i = 0; i < SIDE * SIDE; ++i)
+                            nsad += abs(pa[i] - new_lum(c + nd + ivec2(i % SIDE, i / SIDE) * STEP, lm));
+                        float ne = nsad / float(SIDE * SIDE);
+                        ivec2 noff = nd - start;
+                        ne += nd == ivec2(0) && start != ivec2(0) ? pc.a.z : pc.a.y * pc.a.x * float(abs(noff.x) + abs(noff.y));
+                        cost[nk] = ne;
+                    }
+                }
+                break;
+            }
+        }
     }
     vec2 v = vec2(bv);
     if (SUBPIX != 0 && bk >= 0) {   // the minimum of a parabola through the best and its two neighbours, each axis

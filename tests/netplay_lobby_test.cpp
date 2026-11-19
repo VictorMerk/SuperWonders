@@ -48,6 +48,11 @@ int main() {
     fs::create_directories(root/"analysis"); fs::create_directory(root/"game");
     for(const auto* name:{"main.bin","sdk.bin"}) { std::ofstream out(root/"analysis"/name); out<<name; }
     { std::ofstream out(root/"game"/"build-id.txt"); out<<"synthetic lobby fixture"; }
+    #if defined(_WIN32)
+    { std::ofstream out(root/"game"/"wonder_game.dll"); out<<"synthetic game library"; }
+#else
+    { std::ofstream out(root/"game"/"libwonder_game.so"); out<<"synthetic game library"; }
+#endif
     LobbyRequest request{true,"127.0.0.1","lobby-cancel-retry-test",0,2};
     check(start_lobby(request),"room opens asynchronously");
     const auto opened=wait(LobbyPhase::Waiting);

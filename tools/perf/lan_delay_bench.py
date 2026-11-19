@@ -21,9 +21,14 @@ def run(args):
     env = os.environ.copy()
     if args.dll_dir:
         env["PATH"] = str(Path(args.dll_dir).resolve(strict=True)) + os.pathsep + env.get("PATH", "")
+    if args.fault != "none":
+        env["NX_LAN_BENCH_FRAME_TIMEOUT_MS"] = "250"
     delay = args.delay_ms / 1000
     stop = threading.Event()
     errors, observed = [], []
+    counts, message_bytes = {}, {}
+    pending = {}
+    faults = []
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -55,6 +60,7 @@ def run(args):
                 connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 connection.setblocking(False)
             queues = {connection: deque() for connection in sockets}
+            pending.update({connection: bytearray() for connection in sockets})
             live = set(sockets)
             while not stop.is_set() and (live or any(queues.values())):
                 now = time.monotonic()
@@ -63,6 +69,10 @@ def run(args):
                     target = upstream if source is accepted else accepted
                     while queue and queue[0][0] <= now:
                         due, data = queue[0]
+                        if data is None:
+                            target.shutdown(socket.SHUT_WR)
+                            queue.popleft()
+                            continue
                         try:
                             size = target.send(data)
                         except BlockingIOError:
@@ -78,7 +88,41 @@ def run(args):
                 for source in readable:
                     data = source.recv(65536)
                     if data:
-                        queues[source].append((time.monotonic() + delay, data))
+                        stream = pending[source]
+                        stream.extend(data)
+                        direction = "guest_to_host" if source is accepted else "host_to_guest"
+                        forwarded = bytearray()
+                        close_after = False
+                        while len(stream) >= 40:
+                            payload = int.from_bytes(stream[36:40], "little")
+                            if payload > 4096:
+                                raise ValueError("Relay observed an oversized application packet")
+                            size = 72 + payload
+                            if len(stream) < size:
+                                break
+                            kind = str(int.from_bytes(stream[6:8], "little"))
+                            key = direction + ":" + kind
+                            counts[key] = counts.get(key, 0) + 1
+                            message_bytes[key] = message_bytes.get(key, 0) + size
+                            packet = bytes(stream[:size])
+                            del stream[:size]
+                            wanted = "6" if args.fault == "omit-commit" else "5"
+                            if args.fault != "none" and not faults and kind == wanted and int.from_bytes(packet[12:20], "little") == args.fault_tick:
+                                faults.append(args.fault)
+                                if args.fault in ("omit-input", "omit-commit"):
+                                    continue
+                                if args.fault == "replay-input":
+                                    forwarded.extend(packet)
+                                elif args.fault == "tamper-input":
+                                    packet = packet[:40] + bytes([packet[40] ^ 1]) + packet[41:]
+                                elif args.fault == "truncate-input":
+                                    packet = packet[:-16]
+                                    close_after = True
+                            forwarded.extend(packet)
+                        if args.fault == "none" or forwarded:
+                            queues[source].append((time.monotonic() + delay, data if args.fault == "none" else bytes(forwarded)))
+                        if close_after:
+                            queues[source].append((time.monotonic() + delay, None))
                     else:
                         live.remove(source)
         except (OSError, ValueError, TimeoutError) as error:
@@ -89,6 +133,12 @@ def run(args):
                 if connection:
                     connection.close()
 
+    timer = None
+    if os.name == "nt":
+        import ctypes
+        winmm = ctypes.WinDLL("winmm")
+        if winmm.timeBeginPeriod(1) == 0:
+            timer = winmm
     worker = threading.Thread(target=relay)
     worker.start()
     try:
@@ -98,15 +148,24 @@ def run(args):
         stop.set()
         worker.join(timeout=3)
         listener.close()
-    if result.returncode:
+        if timer:
+            timer.timeEndPeriod(1)
+    if result.returncode and args.fault == "none":
         raise RuntimeError(f"Native benchmark failed ({result.returncode}): {result.stderr}")
     report = json.loads(result.stdout)
     report.update(configured_one_way_delay_ms=args.delay_ms, one_frame_pipeline=args.pipeline,
-                  relay_errors=errors, limitation="Synthetic exchange throughput, not game FPS or physical controller latency.")
+                  relay_errors=errors, application_message_counts=counts, application_message_bytes=message_bytes, limitation="Synthetic exchange throughput, not game FPS or physical controller latency.")
+    if args.fault != "none":
+        reason = {"replay-input": "LAN session, role or tick mismatch", "tamper-input": "LAN authentication failed",
+                  "omit-input": "LAN peer timed out", "omit-commit": "LAN peer timed out", "truncate-input": "LAN peer disconnected"}[args.fault]
+        report.update(fault=args.fault, injected_faults=len(faults), child_exit=result.returncode,
+                      expected_rejection=bool(result.returncode and len(faults) == 1 and reason in result.stderr))
     if observed:
         report["observed_forward_delay_ms"] = {"mean": sum(observed) / len(observed), "peak": max(observed)}
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report))
+    if args.fault != "none":
+        return 0 if report["expected_rejection"] else 1
     return 1 if errors or not report["inputs_verified"] else 0
 
 
@@ -120,11 +179,15 @@ def main():
     parser.add_argument("--frames", type=int, default=80)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--pipeline", action="store_true")
+    parser.add_argument("--fault", choices=("none", "replay-input", "tamper-input", "omit-input", "omit-commit", "truncate-input"), default="none")
+    parser.add_argument("--fault-tick", type=int, default=3)
     args = parser.parse_args()
     if not 0 <= args.delay_ms <= 1000 or not 0 <= args.work_ms <= 1000 or not 1 <= args.frames <= 10000:
         parser.error("Delay/work must be 0–1000 ms and frame count 1–10000")
     if not 1 <= args.timeout <= 600:
         parser.error("Timeout must be 1–600 seconds")
+    if args.fault != "none" and not 2 <= args.fault_tick < args.frames:
+        parser.error("Fault tick must be an established-game tick below the frame count")
     try:
         return run(args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:

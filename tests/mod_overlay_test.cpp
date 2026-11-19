@@ -47,6 +47,17 @@ int main() {
         Overlay links(selected(root,"16:9"));
         check(links.fallback_roots()>0&&links.resolve("linked/new.bin").has_value(),"linked directories keep old lookup behavior without recursive scanning");
     }
+    check(!bounded.resolve("../outside.bin")&&!bounded.resolve("/absolute.bin")&&
+          !bounded.resolve("C:/absolute.bin")&&!bounded.resolve(std::string("bad\0name",8)),
+          "fallback never resolves invalid or non-relative guest names");
+    // Exercise the merge of indexed candidates and a preceding fallback root.
+    Overlay all_fallback(selected(root,"16:9"),0);
+    check(all_fallback.resolve("new.bin").has_value(),"all-fallback lookup retains later roots");
+    auto deep=root/"04-deep/romfs";
+    for(int i=0;i<66;++i) deep/="d";
+    write(nx::host_path(deep/"deep.bin"));
+    Overlay deep_index(selected(root,"16:9"));
+    check(deep_index.fallback_roots()>0,"excessively deep overlays use filesystem fallback");
     auto long_root=root;
     for(int i=0;i<5;++i) long_root/=std::string(55,'a'+i);
     const auto long_file=nx::host_path(long_root/"mod/romfs/long.bin");

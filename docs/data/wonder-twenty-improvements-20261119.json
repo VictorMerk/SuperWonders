@@ -1,0 +1,63 @@
+{
+  "scope": "Twenty-item prepared Wonder upgrade; Windows RX570; same-PC loopback, not physical LAN certification",
+  "cpu_tests_passed": 61,
+  "launcher_unit_tests": 21,
+  "native_config_captures": 11,
+  "gameplay": {
+    "guest_frames": 7200,
+    "fresh_captures": 12,
+    "nonflat": true,
+    "non_silent_audio": true,
+    "exit_code": 0,
+    "scope": "Before final library-selection correction; final source subsequently exercised in both LAN gameplay runs"
+  },
+  "lan": {
+    "60hz": {
+      "frame_rate": 60,
+      "pipeline": 0,
+      "minimum_frames": 3000,
+      "course_reached": true,
+      "exit_codes": [
+        0,
+        2
+      ],
+      "forced_shutdowns": 0,
+      "fatal_or_crash_logs": 0,
+      "committed_pairs": 601,
+      "valid_position_pairs": 0,
+      "first_difference": null
+    },
+    "30hz_buffered": {
+      "frame_rate": 30,
+      "pipeline": 1,
+      "minimum_frames": 3000,
+      "course_reached": true,
+      "exit_codes": [
+        2,
+        0
+      ],
+      "forced_shutdowns": 0,
+      "fatal_or_crash_logs": 0,
+      "committed_pairs": 1401,
+      "valid_position_pairs": 0,
+      "first_difference": null
+    }
+  },
+  "mod_lookup_benchmark": {
+    "roots": 24,
+    "lookups": 4000,
+    "reference_metadata_probes": 96000,
+    "index_build_us": 3656,
+    "reference_lookup_us": 2916606,
+    "indexed_lookup_us": 6779,
+    "answers_match": true,
+    "scope": "synthetic CPU mod-miss lookup; not game FPS or load-time certification"
+  },
+  "limitations": [
+    "No valid Product120 actor-position pairs",
+    "No full-world/RNG synchronization certification",
+    "No new whole-game FPS comparison",
+    "Older first-clear/re-entry fault not proven fixed",
+    "Native Bellabel payload not established"
+  ]
+}

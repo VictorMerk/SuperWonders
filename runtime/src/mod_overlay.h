@@ -27,10 +27,12 @@ public:
 private:
     struct Index {
         std::filesystem::path root;
-        std::unordered_map<std::string, std::filesystem::path> paths;
         bool fallback = false;
     };
+    struct Candidate { size_t root; std::filesystem::path path; };
     std::vector<Index> roots_;
+    std::unordered_map<std::string, std::vector<Candidate>> paths_;
+    std::vector<size_t> fallback_;
     size_t files_ = 0;
 };
 }

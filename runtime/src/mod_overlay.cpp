@@ -77,7 +77,9 @@ std::vector<Root> selected(const fs::path& folder,std::string_view aspect) {
         return {};
     }
     std::vector<Root> result;
+    size_t inspected=0;
     for(const auto& entry:fs::directory_iterator(host_path(folder))) {
+        if(++inspected>4096) throw std::runtime_error("Too many entries in the mods folder (limit 4096)");
         const auto name=text(entry.path().filename());
         if(entry.is_directory() && enabled(name,aspect)) result.push_back({entry.path(),{},name});
     }
@@ -89,10 +91,11 @@ Overlay::Overlay(const std::vector<Root>& roots,size_t entry_limit) {
     size_t visited=0;
     for(const auto& root:roots) {
         if(root.romfs.empty()) continue;
-        Index index{host_path(root.romfs),{},false};
+        Index index{host_path(root.romfs),false};
         std::error_code ec;
         for(fs::recursive_directory_iterator it(index.root,ec),end; !ec&&it!=end;it.increment(ec)) {
             if(visited++>=entry_limit) { index.fallback=true; break; }
+            if(it.depth()>=64) { index.fallback=true; it.disable_recursion_pending(); continue; }
             if(linked(*it)) { index.fallback=true; it.disable_recursion_pending(); continue; }
             if(!it->is_regular_file(ec)) continue;
             const auto relative=it->path().lexically_relative(index.root);
@@ -103,21 +106,38 @@ Overlay::Overlay(const std::vector<Root>& roots,size_t entry_limit) {
                 index.fallback=true; continue;
             }
 #endif
-            index.paths.emplace(key(relative),it->path()); ++files_;
+            paths_[key(relative)].push_back({roots_.size(),it->path()}); ++files_;
         }
         if(ec) index.fallback=true;
+        if(index.fallback) fallback_.push_back(roots_.size());
         roots_.push_back(std::move(index));
     }
 }
 std::optional<fs::path> Overlay::resolve(std::string_view relative) const {
+    // Only guest-relative RomFS names belong in an overlay, including fallback roots.
+    if(relative.empty() || relative.find('\0')!=relative.npos || relative.find(':')!=relative.npos) return {};
     const auto path=fs::u8path(relative);
-    const auto name=key(path);
-    for(const auto& root:roots_) {
-        const auto found=root.paths.find(name);
-        if(found==root.paths.end() && !root.fallback) continue;
-        const auto candidate=found==root.paths.end()?host_path(root.root/path):found->second;
-        std::error_code ec;
-        if(fs::is_regular_file(candidate,ec)) return candidate;
+    if(path.is_absolute() || path.has_root_path()) return {};
+    for(const auto& part:path) if(part=="..") return {};
+    const auto found=paths_.find(key(path));
+    const std::vector<Candidate> empty;
+    const auto& candidates=found==paths_.end()?empty:found->second;
+    size_t next=0;
+    auto exists=[](const fs::path& p) { std::error_code ec; return fs::is_regular_file(p,ec); };
+    // Merge indexed candidates with only the roots needing filesystem fallback.
+    // A normal miss takes one hash lookup regardless of the number of enabled mods.
+    for(const auto fallback:fallback_) {
+        while(next<candidates.size() && candidates[next].root<fallback) {
+            const auto& candidate=candidates[next++];
+            if(exists(candidate.path)) return candidate.path;
+        }
+        const auto candidate=host_path(roots_[fallback].root/path);
+        if(exists(candidate)) return candidate;
+        while(next<candidates.size() && candidates[next].root==fallback) ++next;
+    }
+    while(next<candidates.size()) {
+        const auto& candidate=candidates[next++];
+        if(exists(candidate.path)) return candidate.path;
     }
     return {};
 }

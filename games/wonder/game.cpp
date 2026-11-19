@@ -10,6 +10,8 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
+#include "loading_music.h"
 
 #include "platform.h"
 #include "netplay_game.h"
@@ -21,9 +23,11 @@ namespace nvn { void hold_scene_frame_cap(int fps); }
 
 void game::file_opened(const char* path) {
     if(lan::active()) {
-        const char* stream=std::strstr(path,"/Sound/Resource/Stream/BGM_");
-        if(stream && (std::strstr(stream,"BGM_Title") || std::strstr(stream,"BGM_World_") || std::strstr(stream,"BGM_Course")))
-            lan::loading_event(path);
+        static wonder::LoadingMusicGate music;
+        static std::mutex music_lock;
+        bool synchronize;
+        { std::lock_guard guard(music_lock); synchronize=music.observe(path); }
+        if(synchronize) lan::loading_event(path);
     }
     static std::atomic<bool> held{false};
     // The map can remain resident while entering a course, so returning to it does not necessarily reopen its

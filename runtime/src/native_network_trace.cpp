@@ -6,7 +6,7 @@
 
 namespace nx::native_net {
 namespace {
-enum Kind { Mode, IpConfig, Socket, Bind, SendTo, RecvFrom, Poll, Errno, Ssl, Friends };
+enum Kind { Mode, IpConfig, Socket, Bind, SendTo, RecvFrom, Poll, Errno, Ssl, Friends, MainOpaque, MainMode };
 struct Spec { const char* symbol; const char* label; };
 constexpr Spec specs[] = {
     {"_ZN2nn4nifm19SetLocalNetworkModeEb", "nifm.SetLocalNetworkMode"},
@@ -20,7 +20,7 @@ constexpr Spec specs[] = {
     {"_ZN2nn3ssl10InitializeEv", "ssl.Initialize"},
     {"_ZN2nn7friends27CheckFriendListAvailabilityEPbRKNS_7account3UidE", "friends.CheckFriendListAvailability"},
 };
-static_assert(std::size(specs) == kMaxHooks);
+static_assert(std::size(specs) + 3 == kMaxHooks);
 Census* owner = nullptr; // Published before guest execution, retired after it stops.
 template<size_t I> void wrapper(CPU& cpu) { owner->invoke(I, cpu); }
 template<size_t... I> constexpr auto wrappers(std::index_sequence<I...>) {
@@ -63,12 +63,37 @@ size_t Census::install(bool enabled, const ModuleInfo& sdk, Fn* table, Region ma
             if (duplicate) continue;
             auto& slot = slots_[count_];
             slot.entry = entry; slot.original = *entry; slot.kind = kind;
+            slot.operation = specs[kind].label;
             owner = this;
             *entry = thunks[count_++];
             break;
         }
     }
     return count_;
+}
+size_t Census::install_main(bool enabled, const ModuleInfo& main, Fn* table,
+                            std::span<const uint8_t> image, std::string_view expected_build,
+                            std::span<const GuardedSite> sites, Sink sink) {
+    if(!enabled || !table || !main.build_id || expected_build.empty() ||
+       expected_build!=main.build_id || (owner && owner!=this) || sites.empty() ||
+       sites.size()>3 || count_+sites.size()>kMaxHooks || main.text_size<32) return 0;
+    for(size_t i=0;i<sites.size();++i) {
+        const auto& site=sites[i];
+        if((site.offset&3) || site.offset<main.text || site.offset-main.text>main.text_size-32 ||
+           site.offset>main.text_size-4 || site.offset>image.size() || image.size()-site.offset<32 ||
+           !site.operation || !*site.operation || !table[site.offset/4] ||
+           prefix_hash(image.subspan(size_t(site.offset),32))!=site.prefix_hash) return 0;
+        for(size_t j=0;j<i;++j) if(sites[j].offset==site.offset) return 0;
+        for(size_t j=0;j<count_;++j) if(slots_[j].entry==table+site.offset/4) return 0;
+    }
+    main_={main.base,main.text_size,main.text}; sink_=sink;
+    for(const auto& site:sites) {
+        auto& slot=slots_[count_];
+        slot.entry=table+site.offset/4; slot.original=*slot.entry;
+        slot.kind=site.mode_from_x1?MainMode:MainOpaque; slot.operation=site.operation;
+        owner=this; *slot.entry=thunks[count_++];
+    }
+    return sites.size();
 }
 Census::~Census() {
     for (size_t i = 0; i < count_; ++i)
@@ -79,7 +104,7 @@ std::array<Counters, kMaxHooks> Census::snapshot() const noexcept {
     std::array<Counters, kMaxHooks> result{};
     for (size_t i = 0; i < count_; ++i) {
         const auto& s = slots_[i];
-        result[i] = {specs[s.kind].label, s.calls.load(std::memory_order_relaxed),
+        result[i] = {s.operation, s.calls.load(std::memory_order_relaxed),
             s.errors.load(std::memory_order_relaxed), s.exceptions.load(std::memory_order_relaxed),
             s.total_ns.load(std::memory_order_relaxed), s.peak_ns.load(std::memory_order_relaxed)};
     }
@@ -88,7 +113,7 @@ std::array<Counters, kMaxHooks> Census::snapshot() const noexcept {
 void Census::invoke(size_t index, CPU& cpu) {
     auto& slot = slots_[index];
     Event event;
-    event.operation = specs[slot.kind].label;
+    event.operation = slot.operation;
     event.call = slot.calls.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto lr = cpu.x[30];
     if (within(lr, main_)) { event.caller_module = "main"; event.caller_offset = lr - main_.base; }
@@ -96,6 +121,7 @@ void Census::invoke(size_t index, CPU& cpu) {
     auto& f = event.fields;
     switch (slot.kind) {
     case Mode: f[0] = bounded(cpu.x[0], 1); break;
+    case MainMode: f[0] = bounded(cpu.x[1], 3); break;
     case Socket: // family, type/flags, protocol; no descriptor or address.
         f = {bounded(cpu.x[0], 255), bounded(cpu.x[1], 0xffffff), bounded(cpu.x[2], 65535), -1}; break;
     case Bind: f[0] = bounded(cpu.x[2], 256); break; // sockaddr length only
@@ -123,7 +149,7 @@ void Census::invoke(size_t index, CPU& cpu) {
     };
     try { slot.original(cpu); }
     catch (...) { event.exception = true; finish(); throw; }
-    if (slot.kind != Mode) {
+    if (slot.kind != Mode && slot.kind != MainOpaque && slot.kind != MainMode) {
         event.has_result = true;
         if (slot.kind == IpConfig || slot.kind == Ssl || slot.kind == Friends) {
             event.result = uint32_t(cpu.x[0]); event.error = event.result != 0;

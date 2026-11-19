@@ -29,9 +29,33 @@ void init() {
     const size_t count = census->install(true, *sdk->info, sdk->table,
         {game.main->base, game.main->text_size, game.main->text},
         {sdk->base, sdk->info->text_size, sdk->info->text}, output);
-    log("native-net experimental sdk-census: installed=%zu max_events=256; original SDK behavior retained; direct HLE calls excluded", count);
-    if (!count) delete census;
-    else runtime_census = census;
+    size_t main_count=0;
+    if(const auto* main=module_at(game.main->base)) {
+        // Product120 code prefixes independently matched the original NSO.
+        // Observe factory/construction/preparation even if SDK setup fails first.
+        constexpr GuardedSite sites[]={
+            {0x418634,0xc23229310081f88full,"wonder.NativeLanFactory",false},
+            {0x54fe54,0x207d9a1b879801cfull,"wonder.NetworkStateConstructor",true},
+            {0x1db7bec,0xd58385cbeedbc991ull,"wonder.NetworkPrepare",true},
+        };
+        main_count=census->install_main(true,*main->info,main->table,
+            {reinterpret_cast<const uint8_t*>(main->base),size_t(main->info->text_size)},
+            "ff773e90972d544eb79406eaa65396d53c43efb9000000000000000000000000",sites,output);
+    }
+    log("native-net experimental sdk-census: installed=%zu guarded_main=%zu max_events=256; original behavior retained; direct HLE calls excluded", count,main_count);
+    if (!count && !main_count) delete census;
+    else {
+        runtime_census = census;
+        std::atexit([] {
+            // Atomic, non-transactional snapshot; guest threads may still finish
+            // a call. At most 13 summaries, independent of event sampling cap.
+            for(const auto& counter:diagnostics()) if(counter.operation)
+                log("native-net cumulative: op=%s calls=%llu errors=%llu exceptions=%llu total_ns=%llu peak_ns=%llu",
+                    counter.operation,(unsigned long long)counter.calls,
+                    (unsigned long long)counter.errors,(unsigned long long)counter.exceptions,
+                    (unsigned long long)counter.total_ns,(unsigned long long)counter.peak_ns);
+        });
+    }
 }
 std::array<Counters, kMaxHooks> diagnostics() noexcept {
     return runtime_census ? runtime_census->snapshot() : std::array<Counters, kMaxHooks>{};

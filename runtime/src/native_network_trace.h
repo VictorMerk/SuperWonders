@@ -3,10 +3,22 @@
 #include <nx/module.h>
 #include <array>
 #include <atomic>
+#include <span>
+#include <string_view>
 
 namespace nx::native_net {
 
-constexpr size_t kMaxHooks = 10;
+constexpr size_t kMaxHooks = 13;
+struct GuardedSite {
+    uint64_t offset = 0, prefix_hash = 0;
+    const char* operation = ""; // Caller-owned static storage, like SDK labels.
+    bool mode_from_x1 = false;
+};
+inline uint64_t prefix_hash(std::span<const uint8_t> bytes) {
+    uint64_t hash=0xcbf29ce484222325ull;
+    for(auto byte:bytes) hash=(hash^byte)*0x100000001b3ull;
+    return hash;
+}
 struct Region { uint64_t base = 0, size = 0, text_offset = 0; };
 struct Event {
     const char* operation = "";
@@ -37,6 +49,11 @@ public:
     Census& operator=(const Census&) = delete;
     size_t install(bool enabled, const ModuleInfo& sdk, Fn* table, Region main,
                    Region sdk_text, Sink sink);
+    // Validate the complete site set before changing any entry. Prefix hashes
+    // are identity guards, not authentication. No guest object is dereferenced.
+    size_t install_main(bool enabled, const ModuleInfo& main, Fn* table,
+                        std::span<const uint8_t> image, std::string_view expected_build,
+                        std::span<const GuardedSite> sites, Sink sink);
     std::array<Counters, kMaxHooks> snapshot() const noexcept;
     size_t size() const noexcept { return count_; }
     void invoke(size_t index, CPU& cpu);
@@ -45,6 +62,7 @@ private:
         Fn* entry = nullptr;
         Fn original = nullptr;
         size_t kind = 0;
+        const char* operation = "";
         std::atomic<uint64_t> calls{0}, errors{0}, exceptions{0}, total_ns{0}, peak_ns{0};
     };
     std::array<Slot, kMaxHooks> slots_{};
@@ -54,7 +72,7 @@ private:
     std::atomic<uint64_t> emitted_{0};
 };
 
-// NX_NATIVE_NET_TRACE=1 only. Installs SDK wrappers, never HLE overrides.
+// NX_NATIVE_NET_TRACE=1 only. SDK wrappers and guarded main observation, no HLE overrides.
 void init();
 // Relaxed cumulative snapshot, empty when disabled. No exchange/render lock;
 // fields may reflect slightly different instants during concurrent SDK calls.

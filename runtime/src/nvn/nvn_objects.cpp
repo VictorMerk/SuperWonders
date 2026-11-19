@@ -13,6 +13,7 @@
 #include <string>
 
 #include "nvn.h"
+#include "descriptor_snapshot_lifetime.h"
 #include "nvn_ultrawide.h"
 #include "kernel.h"
 #include "platform.h"
@@ -438,7 +439,7 @@ uint64_t keep_for_slots(uint64_t guest) {
     // Off unless NX_KEEP_TEXTURES=1: kept textures fed stale data to the course's sky (white, blocky) and did not fix
     // what they were for (docs/nvn/DEBUG.md #38); missing pool textures sample the dummy without a pass break (#34).
     static const bool on = std::getenv("NX_KEEP_TEXTURES") != nullptr;
-    if (!on) return 0;
+    if (!on) { g_registered.erase(guest); return 0; }
     auto reg = g_registered.find(guest);
     uint64_t kept = 0;
     if (reg == g_registered.end()) return 0;
@@ -605,7 +606,11 @@ void release_kept(uint64_t key) {
         }
     g_registered.erase(key);
     for (auto& [pool, set] : pool_textures()) set.erase(key);
-    if (auto o = objects().find(key); o != objects().end()) defer_object(std::move(o->second)), objects().erase(o);
+    if (auto o = objects().find(key); o != objects().end()) {
+        note_replaced(key);  // a retiring pool's replay may still name this kept texture
+        defer_object(std::move(o->second));
+        objects().erase(o);
+    }
     g_released_kept++;
 }
 
@@ -669,15 +674,39 @@ NX_TEXTURE_GETTER(TextureGetDepthStencilMode, depth_stencil_mode)
 // ---- samplers and descriptor pools ----------------------------------------------------------------------------
 
 // NVNboolean nvn{Texture,Sampler}PoolInitialize(pool, const NVNmemoryPool*, ptrdiff_t offset, int numDescriptors)
-void DescriptorPoolInitialize(CPU& c) {
-    auto& d = make<DescriptorPool>(c.x[0]);
-    d.pool = c.x[1];
-    d.offset = c.x[2];
-    d.count = uint32_t(c.x[3]);
-    c.x[0] = 1;
+// Under objects_lock. Snapshot keys are separate registry objects, not children
+// destroyed by DescriptorPool's destructor. Preserve the old pool maps for any
+// replay resolving that incarnation; drop_snapshot defers each image safely.
+void retire_pool_resources(uint64_t guest) {
+    auto it=objects().find(guest);
+    auto* old=it==objects().end()?nullptr:dynamic_cast<DescriptorPool*>(it->second.get());
+    if(old) {
+        retire_descriptor_snapshots(old->snapshots,drop_snapshot);
+        forget_descriptor_pool(g_registered,guest,old->textures,release_kept);
+    }
 }
 
-void DescriptorPoolFinalize(CPU& c) { destroy(c.x[0]); }
+void DescriptorPoolInitialize(CPU& c) {
+    auto fresh=std::make_unique<DescriptorPool>();
+    fresh->pool=c.x[1]; fresh->offset=c.x[2]; fresh->count=uint32_t(c.x[3]);
+    {
+        std::lock_guard lk(objects_lock());
+        retire_pool_resources(c.x[0]);
+        note_replaced(c.x[0]);
+        publish_locked(c.x[0],std::move(fresh));
+    }
+    c.x[0]=1;
+}
+
+void DescriptorPoolFinalize(CPU& c) {
+    std::lock_guard lk(objects_lock());
+    auto it=objects().find(c.x[0]);
+    if(it==objects().end())return;
+    retire_pool_resources(c.x[0]);
+    note_replaced(c.x[0]);
+    defer_object(std::move(it->second));
+    objects().erase(it);
+}
 
 // nvnTexturePoolRegisterTexture / RegisterImage(pool, int id, const NVNtexture*, const NVNtextureView*)
 void TexturePoolRegister(CPU& c) {
@@ -702,9 +731,9 @@ void TexturePoolRegister(CPU& c) {
         if (auto it = d->views.find(id); it != d->views.end()) before.has_view = true, before.view = it->second;
         note_pool_change(c.x[0], id, before);
         uint64_t old = before.texture;
+        if(old && old!=c.x[2]) forget_descriptor_slot(g_registered,old,c.x[0],id);
         d->textures[id] = c.x[2];
-        if (auto s = d->snapshots.find(uint32_t(c.x[1])); s != d->snapshots.end()) drop_snapshot(s->second);
-        if (uint64_t snap = make_snapshot(c.x[2])) d->snapshots[uint32_t(c.x[1])] = snap;
+        replace_descriptor_snapshot(d->snapshots,id,drop_snapshot,[&] { return make_snapshot(c.x[2]); });
         auto& slots = g_registered[c.x[2]];  // re-registered every frame: keep each slot once
         std::pair<uint64_t, uint32_t> slot{c.x[0], uint32_t(c.x[1])};
         if (std::find(slots.begin(), slots.end(), slot) == slots.end()) slots.push_back(slot);

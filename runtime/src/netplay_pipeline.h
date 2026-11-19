@@ -62,6 +62,17 @@ public:
         changed.notify_all();
         return previous;
     }
+    // Poll physical input only after a previous network wait has finished.
+    // Passing an already sampled Job to submit() would age it during that wait.
+    template<class Sample> std::optional<Result> submit_sampled(Sample&& sample) {
+        auto previous=receive();
+        Job job=std::invoke(std::forward<Sample>(sample));
+        std::lock_guard guard(lock);
+        if (closed) throw std::runtime_error("LAN pipeline cancelled");
+        queued.emplace(std::move(job)); outstanding=true;
+        changed.notify_all();
+        return previous;
+    }
     void stop() noexcept {
         {
             std::lock_guard guard(lock);

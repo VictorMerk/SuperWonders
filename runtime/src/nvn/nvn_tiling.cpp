@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace nx::nvn {
 
@@ -17,7 +18,15 @@ namespace {
 
 constexpr uint32_t kPiece[4] = {0, 32, 256, 288};  // where the 16-byte pieces of a GOB row start
 
-uint64_t div_up(uint64_t a, uint64_t b) { return (a + b - 1) / b; }
+uint64_t div_up(uint64_t a, uint64_t b) { return a / b + (a % b != 0); }
+bool mul(uint64_t a, uint64_t b, uint64_t& result) {
+    if (b && a > std::numeric_limits<uint64_t>::max() / b) return false;
+    result = a * b; return true;
+}
+bool add(uint64_t a, uint64_t b, uint64_t& result) {
+    if (b > std::numeric_limits<uint64_t>::max() - a) return false;
+    result = a + b; return true;
+}
 
 // log2 of a GOB count, rounding a bad (non power of two) value down and clamping to 1..32, so a corrupt parameter
 // cannot make the walk read outside what block_linear_size() promised.
@@ -59,13 +68,17 @@ uint64_t block_linear_size(uint32_t width_blocks, uint32_t height_blocks, uint32
                            uint32_t block_height_gobs, uint32_t block_depth_gobs) {
     uint32_t bh = 1u << gob_shift(block_height_gobs), bd = 1u << gob_shift(block_depth_gobs);
     uint64_t gobs_x = div_up(uint64_t(width_blocks) * bytes_per_block, kGobWidth);
-    return gobs_x * div_up(height_blocks, kGobHeight * bh) * div_up(depth, bd) * kGobSize * bh * bd;
+    uint64_t size = gobs_x;
+    if (!mul(size,div_up(height_blocks,kGobHeight * bh),size) ||
+        !mul(size,div_up(depth,bd),size) || !mul(size,uint64_t(kGobSize)*bh*bd,size)) return 0;
+    return size;
 }
 
 void deswizzle_block_linear(const uint8_t* src, uint8_t* dst, uint32_t width_blocks, uint32_t height_blocks,
                             uint32_t depth, uint32_t bytes_per_block, uint32_t block_height_gobs,
                             uint32_t block_depth_gobs) {
-    if (!src || !dst || !width_blocks || !height_blocks || !depth || !bytes_per_block) return;
+    if (!src || !dst || !width_blocks || !height_blocks || !depth || !bytes_per_block ||
+        !block_linear_size(width_blocks,height_blocks,depth,bytes_per_block,block_height_gobs,block_depth_gobs)) return;
     const uint32_t bh_shift = gob_shift(block_height_gobs), bd_shift = gob_shift(block_depth_gobs);
     const uint32_t bh_mask = (1u << bh_shift) - 1, bd_mask = (1u << bd_shift) - 1;
     const uint64_t pitch = uint64_t(width_blocks) * bytes_per_block;  // linear row
@@ -114,7 +127,7 @@ TextureLayout block_linear_layout(uint32_t width, uint32_t height, uint32_t dept
                                   uint32_t block_w, uint32_t block_h, uint32_t bytes_per_block,
                                   uint32_t block_height_gobs0) {
     TextureLayout t;
-    if (!width || !height || !block_w || !block_h || !bytes_per_block) return t;
+    if (!width || !height || !block_w || !block_h || !bytes_per_block || levels > 32) return t;
     levels = std::max(1u, levels);
     t.layers = std::max(1u, depth_or_layers);
     uint32_t bh0 = block_height_gobs0 ? 1u << gob_shift(block_height_gobs0)
@@ -134,15 +147,18 @@ TextureLayout block_linear_layout(uint32_t width, uint32_t height, uint32_t dept
         l.height_blocks = uint32_t(div_up(l.height, block_h));
         l.block_height_gobs = mip_block_height_gobs(l.height_blocks, bh0);
         l.tiled_offset = chain;
-        l.layer_size = uint64_t(l.width_blocks) * l.height_blocks * bytes_per_block;
-        l.offset = div_up(linear, align) * align;
-        linear = l.offset + l.layer_size * t.layers;
-        chain += block_linear_size(l.width_blocks, l.height_blocks, 1, bytes_per_block, l.block_height_gobs, 1);
+        uint64_t layers_size = 0;
+        if (!mul(uint64_t(l.width_blocks)*l.height_blocks,bytes_per_block,l.layer_size) ||
+            !mul(div_up(linear,align),align,l.offset) || !mul(l.layer_size,t.layers,layers_size) ||
+            !add(l.offset,layers_size,linear)) return {};
+        const uint64_t tiled = block_linear_size(l.width_blocks,l.height_blocks,1,bytes_per_block,l.block_height_gobs,1);
+        if (!tiled || !add(chain,tiled,chain)) return {};
         t.levels.push_back(l);
     }
     uint64_t block = uint64_t(kGobSize) * bh0;
-    t.tiled_layer_stride = div_up(chain, block) * block;
-    t.tiled_size = t.tiled_layer_stride * (t.layers - 1) + chain;
+    uint64_t preceding = 0;
+    if (!mul(div_up(chain,block),block,t.tiled_layer_stride) ||
+        !mul(t.tiled_layer_stride,t.layers-1,preceding) || !add(preceding,chain,t.tiled_size)) return {};
     t.linear_size = linear;
     return t;
 }

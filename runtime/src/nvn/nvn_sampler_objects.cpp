@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "nvn.h"
+#include "sampler_slot_update.h"
 
 namespace nx::nvn {
 
@@ -61,10 +62,13 @@ void register_info(uint64_t pool, uint32_t id, const SamplerInfo& info) {
         std::lock_guard lk(objects_lock());
         // A replay in flight resolves the slot as of its mark (nvn_incarnation.cpp): a changed sampler keeps the
         // one it replaces (re-registering the same sampler every frame records nothing).
-        SamplerSlot before;
-        if (auto it = d->samplers.find(id); it != d->samplers.end()) before.has = true, before.info = it->second;
-        if (!before.has || std::memcmp(&before.info, &info, sizeof info) != 0) note_sampler_change(pool, id, before);
-        d->samplers[id] = info;
+        update_sampler_slot(d->samplers,id,info,
+            [](const SamplerInfo& a,const SamplerInfo& b) { return std::memcmp(&a,&b,sizeof a)==0; },
+            [&](const SamplerInfo* old) {
+                SamplerSlot before;
+                if(old) before.has=true,before.info=*old;
+                note_sampler_change(pool,id,before);
+            });
     }
 }
 

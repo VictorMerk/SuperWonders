@@ -328,6 +328,8 @@ if(NX_TESTS AND NOT ANDROID)
     add_test(NAME settings_service COMMAND settings_service_test)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME framegen_median_network COMMAND "${Python3_EXECUTABLE}"
+                 "${CMAKE_SOURCE_DIR}/tests/framegen_median_network_test.py")
         execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import fontTools" RESULT_VARIABLE NX_FONTTOOLS_MISSING
                         OUTPUT_QUIET ERROR_QUIET)
         if(NOT NX_FONTTOOLS_MISSING)

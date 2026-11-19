@@ -430,9 +430,10 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
         p_vkBindBufferMemory(device,probe.buffer,probe.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(device,probe.memory,0,output_bytes,0,reinterpret_cast<void**>(&probe.mapped)) != VK_SUCCESS) return false;
     VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-    qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = 2;
+    const bool median_bench=std::getenv("NX_FRAMEGEN_PROBE_MEDIAN_BENCH")!=nullptr;
+    qi.queryType = VK_QUERY_TYPE_TIMESTAMP; qi.queryCount = median_bench ? 4 : 2;
     if (p_vkCreateQueryPool(device,&qi,nullptr,&probe.timing) == VK_SUCCESS) {
-        p_vkCmdResetQueryPool(cb,probe.timing,0,2);
+        p_vkCmdResetQueryPool(cb,probe.timing,0,qi.queryCount);
         p_vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,probe.timing,0);
     }
     state.history = false;
@@ -477,6 +478,15 @@ bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant) {
     host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     p_vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
     if (probe.timing) p_vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,probe.timing,1);
+    // Isolate the small median stage from the full-resolution motion/synthesis
+    // workload. Repeated identical dispatches retain the normal field output.
+    if (median_bench && probe.timing) {
+        p_vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,probe.timing,2);
+        const int level[4]={0,4,0,0};
+        for(unsigned i=0;i<64;++i)
+            pass(cb,state.median,state.flow[4],state.flow[4],state.flow[4],state.flow[5],level);
+        p_vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,probe.timing,3);
+    }
     probe.recorded = true;
     return true;
 }
@@ -523,10 +533,14 @@ bool framegen_probe_check() {
         }
     } else log("framegen probe: missing interpolated images: FAIL");
     if (probe.recorded && probe.timing) {
-        uint64_t ticks[2]{};
-        if (p_vkGetQueryPoolResults(vk_device(),probe.timing,0,2,sizeof ticks,ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
+        uint64_t ticks[4]{};
+        const bool median_bench=std::getenv("NX_FRAMEGEN_PROBE_MEDIAN_BENCH")!=nullptr;
+        const uint32_t count=median_bench ? 4 : 2;
+        if (p_vkGetQueryPoolResults(vk_device(),probe.timing,0,count,count*sizeof(uint64_t),ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
             VkPhysicalDeviceProperties props{}; p_vkGetPhysicalDeviceProperties(vk_physical(),&props);
             log("framegen probe GPU workload: %.3f ms (two captures, %u intermediates)",double(ticks[1]-ticks[0])*props.limits.timestampPeriod/1e6,probe.factor-1);
+            if(median_bench) log("framegen probe median stage: %.6f ms per dispatch (64 identical fields)",
+                double(ticks[3]-ticks[2])*props.limits.timestampPeriod/64e6);
         }
     }
     if (probe.timing) p_vkDestroyQueryPool(vk_device(),probe.timing,nullptr);

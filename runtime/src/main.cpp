@@ -23,6 +23,7 @@
 #include "overlay/overlay.h"
 #include "shader_bundle.h"
 #include "netplay_game.h"
+#include "native_network_trace.h"
 
 namespace nx {
 
@@ -195,6 +196,8 @@ void boot() {
     kernel_init();
     const ModuleInfo* mods[] = {&main_module(), &sdk_module()};
     load_modules(mods, 2, plat::data_root() + "/analysis");
+    // Function-table instrumentation must precede guest constructors/threads.
+    native_net::init();
 
     uint64_t tdata = 0, tdata_end = 0;
     if (tdata_range(main_module(), tdata, tdata_end) && tdata_end > tdata) {

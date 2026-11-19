@@ -1,5 +1,6 @@
 #include "native_network_trace.h"
 #include <nx/gamelib.h>
+#include <nx/game.h>
 #include <nx/runtime.h>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +16,7 @@ void output(const Event& e) {
 }
 }
 void init() {
+    if(std::strcmp(game::kInfo.id,"wonder")) return;
     const char* enabled = std::getenv("NX_NATIVE_NET_TRACE");
     if (!enabled || std::strcmp(enabled, "1")) return;
     static bool initialized = false;

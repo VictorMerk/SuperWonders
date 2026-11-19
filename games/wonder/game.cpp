@@ -15,7 +15,6 @@
 
 #include "platform.h"
 #include "netplay_game.h"
-#include "native_network_trace.h"
 #include "nvn/nvn_ultrawide.h"
 
 namespace nx {
@@ -349,7 +348,6 @@ void seed_guard_tick(uint64_t now_ns);
 }
 
 void game::after_init() {
-    native_net::init();
     const auto* source = game_lib().main;
     log("wonder: source NSO build %s", source && source->build_id ? source->build_id : "unknown");
     init_frame_step();

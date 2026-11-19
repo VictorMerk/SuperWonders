@@ -2,6 +2,7 @@ import csv
 import importlib.util
 from pathlib import Path
 import tempfile
+import tracemalloc
 import unittest
 
 spec = importlib.util.spec_from_file_location("application_compare", Path(__file__).parents[1] / "tools/perf/compare_lan_application.py")
@@ -10,7 +11,7 @@ spec.loader.exec_module(module)
 
 
 def row(tick, event="apply", **changes):
-    result = dict(tick=str(tick), frame=str(tick + 100), event=event, players="2")
+    result = dict(tick=str(tick), frame=str(tick + 100), event=event, players="2", frame_before="0", framework_sequence="0", player="0", sampling_number="0", sequence="0")
     result.update({f"p{p}_{field}": "0" for p in range(4)
                    for field in ("loading_event", "buttons", "lx", "ly", "rx", "ry")})
     result.update({key: str(value) for key, value in changes.items()})
@@ -57,6 +58,89 @@ class ComparisonTest(unittest.TestCase):
             right = self.write("right", role, [row(1)], seed=seed)
             with self.assertRaises(ValueError):
                 module.compare(left, right)
+
+    def test_framework_calls_are_not_assumed_to_present_or_advance_simulation(self):
+        left = self.write("left", 0, [row(1), row(1, "framework_frame", frame=100, frame_before=100, framework_sequence=50)])
+        right = self.write("right", 1, [row(1), row(1, "framework_frame", frame=100, frame_before=99, framework_sequence=40)])
+        result = module.compare(left, right)
+        self.assertEqual(result["matched_applied_ticks"], 1)
+        self.assertEqual(result["application_mismatches"], 0)
+        self.assertEqual(result["left"]["retained_framework_calls_without_present"], 1)
+        self.assertEqual(result["left"]["first_retained_framework_call_without_present"], 50)
+        self.assertEqual(result["right"]["retained_framework_calls_without_present"], 0)
+
+    def test_repeated_identical_hid_reads_are_not_flagged(self):
+        reads = [row(1, "hid_delivery", player=0, sampling_number=99, sequence=1, p0_buttons=8),
+                 row(2, "hid_delivery", player=0, sampling_number=99, sequence=2, p0_buttons=8),
+                 row(2, "hid_delivery", player=1, sampling_number=99, sequence=3, p1_buttons=16)]
+        left = self.write("left", 0, reads)
+        right = self.write("right", 1, [row(1)])
+        result = module.compare(left, right)["left"]
+        self.assertEqual(result["retained_unique_hid_samples"], 2)
+        self.assertEqual(result["repeated_identical_hid_sample_reads"], 1)
+        self.assertEqual(result["hid_sample_payload_change_observations"], 0)
+        self.assertIsNone(result["first_hid_sample_payload_change_observation"])
+
+    def test_same_hid_sample_changed_payload_is_an_observation_even_across_gaps(self):
+        reads = [row(1, "hid_delivery", player=1, sampling_number=99, sequence=1, p1_buttons=8),
+                 row(2, "hid_delivery", player=1, sampling_number=100, sequence=2),
+                 row(9, "hid_delivery", player=1, sampling_number=99, sequence=500, p1_buttons=16, p1_lx=-32767),
+                 row(10, "hid_delivery", player=1, sampling_number=99, sequence=501, p1_buttons=16, p1_lx=-32767)]
+        left = self.write("left", 0, reads, omitted=497)
+        right = self.write("right", 1, [row(1)])
+        result = module.compare(left, right)
+        summary = result["left"]
+        self.assertEqual(summary["hid_sample_payload_change_observations"], 1)
+        self.assertEqual(summary["hid_samples_with_changed_payload"], 1)
+        self.assertEqual(summary["repeated_identical_hid_sample_reads"], 1)
+        observed = summary["first_hid_sample_payload_change_observation"]
+        self.assertEqual(observed["previous_sequence"], 1)
+        self.assertEqual(observed["sequence"], 500)
+        self.assertEqual(observed["previous_observed_tick"], 1)
+        self.assertEqual(observed["observed_tick"], 9)
+        self.assertEqual(observed["current_pad"]["lx"], -32767)
+        self.assertEqual(result["application_mismatches"], 0)
+        self.assertIn("not proof of desync", summary["hid_observation_scope"])
+        self.assertIn("not atomically paired", summary["hid_observation_scope"])
+        self.assertEqual(summary["omitted_events"], 497)
+
+    def test_old_schema_one_without_framework_or_hid_columns(self):
+        old = row(1)
+        for key in ("player", "sampling_number", "sequence", "frame_before", "framework_sequence"):
+            del old[key]
+        left = self.write("left", 0, [old])
+        right = self.write("right", 1, [old])
+        result = module.compare(left, right)
+        self.assertEqual(result["matched_applied_ticks"], 1)
+        self.assertEqual(result["left"]["retained_hid_reads"], 0)
+
+    def test_nonindexed_events_are_streamed_without_retaining_rows(self):
+        path = Path(self.temp.name) / "large"
+        event = row(1, "exchange_complete")
+        with path.open("w", newline="", encoding="utf-8") as out:
+            out.write("# schema=1,role=0,seed=123,omitted=0\n")
+            writer = csv.DictWriter(out, fieldnames=list(event))
+            writer.writeheader()
+            for _ in range(10000):
+                writer.writerow(event)
+        tracemalloc.start()
+        try:
+            _, indexed, stats = module.read(path)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(indexed, {})
+        self.assertEqual(stats["retained_events"], 10000)
+        self.assertLess(peak, 2_000_000, "nonindexed CSV rows must not accumulate in memory")
+
+    def test_invalid_schema_and_hid_player_rejected(self):
+        left = self.write("left", 0, [row(1)])
+        right = self.write("right", 1, [row(1, "hid_delivery", player=4)])
+        with self.assertRaises(ValueError):
+            module.compare(left, right)
+        left.write_text(left.read_text().replace("schema=1", "schema=2"))
+        with self.assertRaises(ValueError):
+            module.read(left)
 
 
 if __name__ == "__main__":

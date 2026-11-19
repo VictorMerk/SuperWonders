@@ -15,7 +15,10 @@ recording, exact runtime identity, settings and session metadata.
 The application trace distinguishes completed network exchanges, sampled jobs,
 pipeline receive results, exposed input, loading barriers, discarded pipeline
 drains, neutral resets and actual HID pad deliveries. It records the guest HID
-sampling number. The delivered pad and sampling number are exact; the associated
+sampling number. Framework events also record their invocation sequence and
+present counter before/after the call, including calls skipped by the current
+present-based input exchange. A call without a present is not by itself proof
+that gameplay advanced. The delivered pad and sampling number are exact; the associated
 current commit tick is observed separately after the pad read, and may change
 between those operations on different threads. A pipeline sample timestamp is
 before insertion, and a submit-return event is after insertion, not its exact time.
@@ -23,7 +26,7 @@ before insertion, and a submit-return event is after insertion, not its exact ti
 Tracing is disabled by default. Enabled tracing retains a session prefix and
 recent circular tail in RAM, with counters and an explicit omitted-event count.
 There is no per-frame file output. The default capacity is 131,072 events
-(approximately 36 MiB on the current Windows build). Override it with
+(approximately 38 MiB on the current Windows build). Override it with
 `NX_LAN_APPLY_TRACE_CAPACITY`, from 2 through 262,144 events. Evidence between the
 prefix and tail may be evicted, so absence of a retained event is not proof that
 it never occurred. Abrupt process termination may prevent shutdown export.
@@ -38,6 +41,11 @@ The tool checks opposite roles and matching seeds, reports differing applied
 pads or event kinds at common ticks, duplicate applications, loading-marker
 application and retained drain discards. It keeps retention gaps explicit.
 It does not infer actor or world equality from equal applications.
+It also reports a changed delivered pad under the same player/HID sample number
+as a candidate inconsistency, while counting identical repeated reads separately.
+It streams the CSV and keeps compact indexes rather than retaining all event
+dictionaries. Gaps can hide changes; cross-PC sampling-number offsets are not
+treated as a desync verdict.
 
 The next controlled gameplay experiment is the same save, character choices,
 route and settings with input pipeline enabled versus disabled. This tests a
@@ -50,6 +58,8 @@ rewrite all guest/kernel clocks or discard additional barriers without evidence.
 Wonder's existing network functions. It forwards the original SDK handlers and
 preserves their return values, CPU effects and exceptions. It enables no host
 network access, changes no offline service result and supplies no account data.
+Wrappers are installed after module linking and before guest constructors or
+threads execute, so installation does not race existing guest SDK calls.
 
 The `native-net experimental sdk-census` native-log entries contain allowlisted
 scalar parameters, module-relative callers, return/error classification and

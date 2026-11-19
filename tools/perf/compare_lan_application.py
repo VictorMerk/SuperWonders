@@ -1,70 +1,124 @@
-"""Compare bounded input-application evidence, without certifying game state."""
+﻿"""Compare bounded input-application evidence, without certifying game state."""
 import argparse
 import csv
 import json
 from pathlib import Path
 
+PAD_FIELDS = ("buttons", "lx", "ly", "rx", "ry")
+COMPARE_FIELDS = ("event", "players") + tuple(
+    f"p{p}_{field}" for p in range(4)
+    for field in ("loading_event",) + PAD_FIELDS)
+APPLICATIONS = {"apply", "loading_neutral_apply"}
+
 
 def read(path):
-    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
-        lines = list(stream)
+    """Stream CSV; keep compact applied ticks and HID sample identities only."""
     metadata = {}
-    for line in lines:
-        if line.startswith("# schema="):
-            metadata = dict(part.split("=", 1) for part in line[2:].strip().split(","))
-    rows = list(csv.DictReader(line for line in lines if not line.startswith("#")))
+    applied = {}
+    duplicates = []
+    hid = {}  # (player, sampling number) -> (pad, tick, frame, sequence, changed)
+    stats = dict(retained_events=0, retained_framework_calls=0,
+                 retained_framework_calls_without_present=0,
+                 first_retained_framework_call_without_present=None,
+                 retained_loading_drain_discards=0, duplicate_applied_count=0,
+                 retained_hid_reads=0, repeated_identical_hid_sample_reads=0,
+                 hid_sample_payload_change_observations=0,
+                 hid_samples_with_changed_payload=0,
+                 first_hid_sample_payload_change_observation=None)
+
+    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+        def data_lines():
+            for line in stream:
+                if line.startswith("#"):
+                    if line.startswith("# schema="):
+                        metadata.update(part.split("=", 1) for part in line[2:].strip().split(","))
+                else:
+                    yield line
+
+        for row in csv.DictReader(data_lines()):
+            stats["retained_events"] += 1
+            event = row["event"]
+            if event in APPLICATIONS:
+                tick = int(row["tick"])
+                if tick in applied:
+                    stats["duplicate_applied_count"] += 1
+                    if len(duplicates) < 20:
+                        duplicates.append(tick)
+                # Avoid retaining the CSV dictionary and unused per-event strings.
+                applied[tick] = (int(row["frame"]), tuple(
+                    row[field] if field == "event" else int(row[field])
+                    for field in COMPARE_FIELDS))
+            elif event == "framework_frame":
+                stats["retained_framework_calls"] += 1
+                if int(row["frame"]) == int(row["frame_before"]):
+                    stats["retained_framework_calls_without_present"] += 1
+                    if stats["first_retained_framework_call_without_present"] is None:
+                        stats["first_retained_framework_call_without_present"] = int(row["framework_sequence"])
+            elif event == "loading_drain_discard":
+                stats["retained_loading_drain_discards"] += 1
+            elif event == "hid_delivery":
+                player = int(row["player"])
+                if not 0 <= player < 4:
+                    raise ValueError("HID delivery player must be 0..3")
+                sample = int(row["sampling_number"])
+                pad = tuple(int(row[f"p{player}_{field}"]) for field in PAD_FIELDS)
+                stats["retained_hid_reads"] += 1
+                previous = hid.get((player, sample))
+                sequence = int(row["sequence"]) if row.get("sequence") else None
+                tick, frame = int(row["tick"]), int(row["frame"])
+                changed = previous[4] if previous else False
+                if previous:
+                    if previous[0] == pad:
+                        stats["repeated_identical_hid_sample_reads"] += 1
+                    else:
+                        stats["hid_sample_payload_change_observations"] += 1
+                        if not changed:
+                            stats["hid_samples_with_changed_payload"] += 1
+                        changed = True
+                        if stats["first_hid_sample_payload_change_observation"] is None:
+                            stats["first_hid_sample_payload_change_observation"] = {
+                                "player": player, "sampling_number": sample,
+                                "previous_pad": dict(zip(PAD_FIELDS, previous[0])),
+                                "current_pad": dict(zip(PAD_FIELDS, pad)),
+                                "previous_observed_tick": previous[1], "observed_tick": tick,
+                                "previous_frame": previous[2], "frame": frame,
+                                "previous_sequence": previous[3], "sequence": sequence}
+                hid[player, sample] = (pad, tick, frame, sequence, changed)
+
     if metadata.get("schema") != "1":
         raise ValueError("Expected application trace schema 1")
-    return metadata, rows
+    if not {"seed", "role", "omitted"} <= metadata.keys():
+        raise ValueError("Application trace metadata must include seed, role and omitted")
+    phase = [tick for tick, (_, values) in applied.items()
+             if values[0] == "apply" and any(values[2 + p * 6] for p in range(4))]
+    stats.update(role=int(metadata["role"]), omitted_events=int(metadata["omitted"]),
+                 applied_ticks=len(applied), duplicate_applied_ticks=duplicates,
+                 gameplay_applies_with_peer_loading_marker=len(phase),
+                 first_gameplay_apply_with_peer_loading_marker=min(phase, default=None),
+                 retained_unique_hid_samples=len(hid),
+                 hid_observation_scope="Per-peer retained observations only. Same player/sample with changed delivered pad is a candidate inconsistency, not proof of desync. Gaps/eviction can hide changes. Callback tick is observed after pad acquisition, not atomically paired; sampling-number offsets across PCs are not compared.")
+    return metadata, applied, stats
 
 
 def compare(left, right):
-    lm, lr = read(left)
-    rm, rr = read(right)
+    lm, li, ls = read(left)
+    rm, ri, rs = read(right)
     if lm["seed"] != rm["seed"] or lm["role"] == rm["role"]:
         raise ValueError("Expected opposite roles from the same session seed")
-    fields = [f"p{p}_{field}" for p in range(4)
-              for field in ("loading_event", "buttons", "lx", "ly", "rx", "ry")]
-    applications = {"apply", "loading_neutral_apply"}
-
-    def index(rows):
-        result = {}
-        duplicates = []
-        for row in rows:
-            if row["event"] not in applications:
-                continue
-            tick = int(row["tick"])
-            if tick in result:
-                duplicates.append(tick)
-            result[tick] = row
-        return result, duplicates
-
-    li, ld = index(lr)
-    ri, rd = index(rr)
-    shared = sorted(li.keys() & ri.keys())
-    mismatch = []
-    for tick in shared:
+    shared = li.keys() & ri.keys()
+    mismatch_count, first = 0, None
+    for tick in sorted(shared):
         a, b = li[tick], ri[tick]
-        different = [field for field in ["event", "players"] + fields if a[field] != b[field]]
+        different = [field for field, av, bv in zip(COMPARE_FIELDS, a[1], b[1]) if av != bv]
         if different:
-            mismatch.append({"tick": tick, "fields": different,
-                             "left_frame": int(a["frame"]), "right_frame": int(b["frame"])})
-
-    def summary(meta, rows, indexed, duplicate):
-        phase = [int(row["tick"]) for row in indexed.values() if row["event"] == "apply"
-                 and any(int(row[f"p{p}_loading_event"]) for p in range(4))]
-        return {"role": int(meta["role"]), "retained_events": len(rows),
-                "omitted_events": int(meta["omitted"]), "applied_ticks": len(indexed),
-                "duplicate_applied_ticks": duplicate[:20],
-                "gameplay_applies_with_peer_loading_marker": len(phase),
-                "first_gameplay_apply_with_peer_loading_marker": min(phase, default=None),
-                "retained_loading_drain_discards": sum(r["event"] == "loading_drain_discard" for r in rows)}
-
+            mismatch_count += 1
+            if first is None:
+                first = {"tick": tick, "fields": different, "left_frame": a[0], "right_frame": b[0]}
     return {"schema": 1, "seed": lm["seed"], "matched_applied_ticks": len(shared),
-            "application_mismatches": len(mismatch), "first_application_mismatch": next(iter(mismatch), None),
+            "application_mismatches": mismatch_count, "first_application_mismatch": first,
             "left_only_retained_ticks": len(li.keys() - ri.keys()),
             "right_only_retained_ticks": len(ri.keys() - li.keys()),
-            "left": summary(lm, lr, li, ld), "right": summary(rm, rr, ri, rd),
+            "left": ls, "right": rs,
             "scope": "Retained input application evidence only. Missing ticks may be evicted. HID delivery tick is observed separately from pad sampling. Equal input application does not certify simulation or actor synchronization."}
 
 

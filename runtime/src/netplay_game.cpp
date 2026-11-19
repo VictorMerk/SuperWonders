@@ -413,6 +413,17 @@ plat::PadState pad(uint32_t player) {
     std::lock_guard guard(input_lock);
     return connected(player) ? inputs.pads[player] : plat::PadState{};
 }
+void trace_framework_frame(uint64_t frame_before,uint64_t frame_after) {
+    if(!apply_trace)return;
+    static uint64_t sequence=0;
+    std::lock_guard guard(input_lock);
+    ApplyTraceEntry entry;
+    entry.event=ApplyEvent::FrameworkFrame; entry.ns=plat::monotonic_ns();
+    entry.frame=frame_after; entry.frame_before=frame_before;
+    entry.framework_sequence=++sequence; entry.tick=inputs.tick;
+    entry.local_loading_event=pending_loading_event.load();
+    apply_trace->push(entry);
+}
 void trace_hid_delivery(uint32_t player,uint64_t sampling_number,const plat::PadState& pad,uint64_t caller) {
     if(!apply_trace || player>=kPlayers)return;
     // Caller has already released pad()'s lock. Tick is the currently exposed

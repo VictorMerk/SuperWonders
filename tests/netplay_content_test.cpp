@@ -98,7 +98,13 @@ int main() {
         if(++checkpoints==128) {write(root/"mods/01-first/romfs/added.bin","new file");added=true;}
     }); } catch(const std::exception&) {inventory_failed=true;}
     check(added&&inventory_failed,"adding a mod file after enumeration rejects the stale manifest");
-    fs::remove_all(root/"mods/05-large");fs::remove(root/"mods/01-first/romfs/added.bin");
+    fs::remove(root/"mods/01-first/romfs/added.bin");
+    checkpoints=0;bool selected_changed=false;
+    try { nx::lan::content_fingerprint(root,root/"runtime.exe","test","",[&] {
+        if(++checkpoints==128)write(root/library_name,"new adjacent selection");
+    }); } catch(const std::exception&) {selected_changed=true;}
+    check(selected_changed&&fs::exists(root/library_name),"a new adjacent game library cannot replace the checked selection silently");
+    fs::remove(root/library_name);fs::remove_all(root/"mods/05-large");
     auto deep=root/"mods/04-deep/romfs";
     for(int i=0;i<66;++i) deep/="d";
     fs::create_directories(deep);

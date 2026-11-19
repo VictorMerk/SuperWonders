@@ -1,0 +1,50 @@
+{
+  "runtime_source": "6d26d9e823b489d378aa24046cc2306b45018bce",
+  "integrated_main": "406aadf818c3bfde81899eedf3203a6ed43f5e36",
+  "protocol": 6,
+  "cpu_tests_passed": 62,
+  "scope": "Windows, two native instances on one PC using loopback and isolated Product120 save copies",
+  "native": {
+    "60": {
+      "frame_rate": 60,
+      "pipeline": 0,
+      "minimum_frames": 3060,
+      "course_reached": true,
+      "exit_codes": [
+        2,
+        0
+      ],
+      "forced_shutdowns": 0,
+      "fatal_or_crash_logs": 0,
+      "committed_pairs": 601,
+      "valid_position_pairs": 0,
+      "first_difference": null,
+      "loader_delay_ms": 0,
+      "both_non_silent_pcm": true
+    },
+    "30": {
+      "frame_rate": 30,
+      "pipeline": 1,
+      "minimum_frames": 3057,
+      "course_reached": true,
+      "exit_codes": [
+        0,
+        2
+      ],
+      "forced_shutdowns": 0,
+      "fatal_or_crash_logs": 0,
+      "committed_pairs": 1401,
+      "valid_position_pairs": 0,
+      "first_difference": null,
+      "loader_delay_ms": 3000,
+      "both_non_silent_pcm": true
+    }
+  },
+  "limitations": [
+    "Not physical multi-PC LAN or full world/RNG/actor synchronization",
+    "No verified Product120 position pairs",
+    "No new latency/FPS campaign",
+    "Older first-clear/re-entry fault unproven fixed",
+    "Native Bellabel payload unestablished"
+  ]
+}

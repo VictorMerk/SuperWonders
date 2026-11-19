@@ -51,6 +51,9 @@
 #include "pc_menu_win.h"
 #include "svc_am.h"
 #include "platform.h"
+#include "native_lan_runtime.h"
+#include "native_network_trace.h"
+#include "steam_dev_runtime.h"
 #include "shader_bundle.h"
 #include "stream_cache.h"
 #include "frametrace.h"
@@ -108,6 +111,9 @@ void exit_process(int code) {
     }
     nx::log("shutdown: begin code %d on thread %lu", code, GetCurrentThreadId());
     nx::lan::flush_diagnostics();
+    nx::native_net::shutdown();
+    nx::native_lan::shutdown();
+    nx::steam_dev::shutdown_current();
     nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
     nx::log("shutdown: shader bundle flushed");

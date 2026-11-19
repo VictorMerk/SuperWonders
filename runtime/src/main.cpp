@@ -24,6 +24,8 @@
 #include "shader_bundle.h"
 #include "netplay_game.h"
 #include "native_network_trace.h"
+#include "native_lan_runtime.h"
+#include "steam_dev_runtime.h"
 
 namespace nx {
 
@@ -185,6 +187,7 @@ void boot() {
     const auto args = plat::program_args();
     if (std::find(args.begin(),args.end(),"--pack-shaders") != args.end())
         plat::exit_process(optimize_shader_cache() ? 0 : 1);
+    steam_dev::start_from_environment();
 #if NX_GAME_LIBRARY
     // The start screen, when the game isn't set up or with --config: after the guest memory is reserved (so nothing it
     // allocates lands there), before the kernel and its watchdog start (the game hasn't, and isn't hung).
@@ -195,9 +198,9 @@ void boot() {
     lan::initialize();
     kernel_init();
     const ModuleInfo* mods[] = {&main_module(), &sdk_module()};
-    load_modules(mods, 2, plat::data_root() + "/analysis");
+    load_modules(mods, 2, plat::data_root() + "/analysis",native_lan::install_before_relocations);
     // Function-table instrumentation must precede guest constructors/threads.
-    native_net::init();
+    if(!native_lan::active()) native_net::init();
 
     uint64_t tdata = 0, tdata_end = 0;
     if (tdata_range(main_module(), tdata, tdata_end) && tdata_end > tdata) {

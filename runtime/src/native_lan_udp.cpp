@@ -293,6 +293,34 @@ Result Udp::set_option(int fd, Option option, bool enabled) {
     return set_bool(entry->socket, native_option, enabled)
         ? Result{0, 0, false} : host_failure();
 }
+Result Udp::get_option(int fd, Option option) {
+    auto& s = *state_; if (int e = s.unavailable()) return fail(e);
+    if (option != Option::Broadcast && option != Option::ReuseAddress && option != Option::ReusePort) return fail(ProtocolOption);
+    auto entry = s.get(fd); if (!entry) return fail(BadDescriptor);
+    std::lock_guard lock(entry->mutex);
+    if (entry->closed.load()) return fail(BadDescriptor);
+    int native_option;
+    switch (option) {
+    case Option::Broadcast: native_option = SO_BROADCAST; break;
+    case Option::ReuseAddress: native_option = SO_REUSEADDR; break;
+    case Option::ReusePort:
+#if defined(SO_REUSEPORT) && !defined(_WIN32)
+        native_option = SO_REUSEPORT; break;
+#else
+        return fail(Unsupported);
+#endif
+    default: return fail(ProtocolOption);
+    }
+    int value = 0;
+#ifdef _WIN32
+    int length = sizeof value;
+#else
+    socklen_t length = sizeof value;
+#endif
+    if (getsockopt(entry->socket, SOL_SOCKET, native_option, reinterpret_cast<char*>(&value), &length)) return host_failure();
+    if (length != sizeof value) return fail(Io);
+    return {value != 0, 0, false};
+}
 Result Udp::set_unicast_ttl(int fd, int ttl) {
     auto& s = *state_; if (int e = s.unavailable()) return fail(e);
     if (ttl < 1 || ttl > 255) return fail(Invalid);

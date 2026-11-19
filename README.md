@@ -1,96 +1,80 @@
-# SuperWonders — Super Mario Bros. Wonder PC Recompilation
+<h1 align="center">SuperWonders</h1>
 
-PC fork follow-up: [picture shape, cache checks and settings diagnostics](docs/PC-PREVIEW-2026-11-17-R3.md).
-Upstream synchronization: [reviewed merge through 64bebcc and integration checks](docs/UPSTREAM-SYNC-2026-11-17.md).
-Real-PC LAN follow-up: [reported desync, performance evidence and bounded input traces](docs/LAN-REAL-PC-FOLLOWUP.md).
-LAN work in progress: [buffered transport measurements, scoped RNG seeds and remaining failures](docs/LAN-OVERLAP-2026-11-18.md).
-Latest test preview: [simpler one-folder setup and corrected Windows controller presets](docs/PC-PREVIEW-2026-11-17-R8.md).
-Graphics validation: [Vulkan synchronization fixes, optional audio prefetch and two-PC LAN testing](docs/PC-PREVIEW-2026-11-17-R7.md).
-Measured loading follow-up: [verified low-VRAM texture conversions](docs/TEXTURE-CONVERSION-CACHE.md).
-Versioned source work: [Product.120 compatibility, checked NUP inspection and the shared Wonder launcher](docs/WONDER-EDITIONS.md).
+<p align="center"><b>Super Mario Bros. Wonder, recompiled for PC.</b><br>Experimental native runtime for Windows and Linux, powered by Vulkan.</p>
 
-This fork's PC stability work and remaining multiplayer/rendering milestones are tracked in
-[the fork roadmap](docs/FORK-ROADMAP.md). The initial changes preserve draws during shader compilation,
-correct logical 32-lane shader operations on wider GPU subgroups, and return a valid offline friends-service interface.
-The fork adds four local controller slots, keyboard and device-specific button fonts,
-launcher shortcuts and save backups, a local shader-loading cache, and optional optical-flow
-frame generation. Native LAN with separate game instances is under active synchronization
-testing; Nintendo online services remain offline.
+<p align="center">
+  <a href="docs/PLAYING-WONDER.md">Start playing</a> ·
+  <a href="docs/MULTIPLAYER.md">Multiplayer</a> ·
+  <a href="docs/WONDER-EDITIONS.md">Game editions</a> ·
+  <a href="docs/FORK-ROADMAP.md">Roadmap</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="https://github.com/VictorMerk/SuperWonders/issues">Report a bug</a>
+</p>
 
-The [2026-11-17 follow-up](docs/PC-PREVIEW-2026-11-17.md) includes the blue pause-background fix with native
-before/after captures, 2x–8x interpolation, Esc settings access, one-picture render-ahead, a Circle-confirm preset,
-mod conflict reporting and timing diagnostics. Read its verification limits before treating the preview as stable.
+SuperWonders translates Wonder's AArch64 executable ahead of time and runs it through a native PC runtime. Its NVN graphics implementation uses Vulkan. This fork builds on [vfjoo888/SuperWonders](https://github.com/vfjoo888/SuperWonders), with additional work on graphics correctness, controllers, launchers, diagnostics and multiplayer experiments.
 
-I'm working on SuperWonders, an experimental Windows and Linux x86-64 static recompilation of *Super Mario Bros. Wonder* (Nintendo Switch, base version 1.0.0) for native execution on PC. I started from the DKB/TOTK recompilation framework and have been adapting its runtime and graphics support for Wonder. The graphics backend uses Vulkan.
+**Bring your own game files.** This repository contains source and documentation, not Nintendo game data, firmware, keys or a compiled game. Generated game libraries and assets stay on your machine.
 
-This repository contains source code and project documentation. It does not contain the builder package, the game, game assets, a game dump, firmware, or a compiled game. The separate Windows GUI Builder is distributed through [GitHub Releases](https://github.com/vfjoo888/SuperWonders/releases).
+![SuperWonders launcher preview](docs/images/pc-preview-launcher.png)
 
-## What I've done
+*An earlier PC launcher preview. Its “LAN co-op” entry opens the experimental shared-input mode; it is not evidence of working game-native LAN.*
 
-- I got a Windows build running and tested it by playing in the game's tutorial area.
-- I added a first-launch shader preparation screen. It compiles the known shader program catalog before the first game frame; the current catalog contains about 12,000 programs. The Vulkan pipeline cache is saved locally for later launches. Shader variants outside the catalog can still compile the first time they are encountered, so some first-use stutter may remain.
-- I fixed the misaligned and flickering shadows I saw when changing the internal resolution, and checked the result at multiple internal resolutions in the tutorial area.
-- The in-game menu opens with **Esc**, **F1**, or the controller's Minus+Plus chord, with Video, Audio, Controls, Overlay, and System sections.
-- The Video section includes window/output size, fullscreen, always-on-top, and internal-resolution options.
-- The Audio section lets me adjust game volume and select the game language. The settings menu itself is available in English, Italian, German, and French.
-- The Controls section has Xbox/DualSense and Nintendo button-layout presets. It also lets me remap keyboard keys and controller buttons. The Windows runtime includes keyboard, XInput, and DualSense input support.
-- The Overlay section has separate toggles for FPS, 1% lows, game speed, and a frametime graph, with four corner-position options.
-- The System section includes a configurable memory cleanup threshold and a Low VRAM profile. Crossing the threshold asks Vulkan to release unused reusable images; it does not close the game or cap memory used by live resources, and it is not a dedicated VRAM limit. The Low VRAM profile can store decoded ASTC textures as BC3 instead of expanding them to RGBA8 when the GPU does not support ASTC. This can reduce texture memory use, with a possible image-quality tradeoff.
-- I prepared a separate Windows GUI Builder package. Users provide their own extracted ExeFS/RomFS folders.
-- I changed the Windows build so the game can be started directly from its executable, with an orange-flower application icon.
-- I added Linux x86-64 support and a launcher that can prepare the game from the user's own extracted files.
-- I added frame-rate caps up to 144 FPS, FSR 1 upscaling, FXAA, anisotropic filtering, game-language selection, and controller rumble support.
-- The recomp supports every language supported by version 1.0.0 of the game.
+## Play on PC
 
-## Testing and compatibility
+1. Read the [playing guide](docs/PLAYING-WONDER.md) and check your hardware and game version.
+2. Prepare the game using your own extracted ExeFS and RomFS. The [upstream Windows GUI Builder](https://github.com/vfjoo888/SuperWonders/releases) is a separate distribution; its releases may not include this fork's latest changes.
+3. Start the prepared `wonder.exe`, configure your controls and play. First-launch shader preparation can take time.
 
-I have tested the project on a Windows and Linux PC with an **NVIDIA GeForce RTX 5060 Ti**. A contributor tested on his AMD RX 9070XT on both Windows and Linux. 
+Already have a prepared installation? Keep its data, saves and generated game library when updating. Runtime/library compatibility matters; see [updating safely](docs/PLAYING-WONDER.md#updating-an-existing-installation).
 
-**Support on intel graphic cards is still at early stages. It boots, but it may display graphical glitches**. Other systems and GPUs may behave differently. Linux support is available.
+## What is here
 
-The primary target is the game's base version **1.0.0**. Experimental support for an inspected **Product.120** update selects patches by exact NSO identity; see the [edition investigation and verification limits](docs/WONDER-EDITIONS.md). This does not certify arbitrary updates, DLC, or native Switch 2/Bellabel Park content.
+- **Graphics and display:** internal resolution, FSR 1, FXAA, anisotropic filtering, shader/pipeline caches and optional frame generation.
+- **Controls:** keyboard, Xbox/DualSense and Nintendo layouts, remapping, rumble and four local controller slots.
+- **PC launcher:** settings, save backups, RomFS mod inspection and conflict reporting.
+- **Diagnostics:** FPS and frametime overlays, bounded graphics/network traces and reproducible test tools.
+- **Edition library:** separate prepared runtime/data slots for original Wonder and an updated Wonder installation.
 
-## Minimum hardware (provisional)
+Frame generation adds displayed frames; it does not establish faster simulation or lower input latency. Driver behavior, shader compilation and the chosen settings still affect performance.
 
-I have not established a formally tested minimum yet. The current Windows build expects:
+## Current status
 
-- **CPU:** a 64-bit x86 processor with AVX2 support.
-- **GPU:** a graphics card and driver supporting Vulkan 1.3. The minimum amount of video memory has not been verified.
-- **System RAM:** 16 GB as a practical baseline. 32 GB is recommended when building the project, especially with a higher worker count; lowering the worker count can reduce build memory use.
+| Area | Established coverage | Remaining work |
+| --- | --- | --- |
+| Original Wonder 1.0.0 | Upstream Windows/Linux support; this fork's separate original-edition launcher slot reaches the title screen. | A full original-edition regression on the latest runtime. |
+| Inspected Product.120 update | Version-specific runtime support; gameplay, course transitions, saved progress and non-silent audio exercised in bounded Windows runs. | All courses, the historical intermittent crash sequence and complete visual correctness. |
+| Switch 2 Edition features | A supplied package was inspected and its updated executable ported. | Complete upgraded content, Bellabel Park and GameShare are **not certified**. Package names or graphics SDK markers alone do not settle this. |
+| Graphics | Several shader, texture and resource-lifetime fixes have targeted regressions. | Pause-menu blur after reopening and intermittent stage-map shadows need further visual checks. |
+| Multiplayer | Local controller support; separate launch paths for one-host co-op and networking experiments. | Shared-input LAN has **known gameplay desync**. The new native networking backend has not passed a real room/gameplay test. |
 
-These are preliminary requirements inferred from the build and runtime, not a guarantee that every compatible-looking PC will run the game well. Testing is still limited to the hardware and game area described above.
+Read the [edition investigation](docs/WONDER-EDITIONS.md) and [multiplayer guide](docs/MULTIPLAYER.md) for each result's scope. Passing CPU tests, matching input packets or a clean process exit do not certify gameplay.
 
-## Future features
+## Hardware and performance
 
-Android is substantially more complicated and may be considered later.
+The current desktop target is an **x86-64 CPU with AVX2** and a **Vulkan 1.3 GPU/driver**. A practical starting point is **16 GB RAM**; building with more workers can benefit from 32 GB. A verified minimum VRAM requirement has not been established.
 
-## AI assistance
+Upstream reports testing on NVIDIA RTX 5060 Ti and contributor AMD RX 9070 XT systems on Windows/Linux. Intel graphics support remains early. These are compatibility observations, not promises for other hardware. This fork does not currently publish a controlled benchmark proving an FPS improvement from its latest changes.
 
-I used AI tools extensively to help write and revise the code, build scripts, and documentation. I directed the work and ran the builds and gameplay checks described above. AI-assisted code can still have bugs; the limited testing coverage is part of the project's current status.
+For useful bug reports, include the exact runtime revision, game version, CPU/GPU/driver, internal resolution, frame-generation setting and steps to reproduce. Remove private paths, pairing codes and credentials from shared diagnostics. [Contribution guidance](CONTRIBUTING.md) covers code and reports.
 
-## Contributor credits
+## Explore the project
 
-Thanks to [devall96](https://github.com/devall96) for the work shared in pull requests #20–#33. I reviewed and incorporated selected ideas and implementations into my local source, including asynchronous pipeline preparation and cache saving, Vulkan validation fixes, Linux support, graphics pipeline library support, graphics and frame-rate options, launcher and release tooling, and performance/replay diagnostics. The published source is my integrated project state; the pull requests themselves were not merged as a batch. Pull request #25's feedback-loop copy change was not included.
+| Looking for… | Read… |
+| --- | --- |
+| Setup, settings, controllers and mods | [Playing Wonder](docs/PLAYING-WONDER.md) |
+| Local co-op, desync and native networking | [Multiplayer](docs/MULTIPLAYER.md) |
+| Steam/Spacewar developer prototype | [Steam development](docs/WONDER-STEAM-DEV.md) |
+| Networking evidence and next experiments | [Synchronization investigation](docs/WONDER-SYNC-INVESTIGATION.md) |
+| Versioned executable/package support | [Wonder editions](docs/WONDER-EDITIONS.md) |
+| Remaining work and graphics follow-up | [Fork roadmap](docs/FORK-ROADMAP.md) |
+| Earlier preview changes and their limits | [PC preview](docs/PC-PREVIEW-2026-11-17.md) |
 
-## Getting a local build
-
-Download the Windows GUI Builder ZIP from [GitHub Releases](https://github.com/vfjoo888/SuperWonders/releases), extract it to a writable folder, and run `Start WonderBuilder.cmd`.
-
-In the builder, select your own extracted ExeFS folder (containing `main` and `sdk`) and RomFS folder. Choose an output folder and click **Build game**; when it finishes, start `wonder.exe` from that folder.
-
-The builder ZIP includes its portable Windows build tools, but no game files. You must provide your own legally obtained extracted game data. I don't provide instructions for obtaining game files or firmware. Do not share the generated game output, because it contains material from your own game dump.
-
-To update a build, keep the builder folder and output folder, extract the newer builder package over the old builder files, and build again with the same inputs and output path. The builder can reuse unchanged extraction and compilation caches.
-
-## Project layout
-
-- `recomp/` — AArch64 analysis and C++ code-generation tools.
-- `runtime/` — native runtime, platform support, audio, input, and graphics implementation.
-- `runtime/src/nvn/` — NVN-to-Vulkan graphics implementation.
-- `games/wonder/` — Wonder-specific integration code.
-- `tools/` — shader, packaging, and development utilities.
-- `docs/` — technical notes, findings, and project history.
+`recomp/` holds executable analysis and code generation; `runtime/` implements platform services, audio, input and Vulkan graphics; `games/wonder/` holds game integration; `tools/` contains preparation and development utilities.
 
 ## Credits and licensing
 
-Project source is licensed under the MIT License in [LICENSE](LICENSE). Third-party components and artwork are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The project's license covers only its own code; it grants no rights to Nintendo's game or trademarks. *Super Mario Bros. Wonder* and *Nintendo Switch* are trademarks of Nintendo. This is an unofficial fan project and is not affiliated with or endorsed by Nintendo.
+This fork continues [vfjoo888's SuperWonders](https://github.com/vfjoo888/SuperWonders), originally adapted from the DKB/TOTK recompilation framework. Thanks to [devall96](https://github.com/devall96) for work shared in upstream pull requests #20–#33: selected ideas and implementations informed asynchronous pipeline preparation/cache saving, Vulkan validation fixes, Linux support, graphics pipeline libraries, graphics/frame-rate options, release tooling and performance/replay diagnostics. Those pull requests were not merged as a batch; PR #25's feedback-loop copy change was not included in that integration.
+
+[mkw-recomp](https://github.com/adriadam10/mkw-recomp) is a valuable technical reference and inspired this documentation's organization. Individual reused third-party material retains its notices. AI tools have been used extensively in development and documentation; testing limits remain part of the project's status.
+
+Project source is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for components and artwork. That license grants no rights to Nintendo's game or trademarks. *Super Mario Bros. Wonder* and *Nintendo Switch* are Nintendo trademarks. This is an unofficial fan project, unaffiliated with Nintendo.

@@ -4,7 +4,10 @@
 #include <span>
 
 namespace nx::native_lan {
-enum class GuestCall { Socket, Bind, SendTo, RecvFrom, Poll, Close, GetLastErrno, SetLastErrno };
+enum class GuestCall {
+    Socket, Bind, SendTo, RecvFrom, Poll, Close, GetLastErrno, SetLastErrno,
+    SetSockOpt, GetSockOpt, Shutdown, GetSockName, Recv, Fcntl, SendFailure,
+};
 enum class MemoryAccess { Read, Write, ReadWrite };
 // Injected numeric-address access only: no guest pointer is cast/dereferenced.
 // The owner must pin mappings/permissions for the whole invoke() call. validate
@@ -48,6 +51,14 @@ public:
     // success (caller may supply28). Data truncation returns bytes copied and
     // discards remainder unless Peek; no MSG_TRUNC extension. Nonzero NULL data
     // gives Invalid22; lengths over32bits give Fault14, with NULL-buffer check preceding width check.
+    // Scalar socket options: BSD level0xffff opts4/0x20/0x200 are real boolean
+    // reuseaddr/broadcast/reuseport; level0 opt4 is real unicastTTL1..255.
+    // Set uses exactly4bytes; Get requires capacity>=4 and writes value+length4.
+    // GetSockName writes min(capacity,16) address bytes and required length16;
+    // capacity0 permits a NULL address. Output length pointer is required RW.
+    // Fcntl3 reports0x802 after real fd validation (core is always nonblocking).
+    // Fcntl4 only accepts0x800/0x802; blocking0/2 and other commands Unsupported.
+    // Recv ignores sender registers. SendFailure rejects connected Send.
     bool invoke(CPU& cpu,GuestCall call);
 private:
     Udp& udp_;

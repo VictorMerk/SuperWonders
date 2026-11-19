@@ -105,6 +105,12 @@ set_source_files_properties(runtime/src/overlay/controller_art.cpp PROPERTIES IN
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(steam_dev_test tests/steam_dev_test.cpp runtime/src/steam_dev.cpp)
+    target_include_directories(steam_dev_test PRIVATE runtime/src)
+    add_test(NAME steam_dev COMMAND steam_dev_test)
+    add_executable(hle_binding_batch_test tests/hle_binding_batch_test.cpp)
+    target_include_directories(hle_binding_batch_test PRIVATE runtime/include runtime/src)
+    add_test(NAME hle_binding_batch COMMAND hle_binding_batch_test)
     add_executable(recording_epoch_test tests/recording_epoch_test.cpp runtime/src/nvn/nvn_incarnation.cpp)
     target_include_directories(recording_epoch_test PRIVATE runtime/include runtime/src "${NX_VULKAN_SDK}/Include")
     add_test(NAME recording_epoch COMMAND recording_epoch_test)
@@ -122,6 +128,30 @@ if(NX_TESTS AND NOT ANDROID)
             target_link_libraries(native_lan_guest_test PRIVATE ws2_32)
         endif()
         add_test(NAME native_lan_guest COMMAND native_lan_guest_test)
+        add_executable(native_lan_nifm_test tests/native_lan_nifm_test.cpp runtime/src/native_lan_nifm.cpp)
+        target_include_directories(native_lan_nifm_test PRIVATE runtime/src)
+        add_test(NAME native_lan_nifm COMMAND native_lan_nifm_test)
+        add_executable(native_lan_preflight tools/perf/native_lan_preflight.cpp runtime/src/native_lan_nifm.cpp)
+        target_include_directories(native_lan_preflight PRIVATE runtime/src)
+        add_test(NAME native_lan_preflight COMMAND native_lan_preflight --self-test)
+        add_executable(native_lan_backend_test tests/native_lan_backend_test.cpp runtime/src/native_lan_backend.cpp runtime/src/native_lan_nifm.cpp runtime/src/native_lan_udp.cpp)
+        target_include_directories(native_lan_backend_test PRIVATE runtime/src)
+        add_test(NAME native_lan_backend COMMAND native_lan_backend_test)
+        add_executable(native_lan_memory_test tests/native_lan_memory_test.cpp runtime/src/native_lan_memory.cpp runtime/src/memory.cpp)
+        target_include_directories(native_lan_memory_test PRIVATE runtime/src runtime/include)
+        add_test(NAME native_lan_memory COMMAND native_lan_memory_test)
+        set_tests_properties(native_lan_memory PROPERTIES SKIP_RETURN_CODE 77)
+        add_executable(native_lan_profile_test tests/native_lan_profile_test.cpp runtime/src/native_lan_profile.cpp)
+        target_include_directories(native_lan_profile_test PRIVATE runtime/src runtime/include)
+        add_test(NAME native_lan_profile COMMAND native_lan_profile_test)
+        add_executable(native_lan_dispatch_test tests/native_lan_dispatch_test.cpp runtime/src/native_lan_dispatch.cpp runtime/src/native_lan_backend.cpp runtime/src/native_lan_nifm.cpp runtime/src/native_lan_udp.cpp runtime/src/native_lan_guest.cpp)
+        target_include_directories(native_lan_dispatch_test PRIVATE runtime/src runtime/include)
+        add_test(NAME native_lan_dispatch COMMAND native_lan_dispatch_test)
+        if(WIN32)
+            foreach(native_target native_lan_nifm_test native_lan_preflight native_lan_backend_test native_lan_dispatch_test)
+                target_link_libraries(${native_target} PRIVATE iphlpapi ws2_32)
+            endforeach()
+        endif()
     endif()
     add_executable(native_network_sites_test tests/native_network_sites_test.cpp runtime/src/native_network_trace.cpp)
     target_include_directories(native_network_sites_test PRIVATE runtime/include runtime/src)
@@ -196,6 +226,7 @@ if(NX_TESTS AND NOT ANDROID)
         add_test(NAME gamebuild_coverage COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/gamebuild_coverage_test.py")
         add_test(NAME lan_application_compare COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/lan_application_compare_test.py")
         add_test(NAME lan_trace_compare COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/lan_trace_compare_test.py")
+        add_test(NAME wonder_multiplayer_report COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/wonder_multiplayer_report_test.py")
     endif()
     add_executable(file_io_test tests/file_io_test.cpp)
     target_include_directories(file_io_test PRIVATE runtime/src)
@@ -268,10 +299,14 @@ if(NX_TESTS AND NOT ANDROID)
     add_test(NAME texture_cache COMMAND texture_cache_test)
     find_package(Threads REQUIRED)
     target_link_libraries(recording_epoch_test PRIVATE Threads::Threads)
+    target_link_libraries(steam_dev_test PRIVATE Threads::Threads)
     target_link_libraries(netplay_apply_trace_test PRIVATE Threads::Threads)
     if(TARGET native_lan_udp_test)
         target_link_libraries(native_lan_udp_test PRIVATE Threads::Threads)
         target_link_libraries(native_lan_guest_test PRIVATE Threads::Threads)
+        foreach(native_target native_lan_nifm_test native_lan_preflight native_lan_backend_test native_lan_memory_test native_lan_dispatch_test)
+            target_link_libraries(${native_target} PRIVATE Threads::Threads)
+        endforeach()
     endif()
     add_executable(stream_cache_test tests/stream_cache_test.cpp runtime/src/stream_cache.cpp)
     target_include_directories(stream_cache_test PRIVATE runtime/src)
@@ -525,6 +560,9 @@ set(NX_RUNTIME_SOURCES
     runtime/src/hle_vi.cpp
     runtime/src/hle_hid.cpp
     runtime/src/hle_net.cpp
+    runtime/src/native_lan_runtime.cpp
+    runtime/src/steam_dev.cpp
+    runtime/src/steam_dev_runtime.cpp
     runtime/src/native_network_trace.cpp
     runtime/src/native_network_trace_runtime.cpp
     runtime/src/hle_audio.cpp
@@ -628,7 +666,9 @@ set_source_files_properties(runtime/src/overlay/overlay_vk.cpp PROPERTIES
     COMPILE_DEFINITIONS "IMGUI_IMPL_VULKAN_NO_PROTOTYPES")
 file(GLOB NX_GAME_SOURCES CONFIGURE_DEPENDS "${NX_GAME_DIR}/*.cpp")
 if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-    list(APPEND NX_RUNTIME_SOURCES runtime/src/native_lan_udp.cpp)
+    list(APPEND NX_RUNTIME_SOURCES runtime/src/native_lan_udp.cpp runtime/src/native_lan_guest.cpp
+        runtime/src/native_lan_nifm.cpp runtime/src/native_lan_backend.cpp runtime/src/native_lan_memory.cpp
+        runtime/src/native_lan_profile.cpp runtime/src/native_lan_dispatch.cpp)
     list(APPEND NX_RUNTIME_SOURCES runtime/src/netplay_wire.cpp runtime/src/netplay_save.cpp runtime/src/netplay_session.cpp runtime/src/netplay_game.cpp runtime/src/netplay_content.cpp)
     if(NOT NX_GAME_LIBRARY)
         list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/update_crypto.c)
@@ -754,7 +794,7 @@ else()
     if(MINGW)
         # LLVM-MinGW ships the XAudio2 2.9 import library under its SDK name. Its plain "xinput" is XInput 1.3 (the
         # DirectX 2010 redistributable, missing on a clean Windows); 1.4 ships with Windows 8 and later.
-        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput1_4 xaudio2_9 ole32 psapi shell32 uuid winhttp ws2_32)
+        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput1_4 xaudio2_9 ole32 psapi shell32 uuid winhttp ws2_32 iphlpapi)
         if(NX_GAME_LIBRARY)
             # The C++ runtime shared with the game code library (one copy: LongJmp is thrown here and caught there),
             # so libc++.dll and libunwind.dll go next to the program. The UCRT stays a system DLL.
@@ -768,7 +808,7 @@ else()
             target_link_options(${NX_GAME} PRIVATE -static)
         endif()
     else()
-        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput xaudio2 ole32 psapi winhttp ws2_32)
+        target_link_libraries(${NX_GAME} PRIVATE ${NX_GAME_MODULES} xinput xaudio2 ole32 psapi winhttp ws2_32 iphlpapi)
     endif()
     if(WIN32)
         target_link_libraries(${NX_GAME} PRIVATE SDL3::SDL3-static)
@@ -811,6 +851,17 @@ if(NX_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
 endif()
 target_compile_definitions(${NX_GAME} PRIVATE NX_GAME_NAME="${NX_GAME}" NX_GAMELIB_FILE="${NX_GAMELIB_FILE}"
                            NX_GAME_LIBRARY=$<BOOL:${NX_GAME_LIBRARY}> NX_VERSION_STRING="${NX_VERSION}")
+# Capabilities are bound to the exact binary so developer launchers reject stale builds.
+set(NX_MANIFEST_NATIVE_LAN OFF)
+if(WIN32 AND NX_GAME STREQUAL "wonder")
+    set(NX_MANIFEST_NATIVE_LAN ON)
+endif()
+add_custom_command(TARGET ${NX_GAME} POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:${NX_GAME}>"
+        "-DOUTPUT=$<TARGET_FILE_DIR:${NX_GAME}>/${NX_GAME}-features.json"
+        "-DGAME=${NX_GAME}" "-DNATIVE_LAN=${NX_MANIFEST_NATIVE_LAN}" "-DSTEAM_DEV=${NX_MANIFEST_NATIVE_LAN}"
+        -P "${CMAKE_SOURCE_DIR}/tools/write_runtime_features.cmake")
+
 # SuperWonders Update (launcher/updates.cpp): with a release key's public half (tools/sign_update.py --public), only
 # signed releases are installed; without one, GitHub's SHA-256 of the archive is still required.
 set(SUPERWONDERS_UPDATE_PUBKEY "" CACHE STRING "Release signing key, public half (128 hex digits); empty: not required")
@@ -831,6 +882,17 @@ if(NX_TESTS AND NOT ANDROID)
 endif()
 
 if(NX_TESTS AND WIN32)
+  add_test(NAME native_lan_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+           -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_lan_launch_test.ps1")
+  add_test(NAME wonder_steam_dev_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+           -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/wonder_steam_dev_test.ps1")
+  add_executable(native_lan_loader_test tests/native_lan_loader_test.cpp runtime/src/loader.cpp runtime/src/memory.cpp runtime/src/native_lan_profile.cpp)
+  target_include_directories(native_lan_loader_test PRIVATE runtime/src runtime/include)
+  target_link_libraries(native_lan_loader_test PRIVATE Threads::Threads)
+  foreach(loader_mode success reject cached throw)
+    add_test(NAME native_lan_loader_${loader_mode} COMMAND native_lan_loader_test ${loader_mode})
+    set_tests_properties(native_lan_loader_${loader_mode} PROPERTIES TIMEOUT 30)
+  endforeach()
   add_test(NAME local_coop_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/local_coop_launch_test.ps1")
   add_test(NAME lan_installer COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass

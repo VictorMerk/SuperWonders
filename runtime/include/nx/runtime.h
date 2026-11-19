@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <span>
 
 #include <nx/cpu.h>
 #include <nx/module.h>
@@ -85,7 +86,8 @@ struct LoadedModule {
     Fn* table;  // text offset / 4 -> function
 };
 
-void load_modules(const ModuleInfo* const* mods, size_t count, const std::string& data_dir);
+void load_modules(const ModuleInfo* const* mods, size_t count, const std::string& data_dir,
+                  void (*before_relocations)() = nullptr);
 uint64_t find_symbol(const char* name);  // 0 when not found
 const LoadedModule* module_at(uint64_t addr);
 std::string describe(uint64_t addr);  // "sdk+0x1234 (symbol+0x10)"
@@ -104,6 +106,10 @@ uint64_t hle_address(const char* name);  // thunk address; unknown names get a l
 uint64_t hle_address_or(const char* name, HleFn fallback);  // unknown names get `fallback`
 const char* hle_current_name();  // inside an HLE function: the name its thunk was made for
 HleFn hle_lookup(const char* name);
+struct HleBinding { const char* name; HleFn function; };
+// Startup callback only: rejects late/cached aliases; leaves registry intact on failure.
+bool hle_replace_before_relocations(std::span<const HleBinding> bindings);
+bool hle_thunk_cached(const char* name);
 // Player 1's buttons (NpadButton bits) as the game last read them through hid: after the overlay and remapping took
 // what they use, so what the game itself sees. 0 before the first read.
 uint64_t hid_buttons();

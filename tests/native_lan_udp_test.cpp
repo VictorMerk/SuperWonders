@@ -81,6 +81,10 @@ int main() {
     const int sender = socket(udp), receiver = socket(udp);
     const Address source = bind_loopback(udp, sender), destination = bind_loopback(udp, receiver);
     check(bool(udp.set_option(sender, Option::Broadcast, true)) && bool(udp.set_option(receiver, Option::ReuseAddress, true)), "supported boolean options");
+    check(udp.get_option(sender, Option::Broadcast).value == 1 && udp.get_option(receiver, Option::ReuseAddress).value == 1,
+          "boolean option getters query installed OS state");
+    check(bool(udp.set_option(sender, Option::Broadcast, false)) && udp.get_option(sender, Option::Broadcast).value == 0,
+          "boolean getter observes actual disabled state");
     for (int ttl : {1, 64, 255}) {
         check(bool(udp.set_unicast_ttl(sender, ttl)), "set valid unicast TTL");
         const auto actual = udp.get_unicast_ttl(sender);
@@ -89,7 +93,8 @@ int main() {
     check(udp.set_unicast_ttl(sender, 0).error == Invalid && udp.set_unicast_ttl(sender, 256).error == Invalid &&
           udp.get_unicast_ttl(sender).value == 255, "invalid TTL rejected without changing installed option");
     check(udp.set_unicast_ttl(-1, 64).error == BadDescriptor && udp.get_unicast_ttl(-1).error == BadDescriptor &&
-          udp.set_option(-1, Option::ReusePort, true).error == BadDescriptor, "new options reject invalid descriptors");
+          udp.set_option(-1, Option::ReusePort, true).error == BadDescriptor && udp.get_option(-1, Option::Broadcast).error == BadDescriptor,
+          "new options reject invalid descriptors");
 #if defined(SO_REUSEPORT) && !defined(_WIN32)
     {
         const auto native = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -103,7 +108,7 @@ int main() {
     }
 #else
     check(udp.set_option(receiver, Option::ReusePort, true).error == Unsupported &&
-          udp.set_option(receiver, Option::ReusePort, false).error == Unsupported,
+          udp.set_option(receiver, Option::ReusePort, false).error == Unsupported && udp.get_option(receiver, Option::ReusePort).error == Unsupported,
           "reuseport explicitly unsupported without native capability, never aliased to reuseaddr");
 #endif
     std::array<std::byte, 8> data{std::byte{1}, std::byte{2}, std::byte{0}, std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
@@ -170,7 +175,8 @@ int main() {
         check(udp.send_to(sender, data, 0, destination).error == Interrupted && udp.socket(2, 2, 17).error == Interrupted,
               "cancelled adapter cannot begin new traffic");
         check(udp.set_unicast_ttl(sender, 64).error == Interrupted && udp.get_unicast_ttl(sender).error == Interrupted &&
-              udp.set_option(sender, Option::ReusePort, true).error == Interrupted, "new options preserve permanent cancellation");
+              udp.set_option(sender, Option::ReusePort, true).error == Interrupted && udp.get_option(sender, Option::Broadcast).error == Interrupted,
+              "new options preserve permanent cancellation");
         check(bool(udp.close(sender)) && bool(udp.close(receiver)), "close still works after cancellation");
     }
     {

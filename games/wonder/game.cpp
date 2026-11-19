@@ -15,6 +15,7 @@
 
 #include "platform.h"
 #include "netplay_game.h"
+#include "steam_dev_runtime.h"
 #include "nvn/nvn_ultrawide.h"
 
 namespace nx {
@@ -361,6 +362,7 @@ void game::renderer_start() {}
 void game::first_frame() {}
 
 void game::frame_presented(uint64_t now_ns, int present_interval) {
+    steam_dev::pump_current();
     if (lan::active()) {
         const auto rate=lan::simulation_rate();
         store_frame_step(1.0f/float(rate));

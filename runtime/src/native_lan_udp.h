@@ -63,6 +63,7 @@ public:
     // ReusePort uses real SO_REUSEPORT where available; Windows explicitly
     // returns Unsupported rather than substituting different sharing semantics.
     Result set_option(int fd, Option option, bool enabled);
+    Result get_option(int fd, Option option); // Real OS boolean0/1, not cached success.
     // Unicast IP_TTL only. Does not alter multicast TTL=1 or address policy.
     // Setter accepts1..255; getter returns the real OS option value.
     Result set_unicast_ttl(int fd, int ttl);

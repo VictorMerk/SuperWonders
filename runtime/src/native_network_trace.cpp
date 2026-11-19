@@ -6,7 +6,7 @@
 
 namespace nx::native_net {
 namespace {
-enum Kind { Mode, IpConfig, Socket, Bind, SendTo, RecvFrom, Poll, Errno, Ssl, Friends, MainOpaque, MainMode };
+enum Kind { Mode, IpConfig, Socket, Bind, SendTo, RecvFrom, Poll, Errno, Ssl, Friends, MainOpaque, MainMode, MainObjectMode };
 struct Spec { const char* symbol; const char* label; };
 constexpr Spec specs[] = {
     {"_ZN2nn4nifm19SetLocalNetworkModeEb", "nifm.SetLocalNetworkMode"},
@@ -20,7 +20,7 @@ constexpr Spec specs[] = {
     {"_ZN2nn3ssl10InitializeEv", "ssl.Initialize"},
     {"_ZN2nn7friends27CheckFriendListAvailabilityEPbRKNS_7account3UidE", "friends.CheckFriendListAvailability"},
 };
-static_assert(std::size(specs) + 3 == kMaxHooks);
+static_assert(std::size(specs) + 5 == kMaxHooks);
 Census* owner = nullptr; // Published before guest execution, retired after it stops.
 template<size_t I> void wrapper(CPU& cpu) { owner->invoke(I, cpu); }
 template<size_t... I> constexpr auto wrappers(std::index_sequence<I...>) {
@@ -73,12 +73,16 @@ size_t Census::install(bool enabled, const ModuleInfo& sdk, Fn* table, Region ma
 }
 size_t Census::install_main(bool enabled, const ModuleInfo& main, Fn* table,
                             std::span<const uint8_t> image, std::string_view expected_build,
-                            std::span<const GuardedSite> sites, Sink sink) {
+                            std::span<const GuardedSite> sites, Sink sink, ScalarReader reader) {
     if(!enabled || !table || !main.build_id || expected_build.empty() ||
        expected_build!=main.build_id || (owner && owner!=this) || sites.empty() ||
-       sites.size()>3 || count_+sites.size()>kMaxHooks || main.text_size<32) return 0;
+       sites.size()>5 || count_+sites.size()>kMaxHooks || main.text_size<32 ||
+       (scalar_reader_ && reader && scalar_reader_!=reader)) return 0;
     for(size_t i=0;i<sites.size();++i) {
         const auto& site=sites[i];
+        if(site.mode_source!=ModeSource::None &&
+           (site.mode_from_x1 || !reader ||
+            (site.mode_source!=ModeSource::StateX0 && site.mode_source!=ModeSource::ControlX1))) return 0;
         if((site.offset&3) || site.offset<main.text || site.offset-main.text>main.text_size-32 ||
            site.offset>main.text_size-4 || site.offset>image.size() || image.size()-site.offset<32 ||
            !site.operation || !*site.operation || !table[site.offset/4] ||
@@ -87,10 +91,13 @@ size_t Census::install_main(bool enabled, const ModuleInfo& main, Fn* table,
         for(size_t j=0;j<count_;++j) if(slots_[j].entry==table+site.offset/4) return 0;
     }
     main_={main.base,main.text_size,main.text}; sink_=sink;
+    if(reader) scalar_reader_=reader;
     for(const auto& site:sites) {
         auto& slot=slots_[count_];
         slot.entry=table+site.offset/4; slot.original=*slot.entry;
-        slot.kind=site.mode_from_x1?MainMode:MainOpaque; slot.operation=site.operation;
+        slot.kind=site.mode_source!=ModeSource::None?MainObjectMode:
+            site.mode_from_x1?MainMode:MainOpaque;
+        slot.mode_source=site.mode_source; slot.operation=site.operation;
         owner=this; *slot.entry=thunks[count_++];
     }
     return sites.size();
@@ -122,6 +129,19 @@ void Census::invoke(size_t index, CPU& cpu) {
     switch (slot.kind) {
     case Mode: f[0] = bounded(cpu.x[0], 1); break;
     case MainMode: f[0] = bounded(cpu.x[1], 3); break;
+    case MainObjectMode: {
+        // Entry observation only: this is not successful activation/networking.
+        // Record no pointer, object bytes or out-of-range scalar.
+        const auto base=cpu.x[slot.mode_source==ModeSource::StateX0?0:1];
+        const uint64_t offset=slot.mode_source==ModeSource::StateX0?0x0c:0x3c;
+        uint32_t mode=0;
+        f[1]=0; // 0=unreadable/invalid address; 1=copy succeeded.
+        if(base && base<=UINT64_MAX-offset && scalar_reader_ &&
+           scalar_reader_(base+offset,mode)) {
+            f[0]=bounded(mode,3); f[1]=1;
+        }
+        break;
+    }
     case Socket: // family, type/flags, protocol; no descriptor or address.
         f = {bounded(cpu.x[0], 255), bounded(cpu.x[1], 0xffffff), bounded(cpu.x[2], 65535), -1}; break;
     case Bind: f[0] = bounded(cpu.x[2], 256); break; // sockaddr length only
@@ -149,7 +169,7 @@ void Census::invoke(size_t index, CPU& cpu) {
     };
     try { slot.original(cpu); }
     catch (...) { event.exception = true; finish(); throw; }
-    if (slot.kind != Mode && slot.kind != MainOpaque && slot.kind != MainMode) {
+    if (slot.kind != Mode && slot.kind != MainOpaque && slot.kind != MainMode && slot.kind != MainObjectMode) {
         event.has_result = true;
         if (slot.kind == IpConfig || slot.kind == Ssl || slot.kind == Friends) {
             event.result = uint32_t(cpu.x[0]); event.error = event.result != 0;

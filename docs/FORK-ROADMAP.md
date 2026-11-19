@@ -10,6 +10,37 @@ Earlier follow-up: [pause-background fix, 2x–8x interpolation, controls, diagn
 including native screenshots and explicit test/measurement limits. The earlier measurements below describe the
 initial preview; they are not guarantees for the later build or other hardware.
 
+## Current checkpoint (2026-11-20)
+
+The sections below preserve earlier experiments and measurements. They do not
+establish the status of the latest build. Two later physical-PC sessions exposed
+substantial gameplay desync in the shared-input LAN mode, despite matching input
+traces. That mode remains experimental and is unsuitable for claiming synchronized
+course completion.
+
+The current follow-up adds a separate, opt-in Windows Product.120 native UDP/NIFM
+provider, guarded before guest imports are linked, plus isolated developer launchers
+and a Steam AppID480 API-bootstrap prototype. All 95 configured CPU tests pass.
+Real native room discovery, two-PC gameplay, Steam Remote Play Together and FPS
+improvements are not established. The next physical test is deferred until both
+players' PCs are available; Steam testing also needs the official SDK runtime.
+
+The README, [playing guide](PLAYING-WONDER.md), [multiplayer guide](MULTIPLAYER.md)
+and [synchronization investigation](WONDER-SYNC-INVESTIGATION.md) describe current
+behavior and remaining checks. Reopened pause-menu blur and stage-map shadows
+still require visual reproduction and verification.
+
+## Requested co-op interaction extension
+
+Player-to-player collision and carrying are requested features, not completed
+runtime options. Initial Product.120 analysis found collision-table and carry/throw
+graph names, but those names alone do not establish an arbitrary-player contact or
+attachment ABI. The implementation needs verified collision filtering, attach and
+detach behavior, state/animation transitions, death/scene cleanup and consistency
+across participating peers. Existing character-specific riding is a useful baseline
+for a later controller test. No guessed player-position or velocity writes are
+installed. The feature must be tested separately from repairing LAN synchronization.
+
 ## Evidence from the reported sessions
 
 The Windows logs identify an RX 570 using the AMD Vulkan 1.3 driver. They show:
@@ -70,7 +101,7 @@ The Windows logs identify an RX 570 using the AMD Vulkan 1.3 driver. They show:
   scene at 720p. This is one machine/scene measurement, not a general performance
   guarantee. Frame generation remains off by default and can produce artifacts.
 
-## Native LAN and remaining validation
+## Earlier shared-input LAN experiments (2026-11-17)
 
 The native launcher now provides a cancellable host/join lobby with private IPv4
 addresses, pairing codes, 2-4 peer slots and authenticated host-save initialization.

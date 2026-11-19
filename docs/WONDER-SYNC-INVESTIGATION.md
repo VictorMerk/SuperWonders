@@ -64,78 +64,123 @@ threads execute, so installation does not race existing guest SDK calls.
 The `native-net experimental sdk-census` native-log entries contain allowlisted
 scalar parameters, module-relative callers, return/error classification and
 duration. Logging samples early calls and powers of two, capped at 256 events.
-Normal process exit also logs at most 13 cumulative operation summaries. Their
-atomic counters are non-transactional; a concurrent call may still be finishing.
+Normal Windows shutdown explicitly emits at most 15 cumulative operation
+summaries before `ExitProcess`, with an idempotent `atexit` fallback. Abrupt
+termination can still lose summaries. Sampled entries are logged as calls finish.
+The atomic counters are non-transactional; a concurrent call may still be finishing.
 The SDK allowlist covers local-network-mode selection, IP configuration, UDP socket
 operations, polling, errno and selected SSL/friend availability entry points.
 Direct HLE calls bypassing these SDK entries are excluded; absence of a census
 event does not prove absence of all networking activity.
 
-Three additional Product120 main-module probes observe the LAN state factory,
-the common network-state constructor and network preparation. They require the
+Five additional Product120 main-module probes observe LAN state allocation,
+the common network-state constructor, network preparation, activation entry and
+selector entry. They require the
 exact source build identity and matching 32-byte code-prefix hashes before any
 main entry is wrapped. Unknown/mismatched builds keep their original entries.
 The constructor/preparation probes report only an integer mode from 0 through 3;
 they read no guest object and suppress opaque return values. The factory probe
-observes entry without forcing selection. This separates an unselected factory
-from later SDK setup failure without changing game behavior.
+observes allocation without forcing selection. Ordinary setup
+constructs all three modes, so allocation alone is not proof of LAN selection.
+Activation and selector probes copy only a checked four-byte mode scalar under
+a guest-memory mapping lease; unreadable/unknown values are reported as unavailable.
+An entry observation does not prove activation completed. These probes preserve
+the original handlers and never select or force a networking mode.
 
-The purpose is to identify the reachable game-native path before implementing
-an adapter. This does not provide Nintendo friends, native LAN rooms or GameShare.
-One-host streamed local co-op remains a separate option that needs a physical
-controller/streaming test.
+The census still observes the original path; it is skipped when the owned native
+provider below is installed. It does not provide Nintendo friends, native LAN
+rooms or GameShare. A matching call trace does not establish room creation or
+gameplay synchronization.
 
-## Native UDP adapter core
+## Opt-in native networking provider
 
-`native_lan_udp` is a separately tested transport foundation. It is compiled on
-Windows/Linux desktop, but has no game caller, environment activation, HLE hooks
-or service integration. Constructing it without explicit enablement creates no
-host sockets. It cannot currently enable a native Wonder room.
+`NX_NATIVE_LAN=1` now installs a Windows runtime provider for the verified Wonder
+Product120 source. Both module identities, code-prefix hashes, aliases and
+existing handlers are checked before an atomic startup transaction, ahead of
+import relocation and guest execution. The checked profile replaces 180 aliases
+and preserves 39 others. Disabled startup leaves the existing handlers unchanged.
+Native mode is exclusive with shared-input LAN and the Steam developer mode; it
+does not force the game to select its native LAN factory.
 
-The core implements bounded IPv4 UDP descriptors, BSD address conversion,
-network byte order, private/local destination checks, bounded receive copies,
-datagram truncation reporting, nonblocking send/receive/peek, polling, broadcast
-and address-reuse options, mapped errors and cancellation. Shared socket ownership
-protects pending polls from OS-handle reuse during close. Tests use loopback only.
-Unicast TTL uses checked OS setting/readback from 1 through 255. Reuse-port uses
-the real platform capability where available; Windows reports unsupported rather
-than substituting different address-reuse semantics.
+The installed provider connects the bounded UDP core, guest ABI adapter, mapped
+memory access and local-interface/nifm lifecycle. Its socket initialization owns
+real host resources and coherent guest TLS errno aliases; it does not fabricate
+Nintendo's original SDK IPC client or modify that client's initialization state.
+Provider initialization can succeed while the network remains unavailable.
+Availability requires local mode, an explicit request and a real, unambiguous
+eligible private interface. Internet mode stays offline. The actual-host
+preflight found four eligible interfaces and correctly reported ambiguity;
+this host requires an explicit `NX_NATIVE_LAN_ADDRESS` selection. That preflight
+does not establish a connection to the second PC.
 
-Important integration boundaries remain: guest-memory validation, exact imported
-ABI wrappers, nifm lifecycle and interface selection, blocking-operation retry,
-multicast membership and any additional socket options actually used by Pia.
-TCP, IPv6, connected UDP and Nintendo account/cloud services are unsupported.
-The core always uses nonblocking host sockets, including when send/receive flags
-are zero. Poll accepts finite timeouts from 0 through 1,000 ms; a future adapter
-must implement longer/infinite guest waits with cancellation-aware retries.
-Windows tests do not establish Linux execution or physical LAN gameplay.
+Windows interface enumeration supplies actual IPv4 address, prefix, gateway and
+DNS metadata. Unknown required metadata fails configuration rather than becoming
+an invented value. Reported public DNS addresses are metadata only; the provider
+performs no DNS queries. Linux transport/interface foundations exist, but the
+runtime guest-memory mapper currently fails closed outside Windows; per-interface
+Linux DNS metadata also remains unsupported.
 
-The separately tested, uninstalled `native_lan_guest` boundary translates the
-checked raw register ABI through an injected, validated guest-memory interface.
-It never casts a numeric guest address into a host pointer. It validates the
-per-thread TLS errno cell and output spans before network I/O, preserves caller
-registers except the operation's return value, and isolates errors between guest
-threads. An unexpected output-copy failure after host I/O cannot safely fall
-back to the original handler or resume as though no operation happened.
+The guest boundary validates numeric addresses through `RuntimeGuestMemory`.
+Successful validations pin the covered mappings and permissions through the
+whole call, including a poll wait. Overlapping runtime VM mutations wait for the
+pins; unrelated VM operations can proceed. Caller CPU state is preserved except
+for the declared return value; errors use the calling guest thread's TLS.
+Unexpected output-copy failure after host I/O stops dispatch without falling back
+to an original handler that could repeat the operation.
 
-Source-specific cases matter: raw IPv4 input may have length byte zero, which is
+Source-specific behavior is retained: raw IPv4 input can have length byte zero,
 normalized only in a private copy; sender capacity can be 28 bytes; optional
-sender outputs must avoid reading unused pointers. SDK zero-sized send/receive
-returns zero without transmitting/consuming a datagram, whereas the underlying
-host core deliberately supports actual zero-length UDP packets. CPU tests check
-these distinctions with fake guest mappings and real loopback datagrams.
+sender outputs avoid unused pointer reads. SDK zero-sized send/receive returns
+zero without transmitting or consuming a datagram. The underlying host core
+separately supports real zero-length UDP packets. Verified Product120 call sites
+expect would-block errno 11 despite the BSD address layout. Other Linux-numbered
+error mappings follow the matching SDK/MKW ABI and still need native-path checks.
 
-This boundary is not installed or linked into active game handlers. Its direct
-TLS adapter requires a separately established guest context. It does not model
-SDK socket-client initialization: the original uninitialized SDK getter returns
-22 and its setter does nothing. Future integration must establish the lifecycle
-and coherent error aliases before dispatch, without inventing an SDK client or
-reporting fabricated initialization success.
+The core implements bounded descriptors, private/local IPv4 policy, nonblocking
+send/receive/peek, truncation, cancellation and poll. Shared ownership protects
+pending polls from OS-handle reuse during close. The adapter provides real scalar
+socket-option setting/readback, socket-name queries and shutdown. Unicast TTL
+accepts 1 through 255; reuse-port uses the real platform capability and is
+explicitly unsupported on Windows. Fcntl exposes the actual always-nonblocking
+contract: requests for blocking behavior are unsupported. Poll accepts finite
+0 through 1,000 ms waits; longer/infinite guest waits, multicast membership,
+additional options, TCP, IPv6 and connected sends remain unsupported. Nintendo
+accounts, online authentication, cloud services and GameShare are not provided.
 
-The BSD address layout does not imply FreeBSD error numbers. Verified Product120
-call sites expect would-block error 11. The other Linux-numbered error mappings
-follow the matching SDK/MKW ABI and still need confirmation against the native
-game path before guest handlers are installed.
+The native log contains bounded call diagnostics. Explicit Windows shutdown now
+stops this provider and exports `native-lan-stats.json` before `ExitProcess`, with
+`atexit` retained as a fallback. Its counters are non-transactional; durations
+include waits and are not RTT. Returned receive bytes include peeks and do not
+measure wire traffic or prove world-state agreement. Forced termination can
+still prevent export.
+
+## Steam AppID480 developer prototype
+
+`NX_STEAM_DEV=1` enables a separate Windows API-bootstrap prototype for one-host
+local co-op experimentation. The developer launcher prepares an isolated fixture;
+the runtime checks executable-directory/CWD agreement, an AppID480 file and an
+explicit caller-provided `steam_api64.dll` path. The controlled loader avoids
+implicit current-directory/PATH DLL searches. Normal startup neither loads Steam
+nor changes AppID files, the working directory or the normal build's DLLs.
+
+The bootstrap calls initialization before the launcher, pumps callbacks from
+Wonder's presented-frame hook and shuts down explicitly in the Windows exit path.
+Callback execution holds no bootstrap state mutex; reentrant shutdown is deferred
+until the active callback returns, with serialized, exactly-once teardown.
+It does not restart Steam, read friends or send invitations. The official SDK is
+not available in the current setup, so real SDK/client initialization has not
+been tested. Injected CPU mocks cover the lifecycle and failures. Initialization
+success alone would not certify the overlay, Remote Play Together, lobbies, P2P
+transport or usable streamed multiplayer.
+
+## Current validation boundary
+
+All 95 configured CPU tests passed, including transport/ABI loopback, guest VM
+pins, provider lifecycle/profile dispatch and Steam mocks. These checks do not
+certify native room creation, physical two-PC gameplay, synchronized actor/world
+state, latency, FPS or the reported graphics symptoms. The next native/streaming
+playtest and the reserved renderer/visual checks remain pending; no game/GPU or
+second-PC session is authorized while the user is playing another game.
 
 ## Renderer changes in the same follow-up
 

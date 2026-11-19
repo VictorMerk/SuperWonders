@@ -126,6 +126,79 @@ int main() {
     };
     guest_error(adapter,b,memory,GuestCall::RecvFrom,WouldBlock,{uint64_t(receiver),0x5000,8,0,0,0});
     check(memory.get32(ea)==77,"would-block errno does not leak to sender guest thread");
+    // Real scalar option translation/readback, with complete guest bounds.
+    const auto set_option=[&](uint32_t level,uint32_t option,uint32_t value) {
+        memory.put32(0x8000,value);
+        check(call(adapter,a,GuestCall::SetSockOpt,{uint64_t(sender),level,option,0x8000,4}) && a.x[0]==0,"guest SetSockOpt actual OS option");
+    };
+    const auto get_option=[&](uint32_t level,uint32_t option) {
+        memory.put32(0x8100,28);
+        check(call(adapter,a,GuestCall::GetSockOpt,{uint64_t(sender),level,option,0x8200,0x8100}) && a.x[0]==0,"guest GetSockOpt actual OS query");
+        check(memory.get32(0x8100)==4 && memory.bytes[0x8204-Memory::base]==std::byte{0xcc},"scalar option copy bounded to4bytes with actual length");
+        return memory.get32(0x8200);
+    };
+    set_option(0xffff,0x20,1);check(get_option(0xffff,0x20)==1,"broadcast flag actually enabled");
+    set_option(0xffff,0x20,0);check(get_option(0xffff,0x20)==0,"broadcast flag actually disabled");
+    set_option(0xffff,4,1);check(get_option(0xffff,4)==1,"reuseaddr readback");
+    for(uint32_t ttl:{1u,64u,255u}) { set_option(0,4,ttl);check(get_option(0,4)==ttl,"unicastTTL preserved by real OS"); }
+    memory.put32(0x8000,0);
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,Invalid,{uint64_t(sender),0,4,0x8000,4});
+    memory.put32(0x8000,256);
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,Invalid,{uint64_t(sender),0,4,0x8000,4});
+    check(get_option(0,4)==255,"invalid TTL never changes host state");
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,Invalid,{uint64_t(sender),0,4,0x8000,3});
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,Fault,{uint64_t(sender),0,4,~uint64_t(1),4});
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,ProtocolOption,{uint64_t(sender),6,1,0x8000,4});
+    memory.put32(0x8100,3);memory.put32(0x8200,0x12345678);
+    guest_error(adapter,a,memory,GuestCall::GetSockOpt,Invalid,{uint64_t(sender),0,4,0x8200,0x8100});
+    check(memory.get32(0x8100)==3 && memory.get32(0x8200)==0x12345678,"short option capacity fails without partial output");
+    memory.put32(0x8100,4);memory.deny_write=0x8100;
+    guest_error(adapter,a,memory,GuestCall::GetSockOpt,Fault,{uint64_t(sender),0,4,0x8200,0x8100});
+    memory.deny_write=0;
+    guest_error(adapter,a,memory,GuestCall::GetSockOpt,Fault,{uint64_t(sender),0,4,~uint64_t(1),0x8100});
+    guest_error(adapter,a,memory,GuestCall::GetSockOpt,Fault,{uint64_t(sender),0,4,0x8200,~uint64_t(1)});
+    check(memory.get32(0x8100)==4 && memory.get32(0x8200)==0x12345678,"invalid output pointers leave option outputs intact");
+#ifdef _WIN32
+    memory.put32(0x8000,1);
+    guest_error(adapter,a,memory,GuestCall::SetSockOpt,Unsupported,{uint64_t(sender),0xffff,0x200,0x8000,4});
+    guest_error(adapter,a,memory,GuestCall::GetSockOpt,Unsupported,{uint64_t(sender),0xffff,0x200,0x8200,0x8100});
+#else
+    const auto native_reuse=udp.set_option(sender,Option::ReusePort,true);
+    memory.put32(0x8000,1);
+    if(native_reuse) {
+        set_option(0xffff,0x200,1);check(get_option(0xffff,0x200)==1,"native reuseport real readback");
+    } else guest_error(adapter,a,memory,GuestCall::SetSockOpt,native_reuse.error,{uint64_t(sender),0xffff,0x200,0x8000,4});
+#endif
+    // GetSockName truncates only the copy; required length stays16.
+    memory.put32(0x8100,28);
+    check(call(adapter,a,GuestCall::GetSockName,{uint64_t(sender),0x8300,0x8100}) && a.x[0]==0 && memory.get32(0x8100)==16 &&
+          std::equal(source.begin(),source.end(),memory.bytes.begin()+0x8300-Memory::base),"guest Getsockname real bound IPv4 address");
+    check(memory.bytes[0x8310-Memory::base]==std::byte{0xcc},"Getsockname does not overwrite capacity28 tail");
+    memory.put32(0x8100,2);
+    check(call(adapter,a,GuestCall::GetSockName,{uint64_t(sender),0x8400,0x8100}) && a.x[0]==0 && memory.get32(0x8100)==16 &&
+          memory.bytes[0x8400-Memory::base]==std::byte{16} && memory.bytes[0x8401-Memory::base]==std::byte{2} &&
+          memory.bytes[0x8402-Memory::base]==std::byte{0xcc},"Getsockname short capacity bounded copy");
+    memory.put32(0x8100,0);
+    check(call(adapter,a,GuestCall::GetSockName,{uint64_t(sender),0,0x8100}) && a.x[0]==0 && memory.get32(0x8100)==16,"Getsockname zero capacity permits NULL address");
+    memory.put32(0x8100,28);
+    guest_error(adapter,a,memory,GuestCall::GetSockName,Fault,{uint64_t(sender),~uint64_t(1),0x8100});
+    guest_error(adapter,a,memory,GuestCall::GetSockName,Fault,{uint64_t(sender),0x8300,~uint64_t(1)});
+    check(memory.get32(0x8100)==28,"Getsockname invalid output leaves input length unchanged");
+    // Logical nonblocking is truthful; requests for blocking are not accepted.
+    check(call(adapter,a,GuestCall::Fcntl,{uint64_t(sender),3}) && a.x[0]==0x802,"F_GETFL reflects validated always-nonblocking descriptor");
+    for(uint32_t flags:{0x800u,0x802u})check(call(adapter,a,GuestCall::Fcntl,{uint64_t(sender),4,flags}) && a.x[0]==0,"F_SETFL accepts supported already-nonblocking flags");
+    for(uint32_t flags:{0u,2u,0x1000u})guest_error(adapter,a,memory,GuestCall::Fcntl,Unsupported,{uint64_t(sender),4,flags});
+    guest_error(adapter,a,memory,GuestCall::Fcntl,Unsupported,{uint64_t(sender),9,0});
+    guest_error(adapter,a,memory,GuestCall::Fcntl,BadDescriptor,{negative(-1),3});
+    guest_error(adapter,a,memory,GuestCall::Shutdown,Invalid,{uint64_t(sender),3});
+    guest_error(adapter,a,memory,GuestCall::SendFailure,Unsupported,{uint64_t(sender),~uint64_t(0),8,0});
+    check(memory.get32(eb)==WouldBlock,"new socket errors remain isolated to caller guest TLS");
+    send();check(call(adapter,b,GuestCall::Recv,{uint64_t(receiver),0,0,0,~uint64_t(0),~uint64_t(0)}) && b.x[0]==0,"plain Recv zero capacity consumes no packet");
+    check(call(adapter,b,GuestCall::Recv,{uint64_t(receiver),0x5000,8,0,~uint64_t(0),~uint64_t(0)}) && b.x[0]==8,
+          "plain Recv ignores sender registers and receives queued payload");
+    guest_error(adapter,b,memory,GuestCall::Recv,WouldBlock,{uint64_t(receiver),0x5000,8,0});
+    guest_error(adapter,b,memory,GuestCall::Recv,Invalid,{uint64_t(receiver),0,8,0});
+    guest_error(adapter,b,memory,GuestCall::Recv,Fault,{uint64_t(receiver),0x5000,uint64_t(1)<<32,0});
     guest_error(adapter,a,memory,GuestCall::SendTo,Unsupported,{uint64_t(sender),0x4000,8,0,0,0});
     guest_error(adapter,a,memory,GuestCall::SendTo,Invalid,{uint64_t(sender),0,8,0,0x3200,16});
     guest_error(adapter,a,memory,GuestCall::SendTo,Fault,{uint64_t(sender),0x4000,uint64_t(1)<<32,0,0x3200,16});

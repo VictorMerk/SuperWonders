@@ -1,6 +1,6 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot '../tools/play/Start-Wonder-LocalCoop.ps1')
-$values=@{NX_LAN_MODE='join';NX_LAN_LOBBY_AUTOSTART='join';NX_LAN_ADDRESS='192.168.2.1';NX_TEST_VIRTUAL_ONLY='1';NX_TEST_QUIT_FRAME='12';NX_INPUT_FRAMES='1:A:10';NX_HEADLESS='1';NX_HEADLESS_PRESENT='1';NX_NO_LAUNCHER='0';NX_DATA_ROOT='old';NX_GPU='discrete'}
+$values=@{NX_NATIVE_LAN='1';NX_STEAM_DEV='1';SteamAppId='480';SteamGameId='480';NX_LAN_MODE='join';NX_LAN_LOBBY_AUTOSTART='join';NX_LAN_ADDRESS='192.168.2.1';NX_TEST_VIRTUAL_ONLY='1';NX_TEST_QUIT_FRAME='12';NX_INPUT_FRAMES='1:A:10';NX_HEADLESS='1';NX_HEADLESS_PRESENT='1';NX_NO_LAUNCHER='0';NX_DATA_ROOT='old';NX_GPU='discrete'}
 $old=@{}
 try {
     foreach($key in $values.Keys){$old[$key]=[Environment]::GetEnvironmentVariable($key);[Environment]::SetEnvironmentVariable($key,$values[$key])}

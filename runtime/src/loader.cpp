@@ -17,6 +17,7 @@
 
 #include "platform.h"
 #include "frametrace.h"
+#include "hle_binding_batch.h"
 
 namespace nx {
 
@@ -27,6 +28,7 @@ namespace {
 
 std::mutex g_log_lock;
 FILE* g_log_file = nullptr;
+bool g_before_relocations = false;
 
 std::vector<LoadedModule> g_modules;
 std::unordered_map<std::string, uint64_t> g_exports;
@@ -124,6 +126,11 @@ uint64_t hle_address_or(const char* name, HleFn fallback) {
 }
 
 uint64_t hle_address(const char* name) { return hle_address_or(name, missing_stub); }
+
+bool hle_thunk_cached(const char* name) { return g_thunk_by_name.contains(name); }
+bool hle_replace_before_relocations(std::span<const HleBinding> bindings) {
+    return replace_hle_batch(registry(),bindings,g_before_relocations,hle_thunk_cached);
+}
 
 const char* hle_current_name() { return t_missing_name; }
 
@@ -376,7 +383,8 @@ uint64_t find_symbol(const char* name) {
     return it == g_exports.end() ? 0 : it->second;
 }
 
-void load_modules(const ModuleInfo* const* mods, size_t count, const std::string& data_dir) {
+void load_modules(const ModuleInfo* const* mods, size_t count, const std::string& data_dir,
+                  void (*before_relocations)()) {
     // Map every module first so symbols of all of them are known before relocating.
     for (size_t i = 0; i < count; i++) {
         const ModuleInfo* mi = mods[i];
@@ -424,6 +432,14 @@ void load_modules(const ModuleInfo* const* mods, size_t count, const std::string
         }
         log("loaded %s at %llx (%llu functions, %llu relocs)", mi->name, (unsigned long long)mi->base,
             (unsigned long long)mi->func_count, (unsigned long long)mi->reloc_count);
+    }
+
+    if(before_relocations) {
+        struct Phase {
+            Phase() { g_before_relocations=true; }
+            ~Phase() { g_before_relocations=false; }
+        } phase;
+        before_relocations();
     }
 
     size_t hle = 0, missing = 0, linked = 0;

@@ -788,6 +788,8 @@ if(NX_TESTS AND NOT ANDROID)
 endif()
 
 if(NX_TESTS AND WIN32)
+  add_test(NAME local_coop_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+           -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/local_coop_launch_test.ps1")
   add_test(NAME lan_installer COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/lan_installer_test.ps1")
   set_tests_properties(lan_installer PROPERTIES TIMEOUT 30)

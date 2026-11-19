@@ -23,8 +23,9 @@ including the Product120 source. Unknown builds do not receive that memory patch
   requested shutdown can result in exit code 2 for the peer.
 - A final 1,800-frame physical run checked the extended diagnostics and structured
   transport export on both peers. Both produced captures; no transport timeout,
-  invalid packet or socket error was recorded. Shutdown cancellation is counted
-  separately from a network failure.
+  invalid packet was recorded. One peer observed a socket reset when the other
+  ended the session; this is retained in the error counters rather than hidden.
+  Shutdown cancellation is counted separately from a network failure.
 - The sampled map/house windows averaged approximately 55 FPS with frame generation
   off. Frame-time spikes remain. These runs do not establish an FPS improvement,
   locked 60 FPS, zero input delay, all-actor synchronization or a completed level.

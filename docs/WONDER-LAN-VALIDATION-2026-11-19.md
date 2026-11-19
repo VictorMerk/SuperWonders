@@ -14,6 +14,21 @@ asymmetric audio opens followed by independent controller input.
 The verified frame-governor return site is also selected by executable identity,
 including the Product120 source. Unknown builds do not receive that memory patch.
 
+## Subsequent manual gameplay: synchronization failure
+
+A later two-PC manual session on the same runtime diverged during course play.
+The host reached the goal and waited at a world-map loading event while the
+client continued its course simulation for more than 4,000 committed exchanges.
+The retained input pairs matched, with no recorded transport timeout or invalid
+packet in that session. This demonstrates a simulation/loading failure despite
+a working input transport. The client later exited after its peer disconnected.
+
+The shared-input LAN mode remains experimental and is not certified for normal
+co-op play. The limited routes below do not override this later failure. A lower
+packet count, a different socket transport, or matching input traces alone cannot
+certify a fix. Native game networking and one-host streamed local co-op are
+separate paths; neither has completed a physical gameplay validation here.
+
 ## Validation
 
 - All 72 CPU tests passed after the final diagnostic export change.

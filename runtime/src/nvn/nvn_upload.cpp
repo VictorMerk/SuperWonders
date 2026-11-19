@@ -14,6 +14,7 @@
 #include "nvn_tiling.h"
 #include "texture_cache.h"
 #include "nvn_pipeline_async.h"
+#include "texture_upload_bounds.h"
 #include "platform.h"
 
 namespace nx::nvn {
@@ -69,13 +70,9 @@ void widen_r11g11b10(const uint8_t* src, uint8_t* dst, uint64_t texels) {
 }
 
 // Bytes from `base` to the end of what vkCmdCopyBufferToImage reads for `r`, at `bytes` per bw x bh block.
-uint64_t copy_end(const VkBufferImageCopy& r, uint64_t base, uint32_t bw, uint32_t bh, uint32_t bytes) {
-    uint64_t row_blocks = ((r.bufferRowLength ? r.bufferRowLength : r.imageExtent.width) + bw - 1) / bw;
-    uint64_t image_rows = ((r.bufferImageHeight ? r.bufferImageHeight : r.imageExtent.height) + bh - 1) / bh;
-    uint64_t w = (r.imageExtent.width + bw - 1) / bw, h = (r.imageExtent.height + bh - 1) / bh;
-    uint64_t slices = uint64_t(r.imageExtent.depth) * r.imageSubresource.layerCount;
-    if (!w || !h || !slices) return r.bufferOffset - base;
-    return r.bufferOffset - base + ((slices - 1) * image_rows + (h - 1)) * row_blocks * bytes + w * bytes;
+std::optional<uint64_t> copy_end(const VkBufferImageCopy& r, uint64_t base, uint32_t bw, uint32_t bh, uint32_t bytes) {
+    return texture_copy_end({r.bufferOffset,r.imageExtent.width,r.imageExtent.height,r.imageExtent.depth,
+        r.imageSubresource.layerCount,r.bufferRowLength,r.bufferImageHeight,bw,bh,bytes},base);
 }
 
 // The copies read at most `staged` bytes from `base`, counted at the host format's size. A copy past it reads other
@@ -85,8 +82,13 @@ bool copies_fit(const Texture& t, const VkBufferImageCopy* r, uint32_t n, uint64
                 uint32_t bh, uint32_t bytes) {
     static const bool off = std::getenv("NX_NO_UPLOAD_GUARD") != nullptr;
     uint64_t need = 0;
-    for (uint32_t k = 0; k < n; k++) need = std::max(need, copy_end(r[k], base, bw, bh, bytes));
-    if (off || need <= staged) return true;
+    bool valid=true;
+    for (uint32_t k = 0; k < n; k++) {
+        const auto end=copy_end(r[k],base,bw,bh,bytes);
+        if(!end) { valid=false;need=UINT64_MAX;break; }
+        need=std::max(need,*end);
+    }
+    if (off || (valid && need <= staged)) return true;
     static std::set<uint32_t> logged;  // once per format
     if (logged.insert(t.format).second)
         log("nvn/vk: upload short: texture %ux%u format %#x reads %llu bytes, %llu staged: cleared instead", t.width,
@@ -110,10 +112,10 @@ std::vector<LinearLevel> rgba_levels(const std::vector<LinearLevel>& levels, uin
 // Whether the untiled blocks hold what the decoder reads of level `l`, which can exceed layer_size when the level's
 // block counts disagree with it. Logged when not: the level is left black.
 bool astc_level_fits(const LinearLevel& l, uint32_t layers, uint32_t bw, uint32_t bh, uint64_t untiled) {
-    const uint64_t need = uint64_t((l.width + bw - 1) / bw) * ((l.height + bh - 1) / bh) * 16 * layers;
-    if (l.offset + std::max(need, l.layer_size * layers) <= untiled) return true;
+    const auto need=astc_level_bytes(l.width,l.height,layers,bw,bh,l.layer_size);
+    if (need && texture_span_fits(l.offset,*need,untiled)) return true;
     log("nvn/vk: ASTC level %ux%u x%u: %llu bytes needed, %llu untiled: left black", l.width, l.height, layers,
-        (unsigned long long)need, (unsigned long long)(untiled - l.offset));
+        (unsigned long long)need.value_or(UINT64_MAX), (unsigned long long)(l.offset<=untiled ? untiled-l.offset : 0));
     return false;
 }
 

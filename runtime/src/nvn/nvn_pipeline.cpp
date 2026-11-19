@@ -22,6 +22,7 @@
 
 #include "nvn_pipeline.h"
 #include "pipeline_key.h"
+#include "sampled_view_state.h"
 #include "cache_file.h"
 #include "shader_bundle.h"
 #include "nvn_pipeline_async.h"
@@ -296,7 +297,7 @@ VkDescriptorSetLayout set_layout(const std::vector<VkDescriptorSetLayoutBinding>
 // ---- images ---------------------------------------------------------------------------------------------------------
 
 // Views made for sampling and for rendering, by image; forget_image_views() drops an image's before it is freed.
-using SampledKey = std::tuple<VkImage, VkImageViewType, uint32_t, uint64_t, uint64_t>;
+using SampledKey = std::tuple<VkImage, VkImageViewType, uint32_t, std::array<uint32_t,4>, uint64_t>;
 std::map<SampledKey, VkImageView> g_sampled_views;
 std::map<std::tuple<VkImage, uint32_t, uint32_t, VkFormat>, VkImageView> g_attachment_views;
 // In front of g_sampled_views (a tree walk per sampled texture of every draw): copies of entries it holds, by a hash
@@ -358,23 +359,22 @@ VkImageView view_of(GpuImage& img, VkImageViewType type, const ViewInfo& view) {
     uint32_t swizzle = img.alpha_from_r ? 0 : view.swizzle;  // materialized at upload
     VkComponentMapping m = img.swizzle;
     if (swizzle) {
-        constexpr VkComponentSwizzle kSwizzle[] = {VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ONE,
-                                                   VK_COMPONENT_SWIZZLE_R,    VK_COMPONENT_SWIZZLE_G,
-                                                   VK_COMPONENT_SWIZZLE_B,    VK_COMPONENT_SWIZZLE_A};
-        m = {kSwizzle[swizzle & 0xFF], kSwizzle[(swizzle >> 8) & 0xFF], kSwizzle[(swizzle >> 16) & 0xFF],
-             kSwizzle[swizzle >> 24]};
+        m = {sampled_swizzle(swizzle & 0xFF,m.r),sampled_swizzle((swizzle>>8)&0xFF,m.g),
+             sampled_swizzle((swizzle>>16)&0xFF,m.b),sampled_swizzle(swizzle>>24,m.a)};
     }
-    uint32_t base = std::min(view.base_level, img.levels - 1);
-    uint32_t levels = view.levels ? std::min(view.levels, img.levels - base) : img.levels - base;
-    uint32_t min_layer = std::min(view.min_layer, img.layers - 1);
-    bool whole = base == 0 && levels == img.levels && min_layer == 0 && (!view.layers || view.layers == img.layers);
+    const auto selected=sampled_range(img.levels,img.layers,view.base_level,view.levels,view.min_layer,view.layers,type);
+    if(!selected) return VK_NULL_HANDLE;
+    const auto& range=*selected;
+    const auto [base,levels,min_layer,layers]=range;
+    if(!view_compatible(img,type,layers)) return VK_NULL_HANDLE;
+    bool whole = base == 0 && levels == img.levels && min_layer == 0 && layers == img.layers;
     VkFormat format = view_format(img, view.format);
     if (type == img.view_type && identity(m) && whole && format == img.format) return img.view;
     auto& cache = g_sampled_views;
-    uint64_t range = uint64_t(base) | uint64_t(levels) << 16 | uint64_t(min_layer) << 32 | uint64_t(view.layers) << 48;
     uint32_t mapping = uint32_t(m.r) | uint32_t(m.g) << 8 | uint32_t(m.b) << 16 | uint32_t(m.a) << 24;
     SampledKey key{img.image, type, mapping, range, uint64_t(format)};
-    uint64_t h = uintptr_t(img.image) >> 4 ^ range * 31 ^ mapping ^ uint64_t(type) << 5 ^ uint64_t(format);
+    uint64_t h = uintptr_t(img.image) >> 4 ^ (uint64_t(base) | uint64_t(levels)<<32)*31 ^
+        (uint64_t(min_layer) | uint64_t(layers)<<32)*131 ^ mapping ^ uint64_t(type)<<5 ^ uint64_t(format);
     ViewHit& hit = g_view_hits[(h ^ h >> 8) & 255];
     if (hit.view && hit.key == key) return hit.view;
     auto& v = cache[key];
@@ -384,18 +384,13 @@ VkImageView view_of(GpuImage& img, VkImageViewType type, const ViewInfo& view) {
         ci.viewType = type;
         ci.format = format;
         ci.components = m;
-        uint32_t layers = std::min(view.layers ? view.layers : img.layers - min_layer, img.layers - min_layer);
-        if (type == VK_IMAGE_VIEW_TYPE_2D || type == VK_IMAGE_VIEW_TYPE_1D) layers = 1;
-        if (type == VK_IMAGE_VIEW_TYPE_CUBE) layers = 6;
-        if (type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) layers -= layers % 6;
-        if (!view_compatible(img, type, layers)) return VK_NULL_HANDLE;
         ci.subresourceRange = {img.aspect == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
                                    ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)
                                    : img.aspect,
                                base, levels, min_layer, layers};
         VkImageViewUsageCreateInfo usage{};
         narrow_view_usage(img, format, VK_IMAGE_USAGE_SAMPLED_BIT, ci, usage);
-        if (p_vkCreateImageView(vk_device(), &ci, nullptr, &v) != VK_SUCCESS) v = img.view;
+        if (p_vkCreateImageView(vk_device(), &ci, nullptr, &v) != VK_SUCCESS) v = VK_NULL_HANDLE;
     }
     if (v) hit = {key, v};  // never a null one: those are tried again
     return v;
@@ -1487,10 +1482,60 @@ void forget_image_views(const GpuImage& img) {
         }
     };
     forget_framebuffers(img.view);  // nvn_renderpass.cpp (attachments may use the whole-image view)
-    drop(g_sampled_views, std::make_tuple(img.image, VkImageViewType(0), 0u, uint64_t(0), uint64_t(0)));
+    drop(g_sampled_views, SampledKey{img.image,VkImageViewType(0),0u,{},uint64_t(0)});
     for (ViewHit& h : g_view_hits)
         if (std::get<0>(h.key) == img.image) h = {};
     drop(g_attachment_views, std::make_tuple(img.image, 0u, 0u, VkFormat(0)));
+}
+
+bool sampled_view_state_probe() {
+    struct Fixture {
+        GpuImage image;
+        ~Fixture() {
+            if(image.image) forget_image_views(image);
+            if(image.view) p_vkDestroyImageView(vk_device(),image.view,nullptr);
+            if(image.image) p_vkDestroyImage(vk_device(),image.image,nullptr);
+            if(image.memory) p_vkFreeMemory(vk_device(),image.memory,nullptr);
+        }
+    } fixture;
+    auto& image=fixture.image;
+    image.width=image.height=4;image.levels=3;image.layers=13;
+    image.view_type=VK_IMAGE_VIEW_TYPE_2D_ARRAY;image.format=VK_FORMAT_R8G8B8A8_UNORM;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.flags=VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;ci.imageType=VK_IMAGE_TYPE_2D;ci.format=image.format;
+    ci.extent={4,4,1};ci.mipLevels=image.levels;ci.arrayLayers=image.layers;ci.samples=VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling=VK_IMAGE_TILING_OPTIMAL;ci.usage=VK_IMAGE_USAGE_SAMPLED_BIT;
+    if(p_vkCreateImage(vk_device(),&ci,nullptr,&image.image)!=VK_SUCCESS) return false;
+    VkMemoryRequirements required{};p_vkGetImageMemoryRequirements(vk_device(),image.image,&required);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize=required.size;ai.memoryTypeIndex=memory_type(required.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if(p_vkAllocateMemory(vk_device(),&ai,nullptr,&image.memory)!=VK_SUCCESS ||
+       p_vkBindImageMemory(vk_device(),image.image,image.memory,0)!=VK_SUCCESS) return false;
+    VkImageViewCreateInfo own{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    own.image=image.image;own.viewType=image.view_type;own.format=image.format;
+    own.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,image.levels,0,image.layers};
+    if(p_vkCreateImageView(vk_device(),&own,nullptr,&image.view)!=VK_SUCCESS) return false;
+    bool ok=true;
+    ViewInfo single;single.min_layer=1;single.layers=1;single.levels=1;
+    const auto one=view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,single);
+    auto broad=single;broad.layers=65537;
+    const auto many=view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,broad);
+    ok=one && many && one!=many;
+    broad.layers=12;ok=ok && view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,broad)==many;
+    ok=ok && view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,single)==one;
+    ViewInfo whole;whole.layers=UINT32_MAX;
+    ok=ok && view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,whole)==image.view;
+    whole={};whole.swizzle=UINT32_MAX;
+    ok=ok && view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,whole)==image.view;
+    // The backing image is cube-compatible; exercise declared cube sampler ranges.
+    image.view_type=VK_IMAGE_VIEW_TYPE_CUBE;
+    ViewInfo cube;cube.min_layer=12;
+    ok=ok && !view_of(image,VK_IMAGE_VIEW_TYPE_CUBE,cube);
+    cube.min_layer=7;ok=ok && view_of(image,VK_IMAGE_VIEW_TYPE_CUBE,cube);
+    cube.min_layer=9;ok=ok && !view_of(image,VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,cube);
+    image.levels=0;ok=ok && !view_of(image,VK_IMAGE_VIEW_TYPE_2D_ARRAY,{});image.levels=3;
+    log("image view state probe: 9 checks, range keys, cube bounds and swizzle fallback: %s",ok ? "PASS" : "FAIL");
+    return ok;
 }
 
 }  // namespace nx::nvn

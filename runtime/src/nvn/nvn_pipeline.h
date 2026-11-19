@@ -154,6 +154,8 @@ std::vector<uint32_t> patched_spirv(const ShaderInfo* s, const uint8_t* kinds, u
 VkPipeline compute_pipeline(const ShaderInfo* cs, const ProgramLayout& layout);
 
 VkSampler sampler_for(const SamplerInfo& info, bool shadow);
+bool sampler_state_probe();
+bool sampled_view_state_probe();
 // A storage-image view of the texture (single level of the pool view), or the dummy storage image. Layout GENERAL.
 VkImageView storage_view(VkCommandBuffer cb, uint64_t texture, const ImageShape& shape, const ViewInfo* view);
 

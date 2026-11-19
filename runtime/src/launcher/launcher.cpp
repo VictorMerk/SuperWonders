@@ -331,7 +331,7 @@ private:
 
 // ---- mods: <data root>/mods/<name>/ (hle_fs.cpp mod_roots: name order, a leading '-' turns one off) ----
 using Mod = ModInfo;
-std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods"); }
+std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods", std::getenv("NX_ASPECT_PROFILE") ? std::getenv("NX_ASPECT_PROFILE") : ""); }
 
 bool set_mod(const Mod& m, bool on) {
     const fs::path dir = u8(plat::data_root()) / "mods";
@@ -1013,13 +1013,14 @@ void page_mods() {
                                         "folder (romfs/, or contents/<title id>/romfs/ as Switch mods come).",
                      true);
     uint64_t enabled = 0, conflicts = 0;
-    for (const auto& m : g->mods) if (m.on) { ++enabled; conflicts += m.shadowed; }
-    const std::string summary = std::to_string(enabled)+" enabled | "+std::to_string(conflicts)+" shadowed files";
-    rows::action("Load order",summary.c_str(),"Mods load in name order. The first enabled mod supplying a path wins. Shadowed files in later mods are ignored. Changes apply after restarting the game. LAN peers need identical enabled mods.",true);
+    for (const auto& m : g->mods) if (m.active) { ++enabled; conflicts += m.shadowed; }
+    const std::string summary = std::to_string(enabled)+" active | "+std::to_string(conflicts)+" shadowed files";
+    rows::action("Load order",summary.c_str(),"Mods load in name order. The first enabled mod supplying a path wins. Shadowed files in later mods are ignored. Changes apply after restarting the game. Aspect profiles can select their matching mods regardless of the folder toggle. LAN peers need identical active mods.",true);
     bool rescan = false;
     for (Mod& m : g->mods) {
         bool on = m.on;
         std::string details = std::to_string(m.files)+" files, "+std::to_string(m.bytes/1024)+" KiB. ";
+        details += m.active ? "Active for the selected aspect. " : "Inactive for the selected aspect. ";
         details += m.issue.empty() ? "RomFS layout detected. " : m.issue+" ";
         if (m.shadowed) details += std::to_string(m.shadowed)+" files are overridden by earlier mods. ";
         for (const auto& conflict : m.conflicts) details += "\n"+conflict;

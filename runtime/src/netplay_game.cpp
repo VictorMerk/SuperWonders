@@ -91,7 +91,9 @@ Fingerprint fingerprint(const fs::path& data) {
 #else
     const auto runtime=fs::read_symlink("/proc/self/exe");
 #endif
-    return content_fingerprint(data,runtime,NX_VERSION_STRING,value("NX_ASPECT_PROFILE"));
+    return content_fingerprint(data,runtime,NX_VERSION_STRING,value("NX_ASPECT_PROFILE"), [] {
+        if(lobby().cancel) throw std::runtime_error("LAN connection cancelled");
+    });
 }
 void isolate_client_save(const fs::path& data) {
     const auto sessions = data/"lan-sessions";

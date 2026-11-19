@@ -7,11 +7,16 @@
 void check(bool ok,const char* message){if(!ok){std::cerr<<message<<'\n';std::exit(1);}}
 int main() {
     namespace fs=std::filesystem;
+#if defined(_WIN32)
+    const auto library_name="wonder_game.dll";
+#else
+    const auto library_name="libwonder_game.so";
+#endif
     const auto root=fs::temp_directory_path()/("wonder-content-test-"+std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count()));
     auto write=[&](const fs::path& p,const char* value){fs::create_directories(p.parent_path());std::ofstream(p)<<value;};
     write(root/"analysis/main.bin","Product120");write(root/"analysis/sdk.bin","SDK16");
-    write(root/"game/build-id.txt","kit2");write(root/"runtime.exe","runtime");
+    write(root/"game/build-id.txt","kit2");write(root/"game"/library_name,"generated game");write(root/"runtime.exe","runtime");
     auto hash=[&](const char* aspect=""){return nx::lan::content_fingerprint(root,root/"runtime.exe","test",aspect);};
     const auto clean=hash();
     write(root/"mods/-off/romfs/Stage/ignored.bin","disabled");
@@ -36,6 +41,45 @@ int main() {
     check(version!=hash(),"different Wonder executables cannot match");
     const auto runtime=hash();write(root/"runtime.exe","different runtime");
     check(runtime!=hash(),"different runtime binaries cannot match");
+    const auto dll=hash();write(root/"game"/library_name,"different generated game");
+    check(dll!=hash(),"different generated game libraries cannot match");
+    write(root/library_name,"adjacent developer library");
+    const auto adjacent=hash();write(root/"game"/library_name,"unused data library");
+    check(adjacent==hash(),"unused data library cannot override adjacent code identity");
+    write(root/library_name,"changed adjacent library");
+    check(adjacent!=hash(),"actual adjacent game code is included in LAN matching");
+    fs::remove(root/library_name);
+    auto override_env=[](const std::string& value) {
+#if defined(_WIN32)
+        _putenv_s("NX_GAMELIB",value.c_str());
+#else
+        if(value.empty()) unsetenv("NX_GAMELIB");else setenv("NX_GAMELIB",value.c_str(),1);
+#endif
+    };
+    const std::string inherited=std::getenv("NX_GAMELIB")?std::getenv("NX_GAMELIB"):"";
+    const auto before_override=hash();write(root/"override.bin","selected override library");
+    override_env((root/"override.bin").string());
+    check(before_override!=hash(),"explicit selected library affects compatibility");
+    override_env((root/"nonexistent.bin").string());
+    check(before_override==hash(),"missing explicit override falls back like the runtime loader");
+    override_env(inherited);
+    bool cancelled=false;int checkpoints=0;
+    try { nx::lan::content_fingerprint(root,root/"runtime.exe","test","",[&] {
+        if(++checkpoints==2) throw std::runtime_error("cancelled");
+    }); } catch(const std::runtime_error& e) { cancelled=std::string(e.what())=="cancelled"; }
+    check(cancelled && checkpoints==2,"preparation cancellation interrupts a file read");
+    bool mutated=false;checkpoints=0;
+    try { nx::lan::content_fingerprint(root,root/"runtime.exe","test","",[&] {
+        if(++checkpoints==2) fs::last_write_time(root/"analysis/main.bin",
+            fs::last_write_time(root/"analysis/main.bin")+std::chrono::seconds(2));
+    }); } catch(const std::exception&) { mutated=true; }
+    check(mutated,"same-size file mutation while hashing fails closed");
+    auto deep=root/"mods/04-deep/romfs";
+    for(int i=0;i<66;++i) deep/="d";
+    fs::create_directories(deep);
+    bool depth_failed=false;try{hash();}catch(const std::exception&){depth_failed=true;}
+    check(depth_failed,"directory-only deep trees cannot evade the file-count bound");
+    fs::remove_all(root/"mods/04-deep");
     fs::remove(root/"analysis/sdk.bin");bool failed=false;
     try{hash();}catch(const std::exception&){failed=true;}
     check(failed,"missing compatibility data fails closed");

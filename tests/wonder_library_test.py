@@ -1,5 +1,7 @@
 """Edition launch boundaries, using synthetic executables without starting a game."""
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import sys
@@ -8,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from wonder_library import default_config, launch_spec, load_config, save_config
+from wonder_library import (default_config, launch_spec, load_config, save_config,
+                            installation_health, diagnostic_report, exit_message, main, REQUIRED_FILES, GAME_LIBRARY, active_user_root)
 
 
 class LibraryTests(unittest.TestCase):
@@ -19,6 +22,9 @@ class LibraryTests(unittest.TestCase):
         self.executable = self.root / 'Wonder & flower [test].exe'
         self.executable.write_bytes(b'synthetic executable placeholder')
         self.data = self.root / 'original data'; self.data.mkdir()
+        for name in REQUIRED_FILES:
+            target = self.data / name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'prepared')
+        (self.data/'extract/romfs').mkdir(parents=True)
         self.config = default_config()
         self.config['editions']['original'] = {'executable': str(self.executable), 'data_root': str(self.data)}
 
@@ -87,6 +93,81 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unknown'):
             load_config(p)
         self.assertEqual(json.loads(p.read_text())['schema'], 99)
+
+    def test_missing_assets_block_play_but_keep_setup_available(self):
+        (self.data/'game'/GAME_LIBRARY).unlink()
+        with self.assertRaisesRegex(ValueError, GAME_LIBRARY):
+            launch_spec(self.config, 'original')
+        self.assertEqual(launch_spec(self.config, 'original', configure=True)[0][-1], '--config')
+
+    def test_empty_prepared_file_is_not_ready(self):
+        (self.data/'analysis/main.bin').write_bytes(b'')
+        self.assertTrue(any('main.bin' in issue for issue in installation_health(self.config['editions']['original'])))
+
+    def test_nested_data_roots_are_rejected_in_both_directions(self):
+        for other in (self.data/'nested', self.root):
+            self.config['editions']['switch2']['data_root'] = str(other)
+            with self.assertRaisesRegex(ValueError, 'separate game-data'):
+                launch_spec(self.config, 'original')
+
+    def test_portable_relative_paths_are_resolved_against_config(self):
+        p = self.root/'portable.json'
+        config = default_config()
+        config['editions']['original'] = {'executable':self.executable.name, 'data_root':self.data.name}
+        p.write_text(json.dumps(config), encoding='utf-8-sig')
+        self.assertEqual(load_config(p),self.config)
+
+    def test_invalid_configuration_shapes_and_nul_paths_are_rejected(self):
+        p = self.root/'invalid.json'
+        for value in ([], {'schema':1,'editions':[]}, {'schema':1,'editions':{'original':None}},
+                      {'schema':1,'editions':{'original':{'executable':'bad\0.exe'}}}):
+            p.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):load_config(p)
+
+    def test_previous_config_is_backed_up_and_no_temporary_files_remain(self):
+        p = self.root/'library.json';save_config(p,self.config)
+        old = p.read_bytes();save_config(p,default_config())
+        self.assertEqual(p.with_suffix('.json.bak').read_bytes(),old)
+        self.assertEqual(list(self.root.glob('*.tmp')),[])
+
+    def test_failed_replace_keeps_original_and_cleans_temporary(self):
+        p = self.root/'library.json';save_config(p,self.config);old=p.read_bytes()
+        with patch.object(Path,'replace',side_effect=OSError('blocked')):
+            with self.assertRaises(OSError):save_config(p,default_config())
+        self.assertEqual(p.read_bytes(),old)
+        self.assertEqual(list(self.root.glob('*.tmp')),[])
+
+    def test_redacted_report_contains_no_private_paths_or_environment(self):
+        with patch.dict(os.environ,{'NX_LAN_CODE':'secret-example'}):
+            report=json.dumps(diagnostic_report(self.config))
+        self.assertNotIn(str(self.root),report)
+        self.assertNotIn(self.executable.name,report)
+        self.assertNotIn('secret-example',report)
+        self.assertIn('Preparation checks',report)
+
+    def test_cli_check_and_export_work_without_gui(self):
+        config = self.root/'library.json';save_config(config,self.config)
+        out=self.root/'report.json'
+        with patch.object(sys,'argv',['wonder_library','--config',str(config),'--check','--diagnostics',str(out)]):
+            with contextlib.redirect_stdout(io.StringIO()) as captured:
+                self.assertEqual(main(),1)  # second edition is not configured
+        self.assertEqual(json.loads(captured.getvalue()),json.loads(out.read_text()))
+
+    def test_save_shortcut_follows_only_valid_active_profiles(self):
+        self.assertEqual(active_user_root(self.data),self.data/'user')
+        profile=self.data/'profiles/p-123-4';profile.mkdir(parents=True)
+        (profile/'profile-name.txt').write_text('Player 2')
+        active=self.data/'active-profile.txt';active.write_text('p-123-4')
+        self.assertEqual(active_user_root(self.data),profile/'user')
+        active.write_text('../../other')
+        self.assertEqual(active_user_root(self.data),self.data/'user')
+        active.write_text('p-123-4');(profile/'profile-name.txt').write_text('')
+        self.assertEqual(active_user_root(self.data),self.data/'user')
+
+    def test_exit_code_reports_native_crashes_and_normal_closure(self):
+        self.assertEqual(exit_message(0),'Closed normally')
+        self.assertIn('0xC0000005',exit_message(-1073741819))
+        self.assertIn('0x00000002',exit_message(2))
 
 
 if __name__ == '__main__':

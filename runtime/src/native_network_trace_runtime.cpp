@@ -11,6 +11,7 @@ namespace {
 Census* runtime_census = nullptr; // Startup publication, never retired during guest execution.
 std::atomic<bool> summary_emitted{false};
 bool read_scalar(uint64_t address,uint32_t& value) noexcept {
+#ifdef _WIN32
     // Runtime mapping/permission lease prevents a concurrent VM unmap while
     // copying exactly four bytes. Unsupported platforms fail closed.
     if(!native_lan::RuntimeGuestMemory::supported()) return false;
@@ -19,6 +20,10 @@ bool read_scalar(uint64_t address,uint32_t& value) noexcept {
         return memory.validate(address,sizeof(value),native_lan::MemoryAccess::Read) &&
             memory.read(address,{reinterpret_cast<std::byte*>(&value),sizeof(value)});
     } catch(...) { return false; } // Diagnostics cannot replace guest behavior.
+#else
+    (void)address; (void)value;
+    return false; // No supported pinned runtime mapper on these platforms.
+#endif
 }
 void output(const Event& e) {
     log("native-net experimental sdk-census: op=%s call=%llu caller=%s+0x%llx fields=%lld,%lld,%lld,%lld result_valid=%d result=%lld error=%d exception=%d duration_ns=%llu",

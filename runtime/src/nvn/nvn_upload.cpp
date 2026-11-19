@@ -553,9 +553,11 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
             return clear_image(cb,img);
         }
         const uint8_t* src = reinterpret_cast<const uint8_t*>(t.memory);
-        uint64_t rows = uint64_t(img.height) * layers;
-        if (uint64_t(t.stride) * rows > t.storage_size) rows = t.storage_size / t.stride;
-        Upload u = upload_alloc(rows * img.width * 4, 16);
+        const uint64_t rows = uint64_t(img.height) * layers;
+        uint64_t staged=0;
+        if (!upload_bounds::multiply(rows,img.width,staged) || !upload_bounds::multiply(staged,4,staged))
+            return clear_image(cb,img);
+        Upload u = upload_alloc(staged, 16);
         for (uint64_t y = 0; y < rows; y++) {
             const uint8_t* s = src + y * t.stride;
             uint32_t* d = reinterpret_cast<uint32_t*>(u.ptr + y * img.width * 4);
@@ -564,7 +566,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         VkBufferImageCopy r{};
         r.bufferOffset = u.offset;
         r.imageSubresource = {img.aspect, 0, 0, img.layers};
-        r.imageExtent = {img.width, uint32_t(std::min<uint64_t>(rows, img.height)), 1};
+        r.imageExtent = {img.width, img.height, 1};
         transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         return;
@@ -597,14 +599,19 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         } else {
             // copies_fit checks the GPU staging buffer after this read. The
             // guest source must be checked separately, before upload copies it.
-            if (!upload_bounds::multiply(rows,layers,staged) ||
-                !upload_bounds::multiply(staged,t.stride,staged) || staged > t.storage_size) {
+            r.bufferRowLength = t.stride / bytes * bw;
+            const auto required=texture_copy_end({0,img.width,img.height,1,img.layers,r.bufferRowLength,0,bw,bh,host_bytes},0);
+            if (t.stride % bytes || uint64_t(t.stride)<upload_bounds::blocks(img.width,bw)*bytes || !required ||
+                *required>t.storage_size || !upload_bounds::multiply(rows,layers,staged) ||
+                !upload_bounds::multiply(staged,t.stride,staged)) {
                 log("nvn/vk: pitch-linear source is short: texture %ux%u stride %u size %llu; cleared",
                     img.width,img.height,t.stride,(unsigned long long)t.storage_size);
                 return clear_image(cb,img);
             }
+            // The final row does not need trailing pitch padding. Copy only
+            // bytes actually provided; the Vulkan copy's required span fits.
+            staged=std::min(staged,t.storage_size);
             u = upload(reinterpret_cast<const void*>(t.memory), staged, 16);
-            r.bufferRowLength = t.stride / bytes * bw;
         }
         r.bufferOffset = u.offset;
         if (!copies_fit(t, &r, 1, u.offset, staged, bw, bh, host_bytes)) return clear_image(cb, img);

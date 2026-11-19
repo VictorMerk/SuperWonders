@@ -1288,6 +1288,42 @@ bool counter_clear_probe() {
         log("counter/clear GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");
         ok = pass && ok;
     }
+    // NVN pitch padding after the last row is not part of the source span.
+    // Check the actual upload, including the final row of alpha-expanded R8.
+    for(unsigned variant=0;variant<2;++variant) {
+        const uint32_t bpp=variant ? 4 : 1,stride=variant ? 80 : 32;
+        std::vector<uint8_t> source(15*stride+16*bpp);
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<16;++x) {
+            auto* pixel=source.data()+y*stride+x*bpp;
+            if(variant){pixel[0]=20+x;pixel[1]=40+y;pixel[2]=90;pixel[3]=255;}
+            else pixel[0]=uint8_t(32+y*7+x);
+        }
+        const uint64_t upload_id=0x7fff00000700ull+variant*0x100;
+        auto& upload_texture=make<Texture>(upload_id);
+        upload_texture.target=1;upload_texture.format=variant ? 0x25 : 1;
+        upload_texture.width=upload_texture.height=16;upload_texture.stride=stride;
+        upload_texture.depth=upload_texture.levels=upload_texture.samples=1;
+        upload_texture.memory=reinterpret_cast<uintptr_t>(source.data());upload_texture.storage_size=source.size();
+        if(!variant)upload_texture.pool_swizzle=0x02010101u;
+        bool pass=begin(true);
+        if(pass) {
+            draw_begin_submit();auto* uploaded=ensure_contents(g_cb,upload_id);
+            pass=uploaded && uploaded->format==VK_FORMAT_R8G8B8A8_UNORM;
+            if(pass){
+                transition(g_cb,*uploaded,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={16,16,1};
+                p_vkCmdCopyImageToBuffer(g_cb,uploaded->image,uploaded->layout,buffer,1,&copy);
+                VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+                p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+            }
+            if(async_gpu())frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+            if(pass)for(unsigned y=0;y<16;++y)for(unsigned x=0;x<16;++x){
+                const uint8_t expected[4]={uint8_t(variant ? 20+x : 255),uint8_t(variant ? 40+y : 255),uint8_t(variant ? 90 : 255),uint8_t(variant ? 255 : 32+y*7+x)};
+                pass=std::memcmp(mapped+(y*16+x)*4,expected,4)==0 && pass;
+            }
+        }
+        log("pitched upload GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");ok=pass&&ok;destroy(upload_id);
+    }
     p_vkDeviceWaitIdle(g_device);
     p_vkUnmapMemory(g_device,memory); p_vkDestroyBuffer(g_device,buffer,nullptr); p_vkFreeMemory(g_device,memory,nullptr);
     pool_unregister(&pool); pool_unregister(&alias);

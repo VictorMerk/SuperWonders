@@ -35,7 +35,7 @@ using Address = std::array<std::byte, 16>; // sin_len=16, AF_INET=2, network-ord
 struct PollFd { int fd; int16_t events; int16_t revents = 0; };
 constexpr int16_t Readable = 1, Writable = 4, PollError = 8, Hangup = 16, InvalidFd = 32;
 constexpr int Peek = 2, DontWait = 0x80;
-enum class Option { Broadcast, ReuseAddress };
+enum class Option { Broadcast, ReuseAddress, ReusePort };
 
 // Address is a canonical integer with first IPv4 octet in the high byte.
 // Bind permits wildcard/private/link-local/loopback; destinations additionally
@@ -60,7 +60,13 @@ public:
                    std::span<const std::byte> address);
     // Pointer-only output is host-owned; sender bytes are not logged/stored.
     Result receive_from(int fd, std::span<std::byte> bytes, int flags, Address* sender = nullptr);
+    // ReusePort uses real SO_REUSEPORT where available; Windows explicitly
+    // returns Unsupported rather than substituting different sharing semantics.
     Result set_option(int fd, Option option, bool enabled);
+    // Unicast IP_TTL only. Does not alter multicast TTL=1 or address policy.
+    // Setter accepts1..255; getter returns the real OS option value.
+    Result set_unicast_ttl(int fd, int ttl);
+    Result get_unicast_ttl(int fd);
     // Real OS shutdown result: unconnected UDP commonly returns NotConnected;
     // this API never reports fabricated shutdown success.
     Result shutdown(int fd, int how);

@@ -97,6 +97,9 @@ network byte order, private/local destination checks, bounded receive copies,
 datagram truncation reporting, nonblocking send/receive/peek, polling, broadcast
 and address-reuse options, mapped errors and cancellation. Shared socket ownership
 protects pending polls from OS-handle reuse during close. Tests use loopback only.
+Unicast TTL uses checked OS setting/readback from 1 through 255. Reuse-port uses
+the real platform capability where available; Windows reports unsupported rather
+than substituting different address-reuse semantics.
 
 Important integration boundaries remain: guest-memory validation, exact imported
 ABI wrappers, nifm lifecycle and interface selection, blocking-operation retry,
@@ -106,6 +109,28 @@ The core always uses nonblocking host sockets, including when send/receive flags
 are zero. Poll accepts finite timeouts from 0 through 1,000 ms; a future adapter
 must implement longer/infinite guest waits with cancellation-aware retries.
 Windows tests do not establish Linux execution or physical LAN gameplay.
+
+The separately tested, uninstalled `native_lan_guest` boundary translates the
+checked raw register ABI through an injected, validated guest-memory interface.
+It never casts a numeric guest address into a host pointer. It validates the
+per-thread TLS errno cell and output spans before network I/O, preserves caller
+registers except the operation's return value, and isolates errors between guest
+threads. An unexpected output-copy failure after host I/O cannot safely fall
+back to the original handler or resume as though no operation happened.
+
+Source-specific cases matter: raw IPv4 input may have length byte zero, which is
+normalized only in a private copy; sender capacity can be 28 bytes; optional
+sender outputs must avoid reading unused pointers. SDK zero-sized send/receive
+returns zero without transmitting/consuming a datagram, whereas the underlying
+host core deliberately supports actual zero-length UDP packets. CPU tests check
+these distinctions with fake guest mappings and real loopback datagrams.
+
+This boundary is not installed or linked into active game handlers. Its direct
+TLS adapter requires a separately established guest context. It does not model
+SDK socket-client initialization: the original uninitialized SDK getter returns
+22 and its setter does nothing. Future integration must establish the lifecycle
+and coherent error aliases before dispatch, without inventing an SDK client or
+reporting fabricated initialization success.
 
 The BSD address layout does not imply FreeBSD error numbers. Verified Product120
 call sites expect would-block error 11. The other Linux-numbered error mappings

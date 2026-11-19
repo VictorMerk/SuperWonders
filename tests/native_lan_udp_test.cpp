@@ -61,6 +61,8 @@ int main() {
         Udp disabled;
         check(disabled.socket(2, 2, 17).error == NetworkDown && disabled.close(32).error == NetworkDown,
               "default-off adapter never creates a host socket");
+        check(disabled.set_unicast_ttl(32, 64).error == NetworkDown && disabled.get_unicast_ttl(32).error == NetworkDown &&
+              disabled.set_option(32, Option::ReusePort, true).error == NetworkDown, "new options preserve disabled behavior");
     }
     {
         Udp udp(true);
@@ -79,6 +81,31 @@ int main() {
     const int sender = socket(udp), receiver = socket(udp);
     const Address source = bind_loopback(udp, sender), destination = bind_loopback(udp, receiver);
     check(bool(udp.set_option(sender, Option::Broadcast, true)) && bool(udp.set_option(receiver, Option::ReuseAddress, true)), "supported boolean options");
+    for (int ttl : {1, 64, 255}) {
+        check(bool(udp.set_unicast_ttl(sender, ttl)), "set valid unicast TTL");
+        const auto actual = udp.get_unicast_ttl(sender);
+        check(bool(actual) && actual.value == ttl, "read back actual OS unicast TTL");
+    }
+    check(udp.set_unicast_ttl(sender, 0).error == Invalid && udp.set_unicast_ttl(sender, 256).error == Invalid &&
+          udp.get_unicast_ttl(sender).value == 255, "invalid TTL rejected without changing installed option");
+    check(udp.set_unicast_ttl(-1, 64).error == BadDescriptor && udp.get_unicast_ttl(-1).error == BadDescriptor &&
+          udp.set_option(-1, Option::ReusePort, true).error == BadDescriptor, "new options reject invalid descriptors");
+#if defined(SO_REUSEPORT) && !defined(_WIN32)
+    {
+        const auto native = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        check(native >= 0, "create native reuseport capability oracle");
+        const int enabled = 1;
+        const int oracle = setsockopt(native, SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof enabled);
+        ::close(native);
+        const auto reuse = udp.set_option(receiver, Option::ReusePort, true);
+        check(oracle == 0 ? bool(reuse) && reuse.value == 0 : !bool(reuse), "reuseport matches native capability, no fake success");
+        if (oracle == 0) check(bool(udp.set_option(receiver, Option::ReusePort, false)), "disable supported native reuseport");
+    }
+#else
+    check(udp.set_option(receiver, Option::ReusePort, true).error == Unsupported &&
+          udp.set_option(receiver, Option::ReusePort, false).error == Unsupported,
+          "reuseport explicitly unsupported without native capability, never aliased to reuseaddr");
+#endif
     std::array<std::byte, 8> data{std::byte{1}, std::byte{2}, std::byte{0}, std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
     std::array<std::byte, 8> output{};
     check(udp.receive_from(receiver, output, 0).error == WouldBlock, "flags0 is still nonblocking");
@@ -129,6 +156,8 @@ int main() {
         check(bool(polled) && polled.value == 1 && p.revents == InvalidFd && reused != old,
               "close wakes poll with stale-generation invalid result");
         check(udp.receive_from(old, output, 0).error == BadDescriptor, "stale receive rejected after reuse");
+        check(udp.set_unicast_ttl(old, 64).error == BadDescriptor && udp.get_unicast_ttl(old).error == BadDescriptor &&
+              udp.set_option(old, Option::ReusePort, true).error == BadDescriptor, "new options cannot mutate replacement through stale descriptor");
         check(bool(udp.close(reused)), "close replacement socket");
     }
     {
@@ -140,6 +169,8 @@ int main() {
         check(polled.error == Interrupted && Clock::now() - cancelled < std::chrono::seconds(2), "cancellation interrupts bounded poll wait");
         check(udp.send_to(sender, data, 0, destination).error == Interrupted && udp.socket(2, 2, 17).error == Interrupted,
               "cancelled adapter cannot begin new traffic");
+        check(udp.set_unicast_ttl(sender, 64).error == Interrupted && udp.get_unicast_ttl(sender).error == Interrupted &&
+              udp.set_option(sender, Option::ReusePort, true).error == Interrupted, "new options preserve permanent cancellation");
         check(bool(udp.close(sender)) && bool(udp.close(receiver)), "close still works after cancellation");
     }
     {

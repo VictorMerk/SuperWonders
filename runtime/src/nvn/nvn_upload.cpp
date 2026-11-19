@@ -544,6 +544,14 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     std::vector<VkBufferImageCopy> copies;
     uint32_t layers = img.view_type == VK_IMAGE_VIEW_TYPE_3D ? std::max(1u, t.depth) : img.layers;
     if (img.alpha_from_r && t.stride) {  // R8 pitch-linear -> RGBA8 (255, 255, 255, R), level 0
+        // Validate before reading: clamping the row count alone does not keep a
+        // row wider than its pitch inside the source allocation.
+        const auto source_end = texture_copy_end({0,img.width,img.height,1,layers,t.stride,0,1,1,1},0);
+        if (!source_end || *source_end > t.storage_size) {
+            log("nvn/vk: R8 pitch-linear source is short: texture %ux%u stride %u size %llu; cleared",
+                img.width,img.height,t.stride,(unsigned long long)t.storage_size);
+            return clear_image(cb,img);
+        }
         const uint8_t* src = reinterpret_cast<const uint8_t*>(t.memory);
         uint64_t rows = uint64_t(img.height) * layers;
         if (uint64_t(t.stride) * rows > t.storage_size) rows = t.storage_size / t.stride;
@@ -587,7 +595,14 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
             std::memset(u.ptr, 0, staged);
             for (uint64_t y = 0; y < have; y++) widen_r11g11b10(src + y * t.stride, u.ptr + y * img.width * 8, texels);
         } else {
-            staged = uint64_t(t.stride) * rows * layers;
+            // copies_fit checks the GPU staging buffer after this read. The
+            // guest source must be checked separately, before upload copies it.
+            if (!upload_bounds::multiply(rows,layers,staged) ||
+                !upload_bounds::multiply(staged,t.stride,staged) || staged > t.storage_size) {
+                log("nvn/vk: pitch-linear source is short: texture %ux%u stride %u size %llu; cleared",
+                    img.width,img.height,t.stride,(unsigned long long)t.storage_size);
+                return clear_image(cb,img);
+            }
             u = upload(reinterpret_cast<const void*>(t.memory), staged, 16);
             r.bufferRowLength = t.stride / bytes * bw;
         }

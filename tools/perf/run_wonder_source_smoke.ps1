@@ -15,6 +15,8 @@ param(
     [switch]$TraceFiles,
     [string]$ContentPython='',
     [string]$QuitFile='',
+    [ValidateRange(0,100000)][int]$ThirtyFpsUntilFrame=0,
+    [switch]$ScanPlayer,
     [string]$LeaseId=''
 )
 # A real native-game smoke test, distinct from the library GUI's unit tests.
@@ -73,6 +75,8 @@ try {
     if($ThreadDumpAtSeconds){$options['NX_THREAD_DUMP_AT']=[string]$ThreadDumpAtSeconds}
     if($TraceFiles){$options['NX_TRACE_FS']='1'}
     if($quitFilePath){$options['NX_TEST_QUIT_FILE']=$quitFilePath}
+    if($ThirtyFpsUntilFrame){$options['NX_FPS_CAP_UNTIL']=[string]$ThirtyFpsUntilFrame}
+    if($ScanPlayer){$options['NX_PROBE_SCAN']=Join-Path $outputPath 'player-scan.txt'}
     if($layerPath) {
         $options['VK_LAYER_PATH']=$layerPath
         $options['VK_INSTANCE_LAYERS']='VK_LAYER_KHRONOS_validation'

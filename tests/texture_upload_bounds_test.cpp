@@ -18,5 +18,9 @@ int main() {
     check(!astc_level_bytes(big,big,big,1,1,16));
     check(!astc_level_bytes(4,4,2,4,4,std::numeric_limits<uint64_t>::max()));
     check(!astc_level_bytes(4,4,1,0,4,16));
+    // A pitched R8 atlas may not read beyond a short row or the last layer.
+    check(!texture_copy_end({0,33,2,1,1,32,0,1,1,1},0));
+    auto atlas=texture_copy_end({0,31,2,1,2,32,0,1,1,1},0);
+    check(atlas==127 && texture_span_fits(0,*atlas,127) && !texture_span_fits(0,*atlas,126));
     std::puts("upload bounds: underflow, overflow, padded compressed slices and ASTC source bounds pass");
 }

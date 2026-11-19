@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
@@ -157,24 +158,28 @@ RecordedExchange perform_exchange(TraceEntry entry) {
     return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid && session.load()->position_probe_ready()};
 }
 void exchange() {
-    TraceEntry entry;
-    plat::read_pad(entry.local); play::pad(entry.local);
-    entry.sampled_ns=plat::monotonic_ns();
-    entry.tick=scheduled_tick++; entry.frame=g_frame.load();
-    entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
     const auto started=plat::monotonic_ns();
-    entry.local_work_ns=std::min(frame_work_clock.elapsed(started),kMaxFrameWorkNs);
+    const auto local_work_ns=std::min(frame_work_clock.elapsed(started),kMaxFrameWorkNs);
+    auto sample=[&] {
+        TraceEntry entry;
+        plat::read_pad(entry.local); play::pad(entry.local);
+        entry.sampled_ns=plat::monotonic_ns();
+        entry.tick=scheduled_tick++; entry.frame=g_frame.load();
+        entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
+        entry.local_work_ns=local_work_ns;
+        return entry;
+    };
     std::optional<RecordedExchange> completed;
     try {
-        if (exchange_pipeline) completed=exchange_pipeline->submit(entry);
-        else completed=perform_exchange(entry);
+        if (exchange_pipeline) completed=exchange_pipeline->submit_sampled(sample);
+        else completed=perform_exchange(sample());
     } catch (const std::exception& e) {
         running=false;
         end_session(e.what());
     }
     const auto finished=plat::monotonic_ns();
     lockstep_timing.record(finished-started);
-    frame_work_clock.finish(finished);  // subsequent input polling/logging belongs to local work, not the LAN barrier
+    frame_work_clock.finish(finished);  // the next simulation/render/pacing interval starts here
     if (!completed) return;  // explicit neutral lead-in
     inputs=completed->inputs;
     for(size_t player=0;player<count;++player)
@@ -331,6 +336,22 @@ plat::PadState pad(uint32_t player) {
     return connected(player) ? inputs.pads[player] : plat::PadState{};
 }
 void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange(); } }
+void test_file_delay(const char* path) {
+    static const bool enabled=[] {const char* flag=std::getenv("NX_TEST_VIRTUAL_ONLY");return flag && !std::strcmp(flag,"1");}();
+    if(!enabled || !active()) return;
+    // Unattended loading regression only: hold one selected loader before it
+    // announces readiness, while the other peer keeps exchanging frames.
+    static std::atomic<bool> delayed{false};
+    const auto delay=value("NX_LAN_TEST_LOADING_DELAY_MS");
+    const auto match=value("NX_LAN_TEST_LOADING_EVENT");
+    if(!delay.empty() && !match.empty() &&
+       std::strstr(path,match.c_str()) && !delayed.exchange(true)) {
+        size_t used=0;const auto milliseconds=std::stoul(delay,&used);
+        if(used!=delay.size() || milliseconds>20000) throw std::runtime_error("Invalid LAN test loading delay");
+        log("lan test: holding loader for %lu ms before %s",milliseconds,path);
+        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+    }
+}
 void loading_event(const char* path) {
     if(!active()) return;
     uint64_t event=0xcbf29ce484222325ull;

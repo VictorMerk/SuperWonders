@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace nx::lan {
-constexpr uint16_t kProtocol = 5;
+constexpr uint16_t kProtocol = 6;
 constexpr size_t kHeaderBytes = 40, kMacBytes = 32, kMaxPayload = 4096, kPlayers = 4;
 constexpr uint64_t kMaxFrameWorkNs=300'000'000'000ull;
 using Key = std::array<uint8_t,32>;

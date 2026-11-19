@@ -64,6 +64,27 @@ void dump_trace() noexcept {
         std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
         input_trace.write(out,role,current_seed,pipeline_enabled()?1:0,current_rate.load());
         if (!out) log("lan: could not save the diagnostic input trace");
+        if(const auto* connection=session.load()) {
+            const auto d=connection->diagnostics();
+            std::ofstream net(data/"lan-transport-stats.json",std::ios::binary|std::ios::trunc);
+            net.imbue(std::locale::classic());
+            net << "{\n\"schema\":1,\"protocol\":" << kProtocol << ",\"role\":" << role
+                << ",\"simulation_hz\":" << current_rate.load() << ",\"input_lead\":" << (pipeline_enabled()?1:0)
+                << ",\"sent_wire_bytes\":" << d.sent_bytes << ",\"received_wire_bytes\":" << d.received_bytes << ",\n\"messages\":{";
+            constexpr const char* names[]={"unused","hello","welcome","start","reject","input","commit","ack","leave","save_begin","save_chunk","save_end","save_ack"};
+            static_assert(std::size(names)==kDiagnosticMessageTypes);
+            for(size_t i=1;i<kDiagnosticMessageTypes;++i) {
+                if(i>1)net << ',';
+                net << '\"' << names[i] << "\":{\"sent\":" << d.sent_messages[i] << ",\"mac_valid_received\":" << d.received_messages[i] << '}';
+            }
+            net << "},\n\"socket_waits\":{\"send\":" << d.send_waits << ",\"receive\":" << d.receive_waits
+                << ",\"total_ns\":" << d.wait_ns << ",\"peak_select_ns\":" << d.peak_wait_ns << "},\n\"errors\":{\"timeouts_total\":" << d.timeouts
+                << ",\"receive_timeouts_subset\":" << d.receive_timeouts << ",\"cancellations\":" << d.cancellations
+                << ",\"eof_disconnects\":" << d.disconnects << ",\"socket_errors\":" << d.socket_errors << ",\"invalid_packets\":" << d.invalid_packets
+                << "},\n\"scope\":\"Non-transactional atomic transport snapshot; bytes exclude TCP/IP, MAC validity is not world-state agreement, socket waits are not RTT\"}\n";
+            if(!net)log("lan: could not save transport diagnostics");
+        }
+
     } catch (...) { log("lan: could not save the diagnostic input trace"); }
 }
 struct Lobby {

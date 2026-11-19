@@ -26,7 +26,13 @@ void game::file_opened(const char* path) {
         static wonder::LoadingMusicGate music;
         static std::mutex music_lock;
         bool synchronize;
-        { std::lock_guard guard(music_lock); synchronize=music.observe(path); }
+        {
+            std::lock_guard guard(music_lock);
+            const auto before=music.suppressed();
+            synchronize=music.observe(path);
+            if(music.suppressed()!=before && music.suppressed()<=4)
+                log("wonder: repeated LAN music open does not add a loading barrier (%s)",path);
+        }
         if(synchronize) lan::loading_event(path);
     }
     static std::atomic<bool> held{false};

@@ -12,6 +12,7 @@ int main(){
     unsigned a=0,b=0;
     for(unsigned i=0;i<4;++i)a+=host.observe(rhythm);
     for(unsigned i=0;i<3;++i)b+=client.observe(rhythm);
+    check(!host.observe(normal) && !client.observe(normal),"switching back to a previously opened course track is not another load");
     check(a==1 && b==1,"four host rhythm opens and three client opens produce one barrier each");
     check(!host.observe("content://Sound/Resource/Stream/Env_Course.bwav") && !host.observe(rhythm),"ambience does not rearm current music");
     check(host.observe(world) && host.observe(normal),"cached map return and course reentry still synchronize");

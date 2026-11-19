@@ -4,6 +4,7 @@
 #include "netplay_session.h"
 #include "netplay_save.h"
 #include "netplay_trace.h"
+#include "netplay_apply_trace.h"
 #include "netplay_pipeline.h"
 #include "controllers.h"
 #include "play.h"
@@ -51,6 +52,16 @@ std::atomic<uint64_t> pending_loading_event{0};
 using ExchangePipeline=OneAhead<TraceEntry,RecordedExchange>;
 ExchangePipeline* exchange_pipeline=nullptr;
 uint64_t scheduled_tick=1;
+ApplyTrace* apply_trace=nullptr;  // opt-in only; initialized before the worker starts
+void application_event(ApplyEvent event,const FrameInputs* agreed=nullptr,uint64_t tick=0,uint64_t sampled_ns=0,uint64_t marker=0) {
+    if(!apply_trace)return;
+    ApplyTraceEntry entry;
+    entry.event=event; entry.ns=plat::monotonic_ns(); entry.frame=g_frame.load();
+    entry.tick=agreed?agreed->tick:tick; entry.sampled_ns=sampled_ns;
+    entry.local_loading_event=marker; entry.agreed=agreed!=nullptr;
+    if(agreed)entry.inputs=*agreed;
+    apply_trace->push(entry);
+}
 std::atomic<bool> use_pipeline{false};
 std::atomic<uint32_t> current_rate{60};
 bool pipeline_enabled() { return use_pipeline.load(); }
@@ -64,6 +75,11 @@ void dump_trace() noexcept {
         std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
         input_trace.write(out,role,current_seed,pipeline_enabled()?1:0,current_rate.load());
         if (!out) log("lan: could not save the diagnostic input trace");
+        if(apply_trace) {
+            std::ofstream applied(data/"lan-application-trace.csv",std::ios::binary|std::ios::trunc);
+            apply_trace->write(applied,role,current_seed);
+            if(!applied)log("lan: could not save application diagnostics");
+        }
         if(const auto* connection=session.load()) {
             const auto d=connection->diagnostics();
             std::ofstream net(data/"lan-transport-stats.json",std::ios::binary|std::ios::trunc);
@@ -195,6 +211,7 @@ RecordedExchange perform_exchange(TraceEntry entry) {
     entry.exchange_finished_ns=plat::monotonic_ns();
     entry.wait_ns=entry.exchange_finished_ns-started;
     input_trace.push(entry);
+    application_event(ApplyEvent::ExchangeComplete,&agreed,0,entry.sampled_ns,entry.loading_event);
     return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid && session.load()->position_probe_ready()};
 }
 void exchange() {
@@ -207,11 +224,16 @@ void exchange() {
         entry.tick=scheduled_tick++; entry.frame=g_frame.load();
         entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
         entry.local_work_ns=local_work_ns;
+        if(exchange_pipeline) application_event(ApplyEvent::PipelineSample,nullptr,entry.tick,entry.sampled_ns);
         return entry;
     };
     std::optional<RecordedExchange> completed;
     try {
-        if (exchange_pipeline) completed=exchange_pipeline->submit_sampled(sample);
+        if (exchange_pipeline) {
+            completed=exchange_pipeline->submit_sampled(sample);
+            application_event(ApplyEvent::PipelineSubmitReturn,nullptr,scheduled_tick-1);
+            if(completed) application_event(ApplyEvent::PipelineReceive,&completed->inputs,0,completed->sampled_ns);
+        }
         else completed=perform_exchange(sample());
     } catch (const std::exception& e) {
         running=false;
@@ -220,8 +242,9 @@ void exchange() {
     const auto finished=plat::monotonic_ns();
     lockstep_timing.record(finished-started);
     frame_work_clock.finish(finished);  // the next simulation/render/pacing interval starts here
-    if (!completed) return;  // explicit neutral lead-in
+    if (!completed) { application_event(ApplyEvent::LeadIn); return; }  // explicit neutral lead-in
     inputs=completed->inputs;
+    application_event(ApplyEvent::Apply,&inputs,0,completed->sampled_ns);
     for(size_t player=0;player<count;++player)
         if(inputs.frame_work_ns[player]) peer_work[player].record(inputs.frame_work_ns[player]);
     ft::input_sample_at(g_frame,completed->sampled_ns);
@@ -310,6 +333,20 @@ void connect_game(const LobbyRequest& request) {
     // sampled on this background thread and cannot leak into the game's input.
     inputs=connection->exchange({});
     input_trace.reset(); trace_started=true;
+    if(value("NX_LAN_APPLY_TRACE")=="1") {
+        // Explicit opt-in only; hard ceiling prevents unbounded logging.
+        size_t capacity=131072;
+        const auto configured=value("NX_LAN_APPLY_TRACE_CAPACITY");
+        if(!configured.empty()) {
+            size_t used=0; const auto requested=std::stoull(configured,&used);
+            if(used!=configured.size() || requested<2 || requested>262144)
+                throw std::runtime_error("LAN application trace capacity must be 2..262144");
+            capacity=size_t(requested);
+        }
+        apply_trace=new ApplyTrace(capacity);
+        log("lan: application timeline enabled, %llu events maximum; retains session prefix and recent tail",(unsigned long long)capacity);
+        application_event(ApplyEvent::Initial,&inputs);
+    }
     // Retain room metadata even if startup fails before the first game frame.
     // This is an agreed neutral input, not a sampled physical controller input.
     TraceEntry initial; initial.tick=inputs.tick; initial.agreed=inputs; initial.committed=true;
@@ -376,6 +413,18 @@ plat::PadState pad(uint32_t player) {
     std::lock_guard guard(input_lock);
     return connected(player) ? inputs.pads[player] : plat::PadState{};
 }
+void trace_hid_delivery(uint32_t player,uint64_t sampling_number,const plat::PadState& pad,uint64_t caller) {
+    if(!apply_trace || player>=kPlayers)return;
+    // Caller has already released pad()'s lock. Tick is the currently exposed
+    // commit at this observation, not an assertion that no exchange intervened.
+    std::lock_guard guard(input_lock);
+    ApplyTraceEntry entry;
+    entry.event=ApplyEvent::HidDelivery; entry.ns=plat::monotonic_ns(); entry.frame=g_frame.load();
+    entry.tick=inputs.tick; entry.player=player; entry.sampling_number=sampling_number; entry.caller=caller;
+    entry.inputs.players=uint8_t(count); entry.inputs.pads[player]=pad;
+    entry.local_loading_event=pending_loading_event.load();
+    apply_trace->push(entry);
+}
 void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange(); } }
 void test_file_delay(const char* path) {
     static const bool enabled=[] {const char* flag=std::getenv("NX_TEST_VIRTUAL_ONLY");return flag && !std::strcmp(flag,"1");}();
@@ -401,23 +450,34 @@ void loading_event(const char* path) {
     std::lock_guard guard(input_lock);
     try {
         // Drain the outstanding worker before issuing exchanges on this thread.
-        if(exchange_pipeline) exchange_pipeline->receive();
+        application_event(ApplyEvent::LoadingBegin,nullptr,0,0,event);
+        if(exchange_pipeline) {
+            const auto drained=exchange_pipeline->receive();
+            if(drained) application_event(ApplyEvent::LoadingDrainDiscard,&drained->inputs,0,drained->sampled_ns,event);
+            else application_event(ApplyEvent::LoadingDrainEmpty,nullptr,0,0,event);
+        }
         pending_loading_event=event;
         log("lan: waiting at loading event %llx (%s)",(unsigned long long)event,path);
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::minutes(10);
         for(;;) {
             TraceEntry entry; entry.tick=scheduled_tick++; entry.frame=g_frame.load(); entry.sampled_ns=plat::monotonic_ns();
             const auto agreed=perform_exchange(entry).inputs;
+            application_event(ApplyEvent::LoadingExchange,&agreed,0,entry.sampled_ns,event);
             bool all=true;
             for(uint32_t player=0;player<count;++player) {
                 if(agreed.loading_events[player] && agreed.loading_events[player]!=event)
                     throw std::runtime_error("LAN loading events differ; restart from the same session state");
                 all=all && agreed.loading_events[player]==event;
             }
-            if(all) { inputs={}; inputs.players=uint8_t(count); inputs.tick=agreed.tick; break; }
+            if(all) {
+                inputs={}; inputs.players=uint8_t(count); inputs.tick=agreed.tick;
+                application_event(ApplyEvent::LoadingNeutralApply,&inputs,0,0,event);
+                break;
+            }
             if(std::chrono::steady_clock::now()>deadline) throw std::runtime_error("LAN scene loading timed out");
         }
         pending_loading_event=0;
+        application_event(ApplyEvent::LoadingEnd,&inputs,0,0,event);
         frame_work_clock.reset();
         log("lan: loading event agreed %llx",(unsigned long long)event);
     } catch(const std::exception& error) { running=false; end_session(error.what()); }

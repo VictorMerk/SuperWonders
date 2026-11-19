@@ -648,11 +648,11 @@ void draw_lan(float w,float h,float k) {
     if(!ImGui::BeginPopupModal("LAN co-op",nullptr,ImGuiWindowFlags_NoSavedSettings)) return;
     const auto state=lan::lobby_status();
     const bool waiting=state.phase==lan::LobbyPhase::Preparing || state.phase==lan::LobbyPhase::Waiting;
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"Native co-op  |  Experimental");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"LAN co-op  |  Experimental");
     ImGui::TextWrapped("Profile: %s",profiles::active(u8(plat::data_root())).name.c_str());
     ImGui::TextWrapped("1. Choose Host or Join.  2. Enter the shared room details.  3. Choose the same player count in Wonder.");
     ImGui::TextWrapped("Each PC runs Wonder and controls its own co-op character. Use the same game build and mods on every PC.");
-    ImGui::TextWrapped("Synchronization is still being tested. A detected position mismatch stops the session.");
+    ImGui::TextWrapped("Known gameplay desyncs are under repair. The current checks cannot detect every mismatch.");
     ImGui::Separator();
     ImGui::BeginDisabled(waiting || state.phase==lan::LobbyPhase::Ready);
     ImGui::RadioButton("Host a room",&g->lan_mode,0); ImGui::SameLine();
@@ -738,7 +738,7 @@ void page_play() {
     if (rows::action("Local co-op", "2-4 players", "Connect independent controllers, or reserve the keyboard for player 1 in Controls. Choose the player count in the game for real local co-op characters."))
         overlay::open_settings(2);
     if (!ready) rows::disable_next();
-    if (rows::action("LAN co-op", "Host or join | Experimental", "Run a native Wonder instance on each PC, with independent co-op characters. Pair on a private network. Joining preserves your normal save. Synchronization is still being tested."))
+    if (rows::action("LAN co-op", "Host or join | Experimental", "Run a native Wonder instance on each PC, with independent co-op characters. Pair on a private network. Joining preserves your normal save. Known gameplay desyncs are under repair."))
         open_lan();
     rows::section(lt(LtAbout));
     rows::action(lt(LtVersion), NX_VERSION_STRING,

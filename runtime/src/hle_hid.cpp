@@ -107,6 +107,7 @@ void GetNpadState(CPU& c) {
     bool connected = false;
     PadState p = read(id, &connected);
     if (!connected) return;
+    if (lan::active()) lan::trace_hid_delivery(id, ld<uint64_t>(out), p);
     static bool pressed = false;
     if (p.buttons && !pressed) log("hid: first buttons %llx", (unsigned long long)p.buttons), pressed = true;
     st<uint64_t>(out + 8, p.buttons);

@@ -105,6 +105,12 @@ set_source_files_properties(runtime/src/overlay/controller_art.cpp PROPERTIES IN
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(native_network_trace_test tests/native_network_trace_test.cpp runtime/src/native_network_trace.cpp)
+    target_include_directories(native_network_trace_test PRIVATE runtime/include runtime/src)
+    add_test(NAME native_network_trace COMMAND native_network_trace_test)
+    add_executable(netplay_apply_trace_test tests/netplay_apply_trace_test.cpp)
+    target_include_directories(netplay_apply_trace_test PRIVATE runtime/include runtime/src)
+    add_test(NAME netplay_apply_trace COMMAND netplay_apply_trace_test)
     add_executable(wonder_loading_music_test tests/wonder_loading_music_test.cpp)
     target_include_directories(wonder_loading_music_test PRIVATE games/wonder)
     add_test(NAME wonder_loading_music COMMAND wonder_loading_music_test)
@@ -164,6 +170,7 @@ if(NX_TESTS AND NOT ANDROID)
         add_test(NAME wonder_audio COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/wonder_audio_test.py")
         add_test(NAME wonder_menu_budget COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/wonder_menu_budget_test.py")
         add_test(NAME gamebuild_coverage COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/gamebuild_coverage_test.py")
+        add_test(NAME lan_application_compare COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/lan_application_compare_test.py")
         add_test(NAME lan_trace_compare COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/lan_trace_compare_test.py")
     endif()
     add_executable(file_io_test tests/file_io_test.cpp)
@@ -488,6 +495,8 @@ set(NX_RUNTIME_SOURCES
     runtime/src/hle_vi.cpp
     runtime/src/hle_hid.cpp
     runtime/src/hle_net.cpp
+    runtime/src/native_network_trace.cpp
+    runtime/src/native_network_trace_runtime.cpp
     runtime/src/hle_audio.cpp
     runtime/src/hle_pl.cpp
     runtime/src/input_script.cpp

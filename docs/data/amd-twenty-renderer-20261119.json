@@ -1,0 +1,948 @@
+{
+  "schema": 1,
+  "hardware": "AMD Radeon RX 570",
+  "retained_changes": 20,
+  "scope": "CPU operations and synthetic Vulkan shader workloads, not global FPS certification",
+  "shader_modules": {
+    "flow": "218865b7fc2ae022985ab78b0cc5f41531ec8693d58e8e3c8ec6adfb5180047c",
+    "median": "c42e70b30792c8822a22d65218d78bb28f24dc5f3152841be391f131f04ab6df"
+  },
+  "sampler_lookup": {
+    "scope": "Front cache versus the same canonical lookup with its front disabled; CPU lookup timing, not whole-game FPS",
+    "cases": 98,
+    "samples": [
+      {
+        "implementation": "canonical",
+        "ns": 44.208
+      },
+      {
+        "implementation": "front",
+        "ns": 6.591
+      },
+      {
+        "implementation": "front",
+        "ns": 6.58
+      },
+      {
+        "implementation": "canonical",
+        "ns": 45.815
+      },
+      {
+        "implementation": "canonical",
+        "ns": 44.204
+      },
+      {
+        "implementation": "front",
+        "ns": 6.59
+      },
+      {
+        "implementation": "front",
+        "ns": 6.574
+      },
+      {
+        "implementation": "canonical",
+        "ns": 44.025
+      }
+    ]
+  },
+  "texture_cache_request": {
+    "ok": true,
+    "comparisons": [
+      {
+        "source_bytes": 256,
+        "levels": 1,
+        "reference_ms": 125.89744999999999,
+        "reference_samples": [
+          125.0424,
+          126.3693,
+          125.4326,
+          126.3623
+        ],
+        "pair_ms": 120.7658,
+        "pair_samples": [
+          120.0933,
+          131.7746,
+          120.4637,
+          121.0679
+        ],
+        "reserved_ms": 81.04345,
+        "reserved_samples": [
+          80.7703,
+          81.9149,
+          81.0719,
+          81.015
+        ],
+        "combined_ms": 75.4349,
+        "combined_samples": [
+          75.583,
+          75.8002,
+          75.1045,
+          75.2868
+        ]
+      },
+      {
+        "source_bytes": 256,
+        "levels": 8,
+        "reference_ms": 336.03975,
+        "reference_samples": [
+          353.5283,
+          335.6256,
+          336.4539,
+          335.2094
+        ],
+        "pair_ms": 331.50615,
+        "pair_samples": [
+          344.446,
+          331.262,
+          331.7503,
+          329.0985
+        ],
+        "reserved_ms": 210.1701,
+        "reserved_samples": [
+          210.3305,
+          210.0097,
+          211.3101,
+          209.4364
+        ],
+        "combined_ms": 206.51965,
+        "combined_samples": [
+          205.6601,
+          207.6783,
+          207.137,
+          205.9023
+        ]
+      },
+      {
+        "source_bytes": 256,
+        "levels": 16,
+        "reference_ms": 462.80605,
+        "reference_samples": [
+          464.1207,
+          462.4775,
+          463.1346,
+          461.5662
+        ],
+        "pair_ms": 460.27689999999996,
+        "pair_samples": [
+          458.8941,
+          460.0254,
+          461.2482,
+          460.5284
+        ],
+        "reserved_ms": 307.4094,
+        "reserved_samples": [
+          307.3599,
+          306.8877,
+          307.4589,
+          307.6666
+        ],
+        "combined_ms": 306.98625,
+        "combined_samples": [
+          315.1016,
+          308.7453,
+          304.9822,
+          305.2272
+        ]
+      },
+      {
+        "source_bytes": 4096,
+        "levels": 1,
+        "reference_ms": 19.40835,
+        "reference_samples": [
+          19.4586,
+          19.4526,
+          19.2841,
+          19.3641
+        ],
+        "pair_ms": 13.8506,
+        "pair_samples": [
+          14.2333,
+          13.9287,
+          13.7725,
+          13.6103
+        ],
+        "reserved_ms": 16.611400000000003,
+        "reserved_samples": [
+          16.5803,
+          16.6031,
+          16.6453,
+          16.6197
+        ],
+        "combined_ms": 10.4622,
+        "combined_samples": [
+          10.4623,
+          10.4621,
+          10.4697,
+          10.4245
+        ]
+      },
+      {
+        "source_bytes": 4096,
+        "levels": 8,
+        "reference_ms": 32.34305,
+        "reference_samples": [
+          32.3503,
+          32.4095,
+          32.1971,
+          32.3358
+        ],
+        "pair_ms": 26.108249999999998,
+        "pair_samples": [
+          26.1563,
+          26.0509,
+          26.1359,
+          26.0806
+        ],
+        "reserved_ms": 24.2454,
+        "reserved_samples": [
+          24.3237,
+          24.1909,
+          24.2273,
+          24.2635
+        ],
+        "combined_ms": 18.1578,
+        "combined_samples": [
+          18.1192,
+          18.3037,
+          18.1776,
+          18.138
+        ]
+      },
+      {
+        "source_bytes": 4096,
+        "levels": 16,
+        "reference_ms": 41.15675,
+        "reference_samples": [
+          41.3545,
+          41.1298,
+          40.8689,
+          41.1837
+        ],
+        "pair_ms": 35.172650000000004,
+        "pair_samples": [
+          35.6467,
+          35.0297,
+          34.9086,
+          35.3156
+        ],
+        "reserved_ms": 31.2116,
+        "reserved_samples": [
+          31.4502,
+          31.4374,
+          30.9858,
+          30.917
+        ],
+        "combined_ms": 25.1357,
+        "combined_samples": [
+          25.2764,
+          25.3174,
+          24.8346,
+          24.995
+        ]
+      },
+      {
+        "source_bytes": 65536,
+        "levels": 1,
+        "reference_ms": 12.749500000000001,
+        "reference_samples": [
+          12.7379,
+          12.7358,
+          12.7656,
+          12.7611
+        ],
+        "pair_ms": 7.578250000000001,
+        "pair_samples": [
+          7.5669,
+          7.5601,
+          7.6506,
+          7.5896
+        ],
+        "reserved_ms": 12.592600000000001,
+        "reserved_samples": [
+          12.5615,
+          12.5649,
+          12.6203,
+          12.6234
+        ],
+        "combined_ms": 6.4633,
+        "combined_samples": [
+          6.5023,
+          6.4141,
+          6.4729,
+          6.4537
+        ]
+      },
+      {
+        "source_bytes": 65536,
+        "levels": 8,
+        "reference_ms": 13.6126,
+        "reference_samples": [
+          13.6553,
+          13.6138,
+          13.5849,
+          13.6114
+        ],
+        "pair_ms": 7.574249999999999,
+        "pair_samples": [
+          7.5635,
+          7.5657,
+          7.5828,
+          7.6281
+        ],
+        "reserved_ms": 13.083950000000002,
+        "reserved_samples": [
+          13.1283,
+          13.098,
+          13.0699,
+          13.0644
+        ],
+        "combined_ms": 6.95575,
+        "combined_samples": [
+          6.9629,
+          6.9486,
+          6.9282,
+          6.9699
+        ]
+      },
+      {
+        "source_bytes": 65536,
+        "levels": 16,
+        "reference_ms": 14.158249999999999,
+        "reference_samples": [
+          14.1864,
+          14.1448,
+          14.1717,
+          14.0802
+        ],
+        "pair_ms": 8.24795,
+        "pair_samples": [
+          8.2575,
+          8.2384,
+          8.354,
+          8.2269
+        ],
+        "reserved_ms": 13.51785,
+        "reserved_samples": [
+          13.5264,
+          13.5428,
+          13.5093,
+          13.4773
+        ],
+        "combined_ms": 7.3896,
+        "combined_samples": [
+          7.4456,
+          7.4071,
+          7.3539,
+          7.3721
+        ]
+      },
+      {
+        "source_bytes": 1048576,
+        "levels": 1,
+        "reference_ms": 12.383700000000001,
+        "reference_samples": [
+          12.3622,
+          12.4018,
+          12.4223,
+          12.3656
+        ],
+        "pair_ms": 7.2249,
+        "pair_samples": [
+          7.2179,
+          7.2346,
+          7.2319,
+          7.1794
+        ],
+        "reserved_ms": 12.37155,
+        "reserved_samples": [
+          12.3074,
+          12.3833,
+          12.4111,
+          12.3598
+        ],
+        "combined_ms": 7.2642500000000005,
+        "combined_samples": [
+          7.2379,
+          7.2526,
+          7.2759,
+          7.3397
+        ]
+      },
+      {
+        "source_bytes": 1048576,
+        "levels": 8,
+        "reference_ms": 12.40765,
+        "reference_samples": [
+          12.4112,
+          12.3995,
+          12.4222,
+          12.4041
+        ],
+        "pair_ms": 7.30545,
+        "pair_samples": [
+          7.3171,
+          7.2938,
+          7.2935,
+          7.3413
+        ],
+        "reserved_ms": 12.37445,
+        "reserved_samples": [
+          12.3818,
+          12.3671,
+          12.3842,
+          12.3493
+        ],
+        "combined_ms": 7.3398,
+        "combined_samples": [
+          7.2878,
+          7.3429,
+          7.3367,
+          7.3465
+        ]
+      },
+      {
+        "source_bytes": 1048576,
+        "levels": 16,
+        "reference_ms": 12.36475,
+        "reference_samples": [
+          12.4455,
+          12.334,
+          12.3305,
+          12.3955
+        ],
+        "pair_ms": 7.30345,
+        "pair_samples": [
+          7.3467,
+          7.3113,
+          7.2687,
+          7.2956
+        ],
+        "reserved_ms": 12.413,
+        "reserved_samples": [
+          13.9239,
+          12.4757,
+          12.3434,
+          12.3503
+        ],
+        "combined_ms": 7.338,
+        "combined_samples": [
+          7.3427,
+          7.3976,
+          7.2966,
+          7.3333
+        ]
+      }
+    ]
+  },
+  "motion_search": {
+    "ok": true,
+    "validation_processes": 34,
+    "images": 526,
+    "fields": 864,
+    "validation_errors": 0,
+    "comparisons": [
+      {
+        "candidate": "neighbours2",
+        "factor": 2,
+        "scene": "moving",
+        "reference_ms": 6.875,
+        "candidate_ms": 6.436,
+        "reduction_pct": 6.385454545454547,
+        "reference_samples": [
+          6.854,
+          6.875,
+          6.876
+        ],
+        "candidate_samples": [
+          6.436,
+          6.408,
+          6.488
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 2,
+        "scene": "still",
+        "reference_ms": 11.314,
+        "candidate_ms": 11.287,
+        "reduction_pct": 0.23864238995933576,
+        "reference_samples": [
+          11.409,
+          11.086,
+          11.314
+        ],
+        "candidate_samples": [
+          10.896,
+          11.287,
+          11.412
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 2,
+        "scene": "cut",
+        "reference_ms": 12.316,
+        "candidate_ms": 12.427,
+        "reduction_pct": -0.901266645014606,
+        "reference_samples": [
+          12.539,
+          12.308,
+          12.316
+        ],
+        "candidate_samples": [
+          12.507,
+          12.154,
+          12.427
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 4,
+        "scene": "moving",
+        "reference_ms": 9.296,
+        "candidate_ms": 8.829,
+        "reduction_pct": 5.023666092943188,
+        "reference_samples": [
+          9.296,
+          9.072,
+          9.395
+        ],
+        "candidate_samples": [
+          8.833,
+          8.788,
+          8.829
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 4,
+        "scene": "still",
+        "reference_ms": 13.189,
+        "candidate_ms": 13.16,
+        "reduction_pct": 0.21988020319963542,
+        "reference_samples": [
+          12.702,
+          13.189,
+          13.329
+        ],
+        "candidate_samples": [
+          13.16,
+          13.424,
+          12.756
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 4,
+        "scene": "cut",
+        "reference_ms": 16.104,
+        "candidate_ms": 16.332,
+        "reduction_pct": -1.4157973174366714,
+        "reference_samples": [
+          16.167,
+          16.104,
+          15.99
+        ],
+        "candidate_samples": [
+          16.332,
+          16.339,
+          16.286
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 8,
+        "scene": "moving",
+        "reference_ms": 12.206,
+        "candidate_ms": 11.914,
+        "reduction_pct": 2.3922660986400115,
+        "reference_samples": [
+          12.206,
+          12.177,
+          12.254
+        ],
+        "candidate_samples": [
+          11.914,
+          11.819,
+          11.926
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 8,
+        "scene": "still",
+        "reference_ms": 14.779,
+        "candidate_ms": 14.733,
+        "reduction_pct": 0.311252452804651,
+        "reference_samples": [
+          14.758,
+          14.881,
+          14.779
+        ],
+        "candidate_samples": [
+          14.587,
+          15.035,
+          14.733
+        ]
+      },
+      {
+        "candidate": "neighbours2",
+        "factor": 8,
+        "scene": "cut",
+        "reference_ms": 22.024,
+        "candidate_ms": 22.176,
+        "reduction_pct": -0.6901561932437226,
+        "reference_samples": [
+          22.024,
+          21.966,
+          22.309
+        ],
+        "candidate_samples": [
+          22.176,
+          22.053,
+          22.403
+        ]
+      }
+    ]
+  },
+  "median_whole_workload": {
+    "ok": true,
+    "validation_processes": 34,
+    "images": 526,
+    "fields": 864,
+    "validation_errors": 0,
+    "comparisons": [
+      {
+        "candidate": "network",
+        "factor": 2,
+        "scene": "moving",
+        "reference_ms": 6.892,
+        "candidate_ms": 6.868,
+        "reduction_pct": 0.34822983168891497,
+        "reference_samples": [
+          6.892,
+          6.901,
+          6.879
+        ],
+        "candidate_samples": [
+          6.868,
+          6.861,
+          6.877
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 2,
+        "scene": "still",
+        "reference_ms": 11.083,
+        "candidate_ms": 11.343,
+        "reduction_pct": -2.3459352160967226,
+        "reference_samples": [
+          11.083,
+          11.269,
+          10.905
+        ],
+        "candidate_samples": [
+          11.35,
+          11.332,
+          11.343
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 2,
+        "scene": "cut",
+        "reference_ms": 12.458,
+        "candidate_ms": 12.493,
+        "reduction_pct": -0.2809439717450645,
+        "reference_samples": [
+          12.458,
+          12.538,
+          12.427
+        ],
+        "candidate_samples": [
+          12.493,
+          12.163,
+          12.576
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 4,
+        "scene": "moving",
+        "reference_ms": 9.342,
+        "candidate_ms": 9.274,
+        "reduction_pct": 0.7278955255834018,
+        "reference_samples": [
+          9.3,
+          9.375,
+          9.342
+        ],
+        "candidate_samples": [
+          9.349,
+          9.27,
+          9.274
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 4,
+        "scene": "still",
+        "reference_ms": 13.171,
+        "candidate_ms": 13.261,
+        "reduction_pct": -0.6833194138637906,
+        "reference_samples": [
+          13.171,
+          12.789,
+          13.371
+        ],
+        "candidate_samples": [
+          13.294,
+          12.676,
+          13.261
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 4,
+        "scene": "cut",
+        "reference_ms": 16.062,
+        "candidate_ms": 16.041,
+        "reduction_pct": 0.13074336944341175,
+        "reference_samples": [
+          15.854,
+          16.221,
+          16.062
+        ],
+        "candidate_samples": [
+          16.041,
+          15.995,
+          16.278
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 8,
+        "scene": "moving",
+        "reference_ms": 12.234,
+        "candidate_ms": 12.213,
+        "reduction_pct": 0.17165277096616638,
+        "reference_samples": [
+          12.234,
+          12.226,
+          12.278
+        ],
+        "candidate_samples": [
+          12.232,
+          12.211,
+          12.213
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 8,
+        "scene": "still",
+        "reference_ms": 16.454,
+        "candidate_ms": 16.381,
+        "reduction_pct": 0.4436611158380965,
+        "reference_samples": [
+          16.454,
+          16.857,
+          14.914
+        ],
+        "candidate_samples": [
+          14.831,
+          16.823,
+          16.381
+        ]
+      },
+      {
+        "candidate": "network",
+        "factor": 8,
+        "scene": "cut",
+        "reference_ms": 22.442,
+        "candidate_ms": 22.161,
+        "reduction_pct": 1.2521165671508725,
+        "reference_samples": [
+          23.906,
+          22.442,
+          22.088
+        ],
+        "candidate_samples": [
+          22.161,
+          23.701,
+          21.997
+        ]
+      }
+    ]
+  },
+  "median_isolated_stage": {
+    "ok": true,
+    "scope": "64 repeated median dispatches on the production-sized 120x68 motion grid, including normal inter-pass barriers; not FPS",
+    "comparisons": [
+      {
+        "factor": 2,
+        "scene": "moving",
+        "reference_ms": 0.036597,
+        "candidate_ms": 0.021375,
+        "reduction_pct": 41.59357324370849,
+        "reference_samples": [
+          0.036725,
+          0.03639,
+          0.036597
+        ],
+        "candidate_samples": [
+          0.021343,
+          0.02141,
+          0.021375
+        ]
+      },
+      {
+        "factor": 2,
+        "scene": "still",
+        "reference_ms": 0.060808,
+        "candidate_ms": 0.056063,
+        "reduction_pct": 7.803249572424679,
+        "reference_samples": [
+          0.060748,
+          0.060808,
+          0.068022
+        ],
+        "candidate_samples": [
+          0.056063,
+          0.05779,
+          0.049368
+        ]
+      },
+      {
+        "factor": 2,
+        "scene": "cut",
+        "reference_ms": 0.033,
+        "candidate_ms": 0.021268,
+        "reduction_pct": 35.551515151515154,
+        "reference_samples": [
+          0.033107,
+          0.033,
+          0.03261
+        ],
+        "candidate_samples": [
+          0.02123,
+          0.021268,
+          0.02127
+        ]
+      },
+      {
+        "factor": 4,
+        "scene": "moving",
+        "reference_ms": 0.029532,
+        "candidate_ms": 0.020135,
+        "reduction_pct": 31.81972098063118,
+        "reference_samples": [
+          0.030015,
+          0.029532,
+          0.029205
+        ],
+        "candidate_samples": [
+          0.020135,
+          0.020415,
+          0.020012
+        ]
+      },
+      {
+        "factor": 4,
+        "scene": "still",
+        "reference_ms": 0.032953,
+        "candidate_ms": 0.02157,
+        "reduction_pct": 34.543137195399524,
+        "reference_samples": [
+          0.033217,
+          0.032915,
+          0.032953
+        ],
+        "candidate_samples": [
+          0.02157,
+          0.02161,
+          0.021532
+        ]
+      },
+      {
+        "factor": 4,
+        "scene": "cut",
+        "reference_ms": 0.033045,
+        "candidate_ms": 0.02154,
+        "reduction_pct": 34.81615978211529,
+        "reference_samples": [
+          0.033255,
+          0.033045,
+          0.03304
+        ],
+        "candidate_samples": [
+          0.021513,
+          0.021577,
+          0.02154
+        ]
+      },
+      {
+        "factor": 8,
+        "scene": "moving",
+        "reference_ms": 0.029218,
+        "candidate_ms": 0.020905,
+        "reduction_pct": 28.45163940036964,
+        "reference_samples": [
+          0.030072,
+          0.029218,
+          0.029075
+        ],
+        "candidate_samples": [
+          0.020905,
+          0.021035,
+          0.020585
+        ]
+      },
+      {
+        "factor": 8,
+        "scene": "still",
+        "reference_ms": 0.033495,
+        "candidate_ms": 0.021898,
+        "reduction_pct": 34.62307807135392,
+        "reference_samples": [
+          0.03328,
+          0.03369,
+          0.033495
+        ],
+        "candidate_samples": [
+          0.02196,
+          0.021898,
+          0.021835
+        ]
+      },
+      {
+        "factor": 8,
+        "scene": "cut",
+        "reference_ms": 0.027795,
+        "candidate_ms": 0.02068,
+        "reduction_pct": 25.598129159920845,
+        "reference_samples": [
+          0.028008,
+          0.02753,
+          0.027795
+        ],
+        "candidate_samples": [
+          0.021292,
+          0.02062,
+          0.02068
+        ]
+      }
+    ]
+  },
+  "core_correctness": {
+    "main_cpu_tests": 67,
+    "r8_cpu_tests": 41,
+    "sampler_cases_per_abi": 98,
+    "image_view_checks_per_abi": 9,
+    "validation_errors": 0
+  },
+  "final_integration": {
+    "state": "pending"
+  }
+}

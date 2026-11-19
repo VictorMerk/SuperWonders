@@ -943,6 +943,146 @@
     "validation_errors": 0
   },
   "final_integration": {
-    "state": "pending"
+    "ok": true,
+    "cpu_tests": {
+      "main": 69,
+      "r8": 42
+    },
+    "sampler_cases_per_abi": 98,
+    "image_view_checks_per_abi": 9,
+    "conversion_checks_per_abi": 8,
+    "confirmed_cache_hits_per_abi": 4,
+    "embedded_modes": 6,
+    "shader_images": 218,
+    "finite_fields": 360,
+    "validation_errors": 0,
+    "validation_course_seconds": 180,
+    "visible_course_runs": 4,
+    "main_sha256": "3967A4E6CEB74247A90B05AA1C7E7CC37E20C0666D6C1C2EC9C3347FC0DB3174",
+    "r8_sha256": "885A44D2FB038F65565BAC7ED60FBFD25D37D75A26FE448B6D66C9886CF81027",
+    "fixture_restored": true,
+    "stationary_position_span_world_units": [
+      0.14032940000000238,
+      0.0
+    ],
+    "state": "complete",
+    "compiled_main_source": "073104bf654624ab43e9845c61b28e6221c79640",
+    "compiled_r8_source": "723e5b76ef09b3b97c4aa46918e9ded92055a7b3",
+    "visual_review": {
+      "ok": true,
+      "captures_inspected": 31,
+      "normal_course_captures": 24,
+      "validation_captures": 7,
+      "full_resolution_resumed_capture_inspected": true,
+      "obvious_black_or_missing_geometry_seen": false,
+      "normal_colours_restored_after_resume": true,
+      "scope": "Title, map and one course at selected checkpoints; same camera/scene with minor stationary player-position and animation variation. Still captures cannot exclude brief flicker or certify unvisited courses."
+    },
+    "latest_main_integration": {
+      "cpu_tests": 69,
+      "native_checks": [
+        "sampler",
+        "image-view"
+      ],
+      "ok": true,
+      "runtime_sha256": "CDD174666E296CD835C6D90980A7AFDF8CA328D74C67A78B81CD0955C8C4EB94",
+      "validation_errors": 0,
+      "source_commit": "9494958eb0a34ce5633a120061a5757d3109afe4",
+      "renderer_changes_since_final_build": false
+    }
+  },
+  "actual_course": {
+    "scope": "Original-picture cadence at host presentation, four visible ABBA runs on one course; not all-course or scanout certification",
+    "settings": {
+      "width": 1920,
+      "height": 1080,
+      "internal_resolution": 0,
+      "low_vram_profile": 0,
+      "framegen_multiplier": 2,
+      "vsync": 3,
+      "pipeline_skip_draws": 0
+    },
+    "roi_course_frames": [
+      1500,
+      8500
+    ],
+    "runs": [
+      {
+        "run": "course-a1",
+        "build": "baseline",
+        "frames": 7000,
+        "seconds": 116.7,
+        "avg_fps": 59.98,
+        "low1_fps": 51.47,
+        "low01_fps": 40.71,
+        "p50_ms": 16.66,
+        "p99_ms": 18.45,
+        "max_ms": 45.35,
+        "over_25_ms": 1,
+        "over_33_ms": 1,
+        "over_50_ms": 0,
+        "over_100_ms": 0,
+        "pictures": "original",
+        "skipped_draws": 0.0,
+        "pipeline_creations": 0.0
+      },
+      {
+        "run": "course-b1",
+        "build": "candidate",
+        "frames": 7000,
+        "seconds": 116.69,
+        "avg_fps": 59.99,
+        "low1_fps": 50.26,
+        "low01_fps": 43.92,
+        "p50_ms": 16.67,
+        "p99_ms": 19.27,
+        "max_ms": 32.53,
+        "over_25_ms": 1,
+        "over_33_ms": 0,
+        "over_50_ms": 0,
+        "over_100_ms": 0,
+        "pictures": "original",
+        "skipped_draws": 0.0,
+        "pipeline_creations": 0.0
+      },
+      {
+        "run": "course-b2",
+        "build": "candidate",
+        "frames": 7000,
+        "seconds": 116.67,
+        "avg_fps": 60.0,
+        "low1_fps": 53.47,
+        "low01_fps": 51.2,
+        "p50_ms": 16.65,
+        "p99_ms": 18.39,
+        "max_ms": 19.96,
+        "over_25_ms": 0,
+        "over_33_ms": 0,
+        "over_50_ms": 0,
+        "over_100_ms": 0,
+        "pictures": "original",
+        "skipped_draws": 0.0,
+        "pipeline_creations": 0.0
+      },
+      {
+        "run": "course-a2",
+        "build": "baseline",
+        "frames": 7000,
+        "seconds": 116.67,
+        "avg_fps": 60.0,
+        "low1_fps": 55.51,
+        "low01_fps": 51.84,
+        "p50_ms": 16.65,
+        "p99_ms": 17.57,
+        "max_ms": 20.53,
+        "over_25_ms": 0,
+        "over_33_ms": 0,
+        "over_50_ms": 0,
+        "over_100_ms": 0,
+        "pictures": "original",
+        "skipped_draws": 0.0,
+        "pipeline_creations": 0.0
+      }
+    ]
   }
 }

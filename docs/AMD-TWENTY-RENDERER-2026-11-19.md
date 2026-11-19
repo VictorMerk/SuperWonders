@@ -37,7 +37,20 @@ The motion-search candidate reduces GPU work in the moving synthetic workloads; 
 
 Partial-SAD lower-bound pruning was rejected: it preserved output but substantially slowed the moving GPU workloads. It is not shipped or counted. No resolution, filtering, frame-generation multiplier or skipped-draw setting was reduced to obtain results.
 
-Final integration checks and real-course results are recorded after the combined candidate completes. Rare hitches, other GPUs and unvisited courses remain outside certification.
+The combined main/r8 candidate passed 69/42 CPU tests, 98 sampler cases and 9 image-view checks per ABI, plus six embedded shader configurations (218 output images and 360 finite motion fields), with synchronization validation loaded and zero errors. A 180-second actual-course pause/resume run also completed with zero validation errors. All 31 selected title/map/course captures were inspected: no obvious black or missing geometry, and normal colours restored after resuming. Still captures cannot exclude brief flicker.
+
+Fresh short-path conversion fixtures confirmed four committed cache files and four independently validated warm hits per ABI. The initial deep-path probe checked conversion equality but could not write its cache, so it is not used as evidence of warm cache reuse. Incoming main-branch LAN changes were merged afterward; the resulting main source was rebuilt, passed all 69 CPU tests and repeated native sampler/image-view validation without renderer changes. The [r8 compatibility source](https://github.com/VictorMerk/SuperWonders/tree/723e5b76ef09b3b97c4aa46918e9ded92055a7b3) preserves the older package ABI separately.
+
+Four visible normal-play runs used the same 1920x1080 high-quality profile, 2x frame generation, no skipped draws and the same scripted route/cache source. The measured region is 7,000 original-picture intervals per run at host presentation, after the scripted movement. The camera/scene is consistent; stationary player positions differ slightly between runs (about 0.14 world units horizontally), and animations are not frame-identical.
+
+| Run | Build | Average FPS | 1% low FPS | p99 ms | Maximum ms | Frames >50 ms | Skipped draws |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A1 | Previous installed runtime | 59.98 | 51.47 | 18.45 | 45.35 | 0 | 0 |
+| B1 | Candidate | 59.99 | 50.26 | 19.27 | 32.53 | 0 | 0 |
+| B2 | Candidate | 60.00 | 53.47 | 18.39 | 19.96 | 0 | 0 |
+| A2 | Previous installed runtime | 60.00 | 55.51 | 17.57 | 20.53 | 0 | 0 |
+
+This supports a scoped normal-gameplay regression check. Sustained output stays near the cap and frame-time tails vary; it does not establish a broad FPS gain or prove that rare hitches are fixed. The measured operation-level improvements are the basis for retaining the optimizations. Other GPUs, unvisited courses and physical scanout remain outside certification.
 
 ## Repeating checks
 

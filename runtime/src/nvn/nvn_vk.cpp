@@ -24,6 +24,7 @@
 #include "nvn_vk.h"
 #include "present_geometry.h"
 #include "nvn_ultrawide.h"
+#include "framegen_timing.h"
 #include "overlay/overlay.h"
 #include "nvn_pipeline.h"
 #include "pipeline_draw_probe_spv.h"
@@ -857,6 +858,10 @@ bool framegen_probe() {
     if (!init()) return false;
     bool ok = true;
     for (uint32_t variant : variants) {
+        // Each prior case was submitted, waited for and read back below. Reuse
+        // the same staging bytes, as gpu_submit does, rather than measuring
+        // different fresh upload-buffer regions for each scene/factor.
+        if (!async_gpu()) g_upload_used = 0;
         if (!begin()) return false;
         const bool recorded = framegen_probe_record(g_cb, variant);
         if (async_gpu()) frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
@@ -1033,7 +1038,7 @@ bool pipeline_draw_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,fixture.buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&fixture.memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,fixture.buffer,fixture.memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,fixture.memory,0,2*bytes,0,reinterpret_cast<void**>(&fixture.mapped)) != VK_SUCCESS) return false;
@@ -1171,7 +1176,7 @@ bool counter_clear_probe() {
     VkMemoryRequirements req{}; p_vkGetBufferMemoryRequirements(g_device,buffer,&req);
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = memory_type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ai.memoryTypeIndex = readback_memory_type(req.memoryTypeBits);
     if (p_vkAllocateMemory(g_device,&ai,nullptr,&memory) != VK_SUCCESS ||
         p_vkBindBufferMemory(g_device,buffer,memory,0) != VK_SUCCESS ||
         p_vkMapMemory(g_device,memory,0,texels.size(),0,reinterpret_cast<void**>(&mapped)) != VK_SUCCESS) return false;
@@ -1458,18 +1463,30 @@ void gpu_present(uint64_t texture, const int32_t* crop, int present_interval, ui
     pi.swapchainCount = 1;
     pi.pSwapchains = &g_swapchain;
     pi.pImageIndices = &index;
+    uint64_t pace_requested_ns = 0, pace_actual_ns = 0, original_target_ns = 0;
     if (display_count > 1) {
         const uint64_t target = base_ns + interval_ns*uint64_t(display+1)/uint64_t(display_count);
+        if (display+1 == display_count) original_target_ns = target;
         const uint64_t now = plat::monotonic_ns();
-        if (target > now) plat::sleep_ns(target-now);
+        if (target > now) {
+            // Only diagnostic traces read a clock after the wait. Keep pacing
+            // behaviour unchanged while exposing oversleep/scheduling stalls.
+            pace_requested_ns = target-now;
+            plat::sleep_ns(pace_requested_ns);
+            if (ft::enabled()) pace_actual_ns = plat::monotonic_ns()-now;
+        }
     }
     const uint64_t present_from = plat::monotonic_ns();
     r = p_vkQueuePresentKHR(g_queue, &pi);
     const uint64_t queue_present_ns = plat::monotonic_ns()-present_from;
-    if (display+1 == display_count) last_original_ns = plat::monotonic_ns();
+    if (display+1 == display_count) {
+        const uint64_t presented = plat::monotonic_ns();
+        last_original_ns = r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR
+            ? framegen_present_anchor(original_target_ns,presented,interval_ns) : presented;
+    }
     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
     const FrameTimes totals = frame_times();
-    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count);
+    ft::host_present(acquire_ns,queue_present_ns,totals.encode_ns,totals.fence_ns,input_sample_ns,display+1 == display_count,pace_requested_ns,pace_actual_ns);
     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
     bool remake = r == VK_ERROR_OUT_OF_DATE_KHR;

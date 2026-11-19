@@ -24,6 +24,8 @@ def run(args):
     delay = args.delay_ms / 1000
     stop = threading.Event()
     errors, observed = [], []
+    counts, message_bytes = {}, {}
+    pending = {}
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -55,6 +57,7 @@ def run(args):
                 connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 connection.setblocking(False)
             queues = {connection: deque() for connection in sockets}
+            pending.update({connection: bytearray() for connection in sockets})
             live = set(sockets)
             while not stop.is_set() and (live or any(queues.values())):
                 now = time.monotonic()
@@ -78,6 +81,21 @@ def run(args):
                 for source in readable:
                     data = source.recv(65536)
                     if data:
+                        stream = pending[source]
+                        stream.extend(data)
+                        direction = "guest_to_host" if source is accepted else "host_to_guest"
+                        while len(stream) >= 40:
+                            payload = int.from_bytes(stream[36:40], "little")
+                            if payload > 4096:
+                                raise ValueError("Relay observed an oversized application packet")
+                            size = 72 + payload
+                            if len(stream) < size:
+                                break
+                            kind = str(int.from_bytes(stream[6:8], "little"))
+                            key = direction + ":" + kind
+                            counts[key] = counts.get(key, 0) + 1
+                            message_bytes[key] = message_bytes.get(key, 0) + size
+                            del stream[:size]
                         queues[source].append((time.monotonic() + delay, data))
                     else:
                         live.remove(source)
@@ -102,7 +120,7 @@ def run(args):
         raise RuntimeError(f"Native benchmark failed ({result.returncode}): {result.stderr}")
     report = json.loads(result.stdout)
     report.update(configured_one_way_delay_ms=args.delay_ms, one_frame_pipeline=args.pipeline,
-                  relay_errors=errors, limitation="Synthetic exchange throughput, not game FPS or physical controller latency.")
+                  relay_errors=errors, application_message_counts=counts, application_message_bytes=message_bytes, limitation="Synthetic exchange throughput, not game FPS or physical controller latency.")
     if observed:
         report["observed_forward_delay_ms"] = {"mean": sum(observed) / len(observed), "peak": max(observed)}
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

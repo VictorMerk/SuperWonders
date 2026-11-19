@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "nvn_draw_state.h"
+#include "write_back_words.h"
+#include "upload_snapshot.h"
+#include "overlapping_regions.h"
 
 namespace nx::nvn::replay {
 
@@ -37,13 +40,10 @@ bool g_read = false;  // a copy was bound for reading since the last write_after
 uint64_t g_binds = 0;  // written_bind calls, ever (nvn_frames.cpp: did a dispatch write storage after the split)
 uint64_t g_shared = 0, g_merged = 0, g_composed = 0, g_indirect = 0;  // for written_log
 
-// The regions overlapping [p, p + size), in address order.
-std::vector<It> overlapping(const uint8_t* p, uint64_t size) {
-    std::vector<It> v;
-    It it = g_regions.upper_bound(p);
-    if (it != g_regions.begin() && std::prev(it)->first + std::prev(it)->second.size > p) v.push_back(std::prev(it));
-    for (; it != g_regions.end() && it->first < p + size; ++it) v.push_back(it);
-    return v;
+// A half-open iterator range avoids a heap allocation for each bound buffer.
+using RegionSpan = std::pair<It, It>;
+RegionSpan overlapping(const uint8_t* p, uint64_t size) {
+    return overlapping_regions(g_regions, p, size);
 }
 
 // `bytes` of upload memory whose byte `anchor` is kAlign aligned (so it can start a binding).
@@ -57,8 +57,8 @@ Upload alloc_anchored(uint64_t bytes, uint64_t anchor) {
 // The parts of `regions` inside [p, p + size) copied on the GPU into `to` (whose first byte is p's), then made
 // visible to everything after. What the dispatches recorded so far wrote is there when the copy runs: dispatch()
 // ends each one with a barrier to all later commands. Outside render passes.
-void copy_regions(VkCommandBuffer cb, const std::vector<It>& regions, const uint8_t* p, uint64_t size, const Upload& to) {
-    for (It it : regions) {
+void copy_regions(VkCommandBuffer cb, const RegionSpan& regions, const uint8_t* p, uint64_t size, const Upload& to) {
+    for (It it = regions.first; it != regions.second; ++it) {
         const uint8_t* lo = std::max(it->first, p);
         const uint8_t* hi = std::min(it->first + it->second.size, p + size);
         if (lo >= hi) continue;
@@ -97,9 +97,9 @@ Upload at(const It& it, uint64_t off) { return {it->second.up.buffer, it->second
 // [p, p + size) as a sub-range of one region, bindable at `align` (at most the device's descriptor alignment; the
 // callers ask 256 for descriptors) with `padded` bytes behind it: else end(). A copy is anchored at its first writer,
 // so two pointers aligned in guest memory are aligned in the copy.
-It containing(const uint8_t* p, uint64_t size, uint64_t padded, uint64_t align, const std::vector<It>& regions) {
-    if (regions.size() != 1) return g_regions.end();
-    It it = regions[0];
+It containing(const uint8_t* p, uint64_t size, uint64_t padded, uint64_t align, const RegionSpan& regions) {
+    if (regions.first == regions.second || std::next(regions.first) != regions.second) return g_regions.end();
+    It it = regions.first;
     uint64_t off = uint64_t(p - it->first);
     if (p < it->first || off + size > it->second.size || off + padded > it->second.cap) return g_regions.end();
     if ((it->second.up.offset + off) % std::clamp<uint64_t>(align, 1, bind_align())) return g_regions.end();
@@ -118,7 +118,7 @@ void written_count_bind() { g_binds++; }
 
 Upload written_bind(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_t padded) {
     g_binds++;
-    std::vector<It> old = overlapping(p, size);
+    RegionSpan old = overlapping(p, size);
     if (It it = containing(p, size, padded, bind_align(), old); it != g_regions.end()) {
         write_after_read(cb);
         g_shared++;
@@ -127,21 +127,20 @@ Upload written_bind(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_
     // A new range, or one meeting others (or misaligned in its copy): one copy covering all of them, anchored at p.
     const uint8_t* lo = p;
     const uint8_t* hi = p + size;
-    for (It it : old) lo = std::min(lo, it->first), hi = std::max(hi, it->first + it->second.size);
+    for (It it = old.first; it != old.second; ++it)
+        lo = std::min(lo, it->first), hi = std::max(hi, it->first + it->second.size);
     uint64_t n = uint64_t(hi - lo), off = uint64_t(p - lo);
     Region r;
     r.size = n;
     r.cap = std::max(n + kTail, off + padded);
     r.up = alloc_anchored(r.cap, off);
-    std::memcpy(r.up.ptr, lo, n);
-    std::memset(r.up.ptr + n, 0, r.cap - n);
-    r.before = std::make_shared<std::vector<uint8_t>>(r.up.ptr, r.up.ptr + n);
-    for (It it : old)  // their parts: as they were before their own GPU writes
+    r.before = snapshot_upload(r.up.ptr, lo, n, r.cap);
+    for (It it = old.first; it != old.second; ++it)  // their original snapshots
         if (it->second.before)
             std::memcpy(r.before->data() + (it->first - lo), it->second.before->data(), it->second.before->size());
-    if (!old.empty()) {
+    if (old.first != old.second) {
         copy_regions(cb, old, lo, n, r.up);  // dispatch(): no render pass is open
-        for (It it : old) g_regions.erase(it);
+        g_regions.erase(old.first, old.second);
         g_merged++;
     }
     dedup_invalidate(lo, n);  // copies of these bytes made earlier in the submit are not what later work reads
@@ -151,8 +150,8 @@ Upload written_bind(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_
 
 bool written_read(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_t padded, uint64_t align, Upload& out) {
     if (!p || !size || g_regions.empty() || written_separate()) return false;
-    std::vector<It> regions = overlapping(p, size);
-    if (regions.empty()) return false;
+    RegionSpan regions = overlapping(p, size);
+    if (regions.first == regions.second) return false;
     if (It it = containing(p, size, padded, align, regions); it != g_regions.end()) {
         g_shared++, g_read = true;
         out = at(it, uint64_t(p - it->first));
@@ -176,7 +175,9 @@ Upload read_upload(VkCommandBuffer cb, const uint8_t* p, uint64_t size, uint64_t
 }
 
 bool written_overlaps(const uint8_t* p, uint64_t size) {
-    return p && size && !g_regions.empty() && !overlapping(p, size).empty();
+    if (!p || !size || g_regions.empty()) return false;
+    const auto range = overlapping(p, size);
+    return range.first != range.second;
 }
 
 bool written_indirect(VkCommandBuffer cb, const uint8_t* p) {
@@ -309,15 +310,7 @@ void apply_write_back(const WriteBack& w) {
         std::memcpy(w.to, w.from, w.size);
         return;
     }
-    const uint8_t* was = w.before->data();
-    uint64_t k = 0;
-    for (; k + 8 <= w.size; k += 8) {
-        if (std::memcmp(w.from + k, was + k, 8) == 0) continue;
-        for (uint64_t b = k; b < k + 8; b += 4)
-            if (std::memcmp(w.from + b, was + b, 4) != 0) std::memcpy(w.to + b, w.from + b, 4);
-    }
-    for (; k < w.size; k++)
-        if (w.from[k] != was[k]) w.to[k] = w.from[k];
+    copy_changed_words(w.to,w.from,w.before->data(),w.size);
 }
 
 }  // namespace nx::nvn

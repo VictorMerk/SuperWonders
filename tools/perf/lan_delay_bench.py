@@ -107,6 +107,12 @@ def run(args):
                 if connection:
                     connection.close()
 
+    timer = None
+    if os.name == "nt":
+        import ctypes
+        winmm = ctypes.WinDLL("winmm")
+        if winmm.timeBeginPeriod(1) == 0:
+            timer = winmm
     worker = threading.Thread(target=relay)
     worker.start()
     try:
@@ -116,6 +122,8 @@ def run(args):
         stop.set()
         worker.join(timeout=3)
         listener.close()
+        if timer:
+            timer.timeEndPeriod(1)
     if result.returncode:
         raise RuntimeError(f"Native benchmark failed ({result.returncode}): {result.stderr}")
     report = json.loads(result.stdout)

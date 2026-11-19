@@ -7,7 +7,28 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 using Clock=std::chrono::steady_clock;
+static void simulate_work(int milliseconds) {
+    if(milliseconds<=0) return;
+#if defined(_WIN32)
+    struct Timer {
+        HANDLE handle=CreateWaitableTimerExW(nullptr,nullptr,0x2,TIMER_ALL_ACCESS);
+        Timer() { if(!handle) handle=CreateWaitableTimerW(nullptr,FALSE,nullptr); }
+        ~Timer() { if(handle) CloseHandle(handle); }
+    };
+    static thread_local Timer timer;
+    LARGE_INTEGER due;due.QuadPart=-LONGLONG(milliseconds)*10000;
+    if(timer.handle && SetWaitableTimer(timer.handle,&due,0,nullptr,nullptr,FALSE) && WaitForSingleObject(timer.handle,INFINITE)==WAIT_OBJECT_0) return;
+#endif
+    std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+}
 int main(int argc,char** argv) {
     if(argc!=6) return 2;
     const uint16_t proxy=uint16_t(std::stoi(argv[1]));
@@ -36,7 +57,7 @@ int main(int argc,char** argv) {
             };
             for(int tick=0;tick<frames;++tick) {
                 const auto work_start=Clock::now();
-                std::this_thread::sleep_for(std::chrono::milliseconds(work));
+                simulate_work(work);
                 measured_work[role]+=std::chrono::duration<double,std::milli>(Clock::now()-work_start).count()/frames;
                 nx::plat::PadState pad{uint64_t(role+1),tick,-tick,0,0};
                 const auto sampled=Clock::now();

@@ -10,7 +10,8 @@ namespace nx::lan {
 // No filesystem access in push(). Keep the most recent 4096 exchanges in RAM.
 struct TraceEntry {
     uint64_t tick = 0, frame = 0, wait_ns = 0, partial_hash = 0, sampled_ns = 0;
-    uint64_t local_work_ns = 0;
+    uint64_t local_work_ns = 0, loading_event = 0;
+    uint64_t exchange_started_ns = 0, exchange_finished_ns = 0;
     bool committed = false;
     plat::PadState local;
     PlayerState state;
@@ -34,6 +35,8 @@ public:
         out << "tick,frame,role,seed,committed,wait_ns,partial_hash,state_valid,scene,x,y,z,local_buttons,local_lx,local_ly,local_rx,local_ry,players,sampled_ns,input_lead,simulation_rate,local_work_ns";
         for (size_t p = 0; p < kPlayers; ++p)
             out << ",p" << p << "_buttons,p" << p << "_lx,p" << p << "_ly,p" << p << "_rx,p" << p << "_ry,p" << p << "_work_ns";
+        out << ",local_loading_event,exchange_started_ns,exchange_finished_ns";
+        for(size_t p=0;p<kPlayers;++p) out << ",p" << p << "_loading_event";
         out << '\n' << std::setprecision(9);
         for (size_t i = 0; i < count; ++i) {
             const auto& e = entries[(next + Capacity - count + i) % Capacity];
@@ -43,6 +46,8 @@ public:
             const auto pad = [&](const plat::PadState& p) { out << ',' << p.buttons << ',' << p.lx << ',' << p.ly << ',' << p.rx << ',' << p.ry; };
             pad(e.local); out << ',' << unsigned(e.agreed.players) << ',' << e.sampled_ns << ',' << unsigned(input_lead) << ',' << rate << ',' << e.local_work_ns;
             for (size_t p=0;p<kPlayers;++p) { pad(e.agreed.pads[p]); out << ',' << e.agreed.frame_work_ns[p]; }
+            out << ',' << e.loading_event << ',' << e.exchange_started_ns << ',' << e.exchange_finished_ns;
+            for(size_t p=0;p<kPlayers;++p) out << ',' << e.agreed.loading_events[p];
             out << '\n';
         }
     }

@@ -130,18 +130,58 @@ struct Session::Impl {
     std::atomic<bool> stopped{false};
     bool started=false,ready=false,loading=false;
     std::mutex io;
+    struct Counters {
+        std::array<std::atomic<uint64_t>,kDiagnosticMessageTypes> sent_messages{},received_messages{};
+        std::atomic<uint64_t> sent_bytes{0},received_bytes{0};
+        std::atomic<uint64_t> send_waits{0},receive_waits{0},wait_ns{0},peak_wait_ns{0};
+        std::atomic<uint64_t> timeouts{0},receive_timeouts{0},cancellations{0};
+        std::atomic<uint64_t> disconnects{0},socket_errors{0},invalid_packets{0};
+        SessionDiagnostics snapshot() const noexcept {
+            SessionDiagnostics out;
+            for(size_t i=0;i<kDiagnosticMessageTypes;++i) {
+                out.sent_messages[i]=sent_messages[i].load(std::memory_order_relaxed);
+                out.received_messages[i]=received_messages[i].load(std::memory_order_relaxed);
+            }
+#define NX_DIAGNOSTIC_LOAD(field) out.field=field.load(std::memory_order_relaxed)
+            NX_DIAGNOSTIC_LOAD(sent_bytes); NX_DIAGNOSTIC_LOAD(received_bytes);
+            NX_DIAGNOSTIC_LOAD(send_waits); NX_DIAGNOSTIC_LOAD(receive_waits);
+            NX_DIAGNOSTIC_LOAD(wait_ns); NX_DIAGNOSTIC_LOAD(peak_wait_ns);
+            NX_DIAGNOSTIC_LOAD(timeouts); NX_DIAGNOSTIC_LOAD(receive_timeouts);
+            NX_DIAGNOSTIC_LOAD(cancellations); NX_DIAGNOSTIC_LOAD(disconnects);
+            NX_DIAGNOSTIC_LOAD(socket_errors); NX_DIAGNOSTIC_LOAD(invalid_packets);
+#undef NX_DIAGNOSTIC_LOAD
+            return out;
+        }
+    } counters;
+    [[noreturn]] void io_error(const char* operation,int error=socket_error()) {
+        counters.socket_errors.fetch_add(1,std::memory_order_relaxed);
+        throw std::runtime_error(std::string("LAN ")+operation+" failed (socket error "+std::to_string(error)+")");
+    }
 
     Clock::time_point deadline() const { return Clock::now()+options.timeout; }
     void check(Clock::time_point until) {
-        if(stopped || (options.idle&&!options.idle())) throw std::runtime_error("LAN session cancelled");
-        if(Clock::now()>=until) throw std::runtime_error("LAN peer timed out");
+        if(stopped || (options.idle&&!options.idle())) {
+            counters.cancellations.fetch_add(1,std::memory_order_relaxed);
+            throw std::runtime_error("LAN session cancelled");
+        }
+        if(Clock::now()>=until) {
+            counters.timeouts.fetch_add(1,std::memory_order_relaxed);
+            throw std::runtime_error("LAN peer timed out");
+        }
     }
     void wait(Handle h,bool writing,Clock::time_point until) {
         check(until);
         fd_set set; FD_ZERO(&set); FD_SET(h,&set);
         timeval timeout{0,20'000};
+        (writing?counters.send_waits:counters.receive_waits).fetch_add(1,std::memory_order_relaxed);
+        const auto started_wait=Clock::now();
         const int result=select(int(h+1),writing?nullptr:&set,writing?&set:nullptr,nullptr,&timeout);
-        if(result<0 && !pending(socket_error())) fail_socket("wait");
+        const int result_error=result<0?socket_error():0;
+        const auto elapsed=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-started_wait).count());
+        counters.wait_ns.fetch_add(elapsed,std::memory_order_relaxed);
+        auto peak=counters.peak_wait_ns.load(std::memory_order_relaxed);
+        while(peak<elapsed && !counters.peak_wait_ns.compare_exchange_weak(peak,elapsed,std::memory_order_relaxed)) {}
+        if(result<0 && !pending(result_error)) io_error("wait",result_error);
         check(until);
     }
     void send_bytes(Handle h,std::span<const uint8_t> bytes,Clock::time_point until) {
@@ -154,31 +194,43 @@ struct Session::Impl {
             constexpr int flags=0;
 #endif
             const int n=int(::send(h,reinterpret_cast<const char*>(bytes.data()+at),int(bytes.size()-at),flags));
-            if(n>0) at+=size_t(n);
-            else if(n==0) throw std::runtime_error("LAN peer disconnected");
+            if(n>0) { at+=size_t(n); counters.sent_bytes.fetch_add(uint64_t(n),std::memory_order_relaxed); }
+            else if(n==0) { counters.disconnects.fetch_add(1,std::memory_order_relaxed); throw std::runtime_error("LAN peer disconnected"); }
             else if(pending(socket_error())) wait(h,true,until);
-            else fail_socket("send");
+            else io_error("send");
         }
     }
     void receive_bytes(Handle h,std::span<uint8_t> bytes,Clock::time_point until) {
         size_t at=0;
-        while(at<bytes.size()) {
+        try { while(at<bytes.size()) {
             check(until);
             const int n=int(::recv(h,reinterpret_cast<char*>(bytes.data()+at),int(bytes.size()-at),0));
-            if(n>0) at+=size_t(n);
-            else if(n==0) throw std::runtime_error("LAN peer disconnected");
+            if(n>0) { at+=size_t(n); counters.received_bytes.fetch_add(uint64_t(n),std::memory_order_relaxed); }
+            else if(n==0) { counters.disconnects.fetch_add(1,std::memory_order_relaxed); throw std::runtime_error("LAN peer disconnected"); }
             else if(pending(socket_error())) wait(h,false,until);
-            else fail_socket("receive");
+            else io_error("receive");
+        } } catch(const std::runtime_error& error) {
+            if(std::strcmp(error.what(),"LAN peer timed out")==0) counters.receive_timeouts.fetch_add(1,std::memory_order_relaxed);
+            throw;
         }
     }
-    void send(Handle h,const Packet& p,Clock::time_point until) { send_bytes(h,encode_packet(p,options.key),until); }
+    void send(Handle h,const Packet& p,Clock::time_point until) {
+        send_bytes(h,encode_packet(p,options.key),until);
+        counters.sent_messages[size_t(p.type)].fetch_add(1,std::memory_order_relaxed);
+    }
     Packet receive(Handle h,Clock::time_point until) {
         std::array<uint8_t,kHeaderBytes> header{}; receive_bytes(h,header,until);
-        const size_t size=packet_payload_size(header);
+        size_t size;
+        try { size=packet_payload_size(header); }
+        catch(const std::runtime_error&) { counters.invalid_packets.fetch_add(1,std::memory_order_relaxed); throw; }
         std::vector<uint8_t> packet(kHeaderBytes+size+kMacBytes);
         std::copy(header.begin(),header.end(),packet.begin());
         receive_bytes(h,std::span(packet).subspan(kHeaderBytes),until);
-        return decode_packet(packet,options.key);
+        Packet decoded;
+        try { decoded=decode_packet(packet,options.key); }
+        catch(const std::runtime_error&) { counters.invalid_packets.fetch_add(1,std::memory_order_relaxed); throw; }
+        counters.received_messages[size_t(decoded.type)].fetch_add(1,std::memory_order_relaxed);
+        return decoded;
     }
     Packet expected(Handle h,Message type,uint16_t role,uint64_t sequence,Clock::time_point until) {
         auto packet=receive(h,until);
@@ -215,6 +267,7 @@ uint64_t Session::seed() const { return impl->common_seed; }
 bool Session::position_probe_ready() const { return impl->probe_ready.load(); }
 uint8_t Session::frame_rate() const { return impl->common_rate; }
 uint8_t Session::input_lead() const { return impl->common_lead; }
+SessionDiagnostics Session::diagnostics() const noexcept { return impl->counters.snapshot(); }
 std::vector<std::string> local_addresses() {
     const auto runtime=sockets();
     char name[256]{};

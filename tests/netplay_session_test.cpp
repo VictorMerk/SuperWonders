@@ -93,6 +93,9 @@ static void roundtrip(uint8_t count,bool overlap=false,uint8_t rate=60) {
     for(auto& client:clients) client.join(); server.join();
     for(const auto& text:errors) std::fprintf(stderr,"%s\n",text.c_str());
     check(errors.empty(),"real TCP lockstep exchange succeeds");
+    const auto diagnostic=host.diagnostics();
+    check(diagnostic.invalid_packets>=1,"rejected wrong-key packets are recorded without counting them as authenticated messages");
+    check(diagnostic.sent_messages[size_t(Message::Commit)]==64u*(count-1) && diagnostic.received_messages[size_t(Message::Input)]==64u*(count-1),"diagnostic message totals follow actual two/four-peer serial and pipelined traffic");
 }
 static void divergence(bool pose = false) {
     using namespace nx::lan;
@@ -131,6 +134,7 @@ static void cancellation() {
     });
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"cancellation host starts");
     host.stop(); server.join(); check(cancelled,"stopping a room interrupts its accept wait");
+    check(host.diagnostics().cancellations>0,"cancelled socket waits are counted");
 }
 static void invalid_timing() {
     using namespace nx::lan;
@@ -200,6 +204,9 @@ static void stalled_peer(bool host_waits) {
     const auto elapsed=std::chrono::steady_clock::now()-start;
     check(timed_out && elapsed>=config.frame_timeout && elapsed<std::chrono::seconds(2),
           "silent connected peer uses the frame deadline, not the three-minute lobby deadline");
+    const auto diagnostic=(host_waits?host:client).diagnostics();
+    check(diagnostic.timeouts==1 && diagnostic.receive_timeouts==1,"silent peer receive timeout is classified once");
+    check(diagnostic.receive_waits>0 && diagnostic.wait_ns>0 && diagnostic.peak_wait_ns>0,"blocking receive reports select count, total and peak waiting time");
 }
 static void save_transfer() {
     using namespace nx::lan;
@@ -323,6 +330,42 @@ static void loading_event_deadline(bool slow_host) {
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading-deadline room starts");
     config.port=port.get();client.join(config);route(client,1);server.join();
 }
+static void diagnostic_snapshots() {
+    using namespace nx::lan;
+    Session host,client;auto config=options(2);
+    std::promise<uint16_t> listening;auto port=listening.get_future();
+    std::promise<void> waiting;auto entered=waiting.get_future();
+    std::atomic<bool> exchanging{false},announced{false};
+    config.idle=[&] {
+        if(exchanging.load() && !announced.exchange(true))waiting.set_value();
+        return true;
+    };
+    std::thread server([&] {
+        host.host(config,[&](uint16_t p){listening.set_value(p);});
+        exchanging=true;
+        for(uint64_t tick=0;tick<4;++tick)host.exchange(pad(0,tick));
+    });
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"diagnostic room starts");
+    auto guest=config;guest.port=port.get();guest.idle={};client.join(guest);
+    check(entered.wait_for(std::chrono::seconds(5))==std::future_status::ready,"host enters an input receive with its io mutex held");
+    // The client has not sent Input 0, so a diagnostics reader must not wait for
+    // that exchange's mutex. A future bounds the regression instead of hanging.
+    auto reader=std::async(std::launch::async,[&]{return host.diagnostics();});
+    check(reader.wait_for(std::chrono::seconds(1))==std::future_status::ready,"diagnostic snapshot does not wait behind an outstanding network exchange");
+    const auto blocked=reader.get();
+    check(blocked.received_messages[size_t(Message::Input)]==0 && blocked.sent_messages[size_t(Message::Commit)]==0,"snapshot distinguishes a waiting connection from completed frame traffic");
+    for(uint64_t tick=0;tick<4;++tick)client.exchange(pad(1,tick));
+    server.join();
+    const auto a=host.diagnostics(),b=client.diagnostics();
+    check(a.sent_messages[size_t(Message::Welcome)]==1 && a.sent_messages[size_t(Message::Start)]==1 && b.sent_messages[size_t(Message::Hello)]==1,"authenticated lobby message counts are retained");
+    check(a.sent_messages[size_t(Message::Commit)]==4 && b.received_messages[size_t(Message::Commit)]==4 && b.sent_messages[size_t(Message::Input)]==4 && a.received_messages[size_t(Message::Input)]==4,"completed sends and authenticated receives have exact per-message counts");
+    check(a.sent_bytes>0 && a.sent_bytes==b.received_bytes && b.sent_bytes==a.received_bytes,"actual SWLN wire bytes agree across both socket endpoints");
+    check(a.invalid_packets==0 && b.invalid_packets==0 && a.timeouts==0 && b.timeouts==0,"healthy transport has no synthetic failure counters");
+    client.stop();
+    bool disconnected=false;
+    try {host.exchange({});}catch(const std::runtime_error&){disconnected=true;}
+    check(disconnected && host.diagnostics().disconnects+host.diagnostics().socket_errors>0,"peer closure is visible as EOF or the platform socket-reset error");
+}
 static void asymmetric_music_reopens() {
     using namespace nx::lan;
     Session host,client;auto config=options(2);
@@ -358,6 +401,6 @@ int main() {
     loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
     refused_connection(); unassociated_probe(); loading_events(); loading_event_deadline(true); loading_event_deadline(false);
-    asymmetric_music_reopens();
+    asymmetric_music_reopens(); diagnostic_snapshots();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

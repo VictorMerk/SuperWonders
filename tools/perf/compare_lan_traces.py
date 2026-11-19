@@ -26,6 +26,57 @@ def load(path):
     return result
 
 
+
+def phase(row):
+    if row["committed"] != "1":
+        return "failed"
+    marker_fields = ["local_loading_event", *(f"p{p}_loading_event" for p in range(4))]
+    if not all(row.get(key) not in (None, "") for key in marker_fields):
+        return "unknown"
+    return "loading" if any(int(row[key]) for key in marker_fields) else "steady"
+
+
+def timing_summary(values):
+    values = sorted(values)
+    if not values:
+        return {"samples": 0, "mean": None, "p95": None, "p99": None, "peak": None}
+    return {"samples": len(values), "mean": sum(values) / len(values),
+            "p95": values[min(len(values) - 1, int(len(values) * .95))],
+            "p99": values[min(len(values) - 1, int(len(values) * .99))], "peak": values[-1]}
+
+
+def phase_diagnostics(rows):
+    groups = {name: [] for name in ("loading", "steady", "failed", "unknown")}
+    start_age, finish_age = [], []
+    longest = {name: 0 for name in groups}
+    previous, previous_phase, streak = None, None, 0
+    for tick in sorted(rows):
+        row = rows[tick]
+        name = phase(row)
+        groups[name].append(int(row["wait_ns"]) / 1e6)
+        frame = int(row["frame"]) if "frame" in row else None
+        if frame is not None:
+            streak = streak + 1 if frame == previous and name == previous_phase else 1
+            longest[name] = max(longest[name], streak)
+        else:
+            streak = 0
+        previous, previous_phase = frame, name
+        # These timestamps are from the same PC's monotonic clock. Loading
+        # exchanges carry neutral input; never count them as real pad input age.
+        if name == "steady":
+            sampled = int(row.get("sampled_ns", "0"))
+            started = int(row.get("exchange_started_ns", "0"))
+            finished = int(row.get("exchange_finished_ns", "0"))
+            if sampled > 0 and started >= sampled and finished >= started:
+                start_age.append((started - sampled) / 1e6)
+                finish_age.append((finished - sampled) / 1e6)
+    return {"exchange_phases": {name: {**timing_summary(values),
+                    "longest_same_frame_exchanges": longest[name]} for name, values in groups.items()},
+            "steady_input_sample_age_ms": {"to_exchange_start": timing_summary(start_age),
+                "to_exchange_completion": timing_summary(finish_age),
+                "scope": "Local monotonic pad sample to exchange timing only; excludes loading samples. Not network RTT, display latency or hardware button latency."}}
+
+
 def compare(left, right):
     common = sorted(left.keys() & right.keys())
     if not common:
@@ -39,6 +90,8 @@ def compare(left, right):
         if a["committed"] == b["committed"] == "1":
             report["committed_pairs"] += 1
             fields += ["players", *PAD_FIELDS]
+            fields += [f"p{p}_loading_event" for p in range(4)
+                       if f"p{p}_loading_event" in a and f"p{p}_loading_event" in b]
         differences = {key: [a[key], b[key]] for key in fields if a[key] != b[key]}
         if a.get("input_lead", "0") != b.get("input_lead", "0"):
             differences["input_lead"] = [a.get("input_lead", "0"), b.get("input_lead", "0")]
@@ -89,6 +142,7 @@ def compare(left, right):
     a, b = report["presentation_progress"]
     if a["samples"] and b["samples"] and abs(a["frames_advanced"] - b["frames_advanced"]) >= 60:
         report["warnings"].append("Presented-frame progress differs by at least 60 frames across matching input ticks; inspect loading barriers or a stalled renderer. Matching inputs do not establish synchronized gameplay.")
+    report["phase_diagnostics"] = [phase_diagnostics(left), phase_diagnostics(right)]
     return report
 
 

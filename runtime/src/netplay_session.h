@@ -6,6 +6,19 @@
 #include <string>
 
 namespace nx::lan {
+// Monotonic session-lifetime transport diagnostics. Message slots use Message's
+// numeric value (slot zero is unused). Received message counts require a valid
+// packet MAC; this does not imply an accepted role/tick or verified game state.
+// Byte counters include partial/invalid traffic and the SWLN framing/MAC, but
+// exclude TCP/IP headers. Snapshots are non-transactional and never take io locks.
+constexpr size_t kDiagnosticMessageTypes=size_t(Message::SaveAck)+1;
+struct SessionDiagnostics {
+    std::array<uint64_t,kDiagnosticMessageTypes> sent_messages{},received_messages{};
+    uint64_t sent_bytes=0,received_bytes=0;
+    uint64_t send_waits=0,receive_waits=0,wait_ns=0,peak_wait_ns=0;
+    uint64_t timeouts=0,receive_timeouts=0,cancellations=0;
+    uint64_t disconnects=0,socket_errors=0,invalid_packets=0;
+};
 struct SessionOptions {
     std::string address = "127.0.0.1";
     uint16_t port = 27846;
@@ -46,6 +59,7 @@ public:
     bool position_probe_ready() const;
     uint8_t frame_rate() const;
     uint8_t input_lead() const;
+    SessionDiagnostics diagnostics() const noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

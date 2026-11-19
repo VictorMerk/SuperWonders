@@ -55,9 +55,11 @@ std::atomic<bool> use_pipeline{false};
 std::atomic<uint32_t> current_rate{60};
 bool pipeline_enabled() { return use_pipeline.load(); }
 
+void log_network_diagnostics();
 void dump_trace() noexcept {
     if (!trace_started.load()) return;
     try {
+        log_network_diagnostics();
         const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
         std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
         input_trace.write(out,role,current_seed,pipeline_enabled()?1:0,current_rate.load());
@@ -143,17 +145,34 @@ void isolate_client_save(const fs::path& data) {
 #endif
     plat::exit_process(2);
 }
+void log_network_diagnostics() {
+    const auto* connection=session.load();
+    if(!connection)return;
+    const auto d=connection->diagnostics();
+    const auto input=size_t(Message::Input),commit=size_t(Message::Commit);
+    log("lan transport: tx %llu bytes, MAC-valid rx %llu input/%llu commit messages; tx input/commit %llu/%llu, rx wire %llu bytes; socket waits send/recv %llu/%llu, total %.2f ms, peak select %.2f ms (not RTT)",
+        (unsigned long long)d.sent_bytes,(unsigned long long)d.received_messages[input],(unsigned long long)d.received_messages[commit],
+        (unsigned long long)d.sent_messages[input],(unsigned long long)d.sent_messages[commit],(unsigned long long)d.received_bytes,
+        (unsigned long long)d.send_waits,(unsigned long long)d.receive_waits,double(d.wait_ns)/1e6,double(d.peak_wait_ns)/1e6);
+    log("lan transport errors: timeouts %llu (receive %llu), cancellations %llu, EOF disconnects %llu, socket errors %llu, invalid packets %llu",
+        (unsigned long long)d.timeouts,(unsigned long long)d.receive_timeouts,(unsigned long long)d.cancellations,
+        (unsigned long long)d.disconnects,(unsigned long long)d.socket_errors,(unsigned long long)d.invalid_packets);
+}
 RecordedExchange perform_exchange(TraceEntry entry) {
     const auto started=plat::monotonic_ns();
+    entry.exchange_started_ns=started;
+    entry.loading_event=pending_loading_event.load();  // exactly the marker sent by this exchange
     FrameInputs agreed;
-    try { agreed=session.load()->exchange(entry.local,0,entry.state,entry.local_work_ns,pending_loading_event.load()); }
+    try { agreed=session.load()->exchange(entry.local,0,entry.state,entry.local_work_ns,entry.loading_event); }
     catch (...) {
-        entry.wait_ns=plat::monotonic_ns()-started;
+        entry.exchange_finished_ns=plat::monotonic_ns();
+        entry.wait_ns=entry.exchange_finished_ns-started;
         input_trace.push(entry);
         throw;
     }
     entry.tick=agreed.tick; entry.agreed=agreed; entry.committed=true;
-    entry.wait_ns=plat::monotonic_ns()-started;
+    entry.exchange_finished_ns=plat::monotonic_ns();
+    entry.wait_ns=entry.exchange_finished_ns-started;
     input_trace.push(entry);
     return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid && session.load()->position_probe_ready()};
 }
@@ -186,6 +205,7 @@ void exchange() {
         if(inputs.frame_work_ns[player]) peer_work[player].record(inputs.frame_work_ns[player]);
     ft::input_sample_at(g_frame,completed->sampled_ns);
     if (inputs.tick % 600 == 0) {
+        log_network_diagnostics();
         log("lan: synchronized input tick %llu, local player %u of %u, partial player-state hash %llx",
             (unsigned long long)inputs.tick,role+1,count,(unsigned long long)completed->partial_hash);
         const auto stats=lockstep_timing.snapshot();

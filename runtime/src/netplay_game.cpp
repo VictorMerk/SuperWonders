@@ -82,6 +82,9 @@ void register_shutdown() {
 std::string value(const char* name, const char* fallback = "") {
     const auto* e = std::getenv(name); return e ? e : fallback;
 }
+void preparation_checkpoint() {
+    if(lobby().cancel) throw std::runtime_error("LAN connection cancelled");
+}
 Fingerprint fingerprint(const fs::path& data) {
 #if defined(_WIN32)
     std::wstring executable(32768,L'\0');
@@ -92,9 +95,7 @@ Fingerprint fingerprint(const fs::path& data) {
 #else
     const auto runtime=fs::read_symlink("/proc/self/exe");
 #endif
-    return content_fingerprint(data,runtime,NX_VERSION_STRING,value("NX_ASPECT_PROFILE"), [] {
-        if(lobby().cancel) throw std::runtime_error("LAN connection cancelled");
-    });
+    return content_fingerprint(data,runtime,NX_VERSION_STRING,value("NX_ASPECT_PROFILE"),preparation_checkpoint);
 }
 void isolate_client_save(const fs::path& data) {
     const auto sessions = data/"lan-sessions";
@@ -233,14 +234,15 @@ void connect_game(const LobbyRequest& request) {
     options.build=fingerprint(data);
     options.allow_save_transfer=true;
     if(request.host) {
-        options.initial_save=capture_save(profiles::user_root(data)/"save");
+        status(LobbyPhase::Preparing,"Copying the host save for this session...");
+        options.initial_save=capture_save(profiles::user_root(data)/"save",preparation_checkpoint);
         options.save=digest(options.initial_save);
     } else {
         isolate_client_save(data);
         options.install_save=[](std::span<const uint8_t> snapshot) {
             status(LobbyPhase::Waiting,"Preparing a separate copy of the host's save...");
             const auto pending=isolated_user/"save.partial";
-            restore_save(snapshot,pending); fs::rename(pending,isolated_user/"save");
+            restore_save(snapshot,pending,preparation_checkpoint); fs::rename(pending,isolated_user/"save");
         };
     }
     if(lobby().cancel) throw std::runtime_error("LAN connection cancelled");

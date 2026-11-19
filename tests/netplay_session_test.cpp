@@ -1,6 +1,7 @@
 #include "netplay_session.h"
 #include "netplay_save.h"
 #include "netplay_pipeline.h"
+#include "../games/wonder/loading_music.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -322,11 +323,41 @@ static void loading_event_deadline(bool slow_host) {
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading-deadline room starts");
     config.port=port.get();client.join(config);route(client,1);server.join();
 }
+static void asymmetric_music_reopens() {
+    using namespace nx::lan;
+    Session host,client;auto config=options(2);
+    std::promise<uint16_t> listening;auto port=listening.get_future();
+    const auto route=[](Session& session,uint8_t role) {
+        nx::wonder::LoadingMusicGate gate;
+        unsigned barriers=0;
+        const auto open=[&](const char* path,uint64_t event) {
+            if(!gate.observe(path))return;
+            const auto frame=session.exchange({},0,{},0,event);
+            check(frame.loading_events[0]==event && frame.loading_events[1]==event,"both peers agree on real music transitions");
+            ++barriers;
+        };
+        constexpr auto normal="content://Sound/Resource/Stream/BGM_Course_Savanna_Normal.bwav";
+        constexpr auto rhythm="content://Sound/Resource/Stream/BGM_Course_Savanna_Rhythm.bwav";
+        open(normal,101);
+        for(unsigned i=0;i<(role==0?4u:3u);++i)open(rhythm,102);
+        open(normal,101);
+        check(barriers==2,"asymmetric streaming reopens do not consume extra simulation ticks");
+        for(uint64_t i=0;i<8;++i) {
+            const auto frame=session.exchange(pad(role,i));
+            check(frame.tick==i+2 && frame.loading_events[0]==0 && frame.loading_events[1]==0,"both games resume ordinary input exchanges");
+            check(frame.pads[0].lx==pad(0,i).lx && frame.pads[1].lx==pad(1,i).lx,"independent controller motion remains aligned after asymmetric audio I/O");
+        }
+    };
+    std::thread server([&]{host.host(config,[&](uint16_t p){listening.set_value(p);});route(host,0);});
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"music-reopen regression room starts");
+    config.port=port.get();client.join(config);route(client,1);server.join();
+}
 int main() {
     for(uint8_t rate:{30,60}) for(uint8_t count:{2,4}) for(bool overlap:{false,true}) roundtrip(count,overlap,rate);
     divergence(); divergence(true); cancellation(); invalid_timing(); save_transfer();
     loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
     refused_connection(); unassociated_probe(); loading_events(); loading_event_deadline(true); loading_event_deadline(false);
+    asymmetric_music_reopens();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

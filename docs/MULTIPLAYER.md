@@ -50,6 +50,28 @@ For a paired diagnostic run, pass the same opaque `-SessionId` on both PCs and a
 
 The next meaningful test must establish the reachable game menu, real room discovery/joining and gameplay across two physical PCs. Until then, this mode is a development experiment.
 
+## What the inspected game room actually does
+
+Product120 resources identify an existing **Online Status > Play with Friends >
+Create Room / Find Room** flow. `NetworkSetting` binds the friends action to X;
+`FriendMatchTop` supplies the create/search actions. `GameMsg/OnlineManual.msbt`
+entries `FriendMatch_01_Text` and `LiveGhost_01_Text` describe that route and its
+online-shadow semantics: players retain independent enemy/block state. A friends
+room therefore does not establish shared local-co-op simulation.
+
+These resources prove menu definitions and intended behavior, not that the PC
+provider can reach or join the room. The game-level `Internet` enum has value 2;
+the separate backend value 2 initializes local wireless (`nn::ldn`). Backend 3
+selects local-IP mode. Its existence does not establish a retail LAN menu or the
+application's synchronization model. Current offline account/friends services do
+not supply Nintendo matchmaking or authentication.
+
+The next reserved test is the ordinary menu action with existing native probes:
+observe the activated backend, actual local-network argument and first unavailable
+service. Stop at an authentication requirement; do not force a mode or report room
+success from a factory/socket counter. This conclusion applies to the inspected
+Product120 content, not unverified Switch 2 exclusive features.
+
 ## Why matching packets did not fix LAN
 
 The older mode synchronizes input rather than the full game world. Loading, scheduling, HID delivery and game state can differ while retained input traces still match. Its partial primary-player position guard does not checksum every actor or object. Earlier same-PC tests therefore did not predict the later physical-PC failure.

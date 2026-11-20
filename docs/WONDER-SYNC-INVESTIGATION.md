@@ -230,3 +230,39 @@ require a GPU, and it does not prove that this race caused the reported blur.
 These changes have CPU coverage where applicable. The new replay lock ordering
 and the reported reopened-menu blur/level-map shadow symptoms still require
 reserved GPU and visual testing. No FPS gain is claimed from these source fixes.
+
+## Product120 room and mode reachability: static evidence
+
+The inspected `Bootup.Nin_NX_NVN.pack.zs` screen parameters
+`NetworkSetting.game__UIExtraScreenParam.bgyml` and
+`FriendMatchTop.game__UIExtraScreenParam.bgyml` bind the friends action (X) and
+create/search results. English `LayoutMsgRef/NetworkSettingRef.msbt`,
+`FriendMatchTopRef.msbt` and `GameMsg/OnlineManual.msbt` identify the ordinary
+Online Status / Play with Friends route. Manual entries `FriendMatch_01_Text`,
+`LiveGhost_00_Text` and `LiveGhost_01_Text` establish room navigation and independent
+world/online-shadow semantics. No assets or message dumps are distributed here.
+
+Do not conflate number domains: the high-level enum is Invalid=0, NotUse=1,
+Internet=2, Emulation=3, LANMatch=4. The separate backend state 1 uses nifm Internet
+mode; backend 2 initializes local wireless; backend 3 selects nifm local mode.
+Original-NSO-checked main offsets +0x1db7d34/+0x1db7d38 derive mode==3 for
+`SetLocalNetworkMode` at +0x1db7d3c. Backend 2 instead calls `ldn::Initialize`
+at +0x1db7da4. The UI-to-backend-3 activation path remains unproved; construction
+of all three states is not evidence of selection. Pia transport alone cannot
+establish shared simulation rather than ghosts.
+
+Compiled online gates are concrete: +0x1da8dc0 calls
+`IsNetworkServiceAccountAvailable`, with false returning before UID publication
+at +0x1da8dc8; +0x1dadacc has a second availability gate. +0x1ce1780 calls
+`EnsureNetworkServiceAccountAvailable` and tests Result==0. +0x6d7434 calls
+`CheckFriendListAvailability`, exiting on an error at +0x6d7440; a later path calls
+`EnsureFriendListAvailable` at +0x6d747c. Their exact order on the room UI is not
+execution-verified. The existing offline account/friend providers cannot satisfy
+these honestly. No additional fake-success capability is justified by this audit.
+
+Next reserved observation: open the ordinary friends menu once, correlate its
+activation with the existing source-guarded probes, and retain the first actual
+service failure and local-network argument. Stop at an account requirement. Only
+natural local-backend activation warrants a physical discovery/join test. No mode,
+resource, account or room fabrication is part of that test. This bounded static
+evidence applies to Product120 and certifies neither rooms nor world synchronization.

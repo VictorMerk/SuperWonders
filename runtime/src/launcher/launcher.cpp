@@ -3,6 +3,7 @@
 #include "launcher/save_backup.h"
 #include "launcher/profile_ui.h"
 #include "profiles.h"
+#include "restart_environment.h"
 #include "overlay/usability.h"
 #include "launcher/mod_catalog.h"
 #include "launcher/game_source.h"
@@ -1728,16 +1729,14 @@ bool return_to_launcher() {
     const auto executable=u8(program_dir())/"wonder-launcher.exe";
     if(!file(executable)) {ui::notify("wonder-launcher.exe is missing from the program folder.");return false;}
     auto command=L"\""+executable.wstring()+L"\" --config --launcher-parent="+std::to_wstring(GetCurrentProcessId());
-    STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
-    if(!CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi)) {
+    if(!restart::spawn(executable.wstring(),std::move(command))) {
         ui::notify("Could not reopen the launcher. Your game is still running.");return false;
     }
-    CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
 #else
     const auto executable=u8(program_dir())/"wonder";
-    const auto child=fork();
-    if(child<0) {ui::notify("Could not reopen the launcher.");return false;}
-    if(child==0) {execl(executable.c_str(),executable.c_str(),"--config",nullptr);_exit(127);}
+    if(!restart::spawn(executable.string(),{executable.string(),"--config"})) {
+        ui::notify("Could not reopen the launcher.");return false;
+    }
 #endif
     plat::exit_process(0);
 }

@@ -402,3 +402,35 @@ diagnostics; this was a shutdown race in that test, not a demonstrated spontaneo
 course crash. Corrected derivative session declarations are distinguished from
 the preserved original malformed metadata; correlation does not independently
 prove the loaded library hash or physical-PC provenance.
+
+### Physical two-PC trace review and restart recovery
+
+The subsequent physical Product120 serial-60 run reached a course on both PCs.
+Comparison retained 14,904 common published ticks with matching pad values, but
+345 commits had different publication fates. The first was tick 169: the host
+published it while the client handled it as loading transport. Matching pads on
+common published ticks therefore remain insufficient to certify synchronized
+play. Both peers again recorded zero core-phase entries. No readiness gate or
+simulation-cadence correction is claimed by the restart fix.
+
+The client recorded a receive timeout, while the host's retained transport
+snapshot had no timeout. Frame traces contain startup, capture and user-driven
+pause intervals; whole-run averages must not be treated as controlled gameplay
+benchmarks. Socket-select durations are not RTT. These traces do not isolate a
+single cause for the reported severe lag.
+
+Disconnect recovery previously spawned a launcher with the game's inherited
+session and diagnostic environment. The child could truncate the same NX_LOG
+file and inherit a completed test's quit marker. Disconnect recovery and the
+in-game return-to-launcher action now share a filtered child-process helper.
+It preserves data/library paths, rendering preferences and host variables,
+while clearing room selection, Steam session flags, automation, input scripts,
+quit controls and diagnostic/capture destinations. Parent variables are unchanged.
+Windows uses a sorted Unicode environment block, including drive-directory
+entries and a double-NUL empty block. POSIX prepares argument/environment
+storage before fork; the child only calls execve and _exit.
+
+The CPU regression launches a real child through that helper and checks the
+arguments, parent isolation, retained preferences, token boundaries and Windows
+case/Unicode/environment-block handling. This recovery fix does not establish
+stable FPS, native online interoperability, world synchronization or zero delay.

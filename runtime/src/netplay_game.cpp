@@ -6,6 +6,7 @@
 #include "netplay_trace.h"
 #include "netplay_apply_trace.h"
 #include "netplay_pipeline.h"
+#include "restart_environment.h"
 #include "controllers.h"
 #include "play.h"
 #include "frametrace.h"
@@ -172,15 +173,11 @@ void isolate_client_save(const fs::path& data) {
         std::error_code ec;
         if(!fs::is_regular_file(executable,ec)) executable=fs::path(self);
         auto command=L"\""+executable.wstring()+L"\" --config --lan-ended --launcher-parent="+std::to_wstring(GetCurrentProcessId());
-        STARTUPINFOW startup{}; startup.cb=sizeof startup;
-        PROCESS_INFORMATION process{};
-        if(CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process)) {
-            CloseHandle(process.hThread); CloseHandle(process.hProcess);
-        }
+        if(!restart::spawn(executable.wstring(),std::move(command)))log("lan: could not reopen launcher");
     }
 #else
     const auto self=fs::read_symlink("/proc/self/exe").string();
-    if(fork()==0) { execl(self.c_str(),self.c_str(),"--config","--lan-ended",nullptr); _exit(127); }
+    if(!restart::spawn(self,{self,"--config","--lan-ended"}))log("lan: could not reopen launcher");
 #endif
     plat::exit_process(2);
 }

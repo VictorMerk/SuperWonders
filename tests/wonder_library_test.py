@@ -59,7 +59,9 @@ class LibraryTests(unittest.TestCase):
                      'NX_LAN_CODE': 'test', 'NX_PROFILE_MANAGER_TOUR': '1', 'NX_FRAMEGEN_PROBE': '1',
                      'NX_FRAMETRACE': 'wrong.csv', 'NX_NATIVE_LAN':'1', 'NX_NATIVE_NET_TRACE':'1',
                      'NX_STEAM_DEV':'1', 'NX_STEAM_API_LIBRARY':'wrong.dll', 'SteamAppId':'480',
-                     'SteamGameId':'480', 'NX_CONTROLS_TOUR_SECTION':'1', 'NX_PIPELINE_MISS_TRACE':'wrong.csv'}
+                     'SteamGameId':'480', 'NX_CONTROLS_TOUR_SECTION':'1', 'NX_PIPELINE_MISS_TRACE':'wrong.csv',
+                     'NX_OVERLAY_INPUT_PROBE':'1', 'NX_COUNTER_CLEAR_PROBE':'1',
+                     'NX_TEXTURE_CONVERSION_PROBE':'1', 'NX_PIPELINE_CACHE_TRACE':'1'}
         with patch.dict(os.environ, transient | {'NX_FRAMEGEN': '1', 'NX_GPU': 'chosen'}):
             _, _, env = launch_spec(self.config, 'original')
         for name in transient:

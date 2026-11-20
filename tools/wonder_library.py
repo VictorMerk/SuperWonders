@@ -171,12 +171,12 @@ def launch_spec(config, key, *, configure=False):
     def inherited(name):
         name = name.upper()
         transient = ('NX_TEST_', 'NX_INPUT', 'NX_PROBE', 'NX_DUMP', 'NX_TRACE',
-                     'NX_LAN_', 'NX_NATIVE_', 'NX_STEAM_', 'NX_PLAY_', 'NX_FRAMEGEN_PROBE')
+                     'NX_LAN_', 'NX_NATIVE_', 'NX_STEAM_', 'NX_PLAY_')
         return not (name.startswith(transient) or
                     name in ('NX_GAMELIB', 'NX_DATA_ROOT', 'NX_HEADLESS', 'NX_HEADLESS_PRESENT',
                              'NX_NO_LAUNCHER', 'NX_LOG', 'NX_FRAMETRACE', 'NX_AUDIO_DUMP',
-                             'NX_CONTROLS_TOUR_SECTION', 'NX_PIPELINE_MISS_TRACE', 'STEAMAPPID', 'STEAMGAMEID') or
-                    (name.startswith('NX_') and name.endswith('_TOUR')))
+                             'NX_CONTROLS_TOUR_SECTION', 'NX_PIPELINE_MISS_TRACE', 'NX_PIPELINE_CACHE_TRACE', 'STEAMAPPID', 'STEAMGAMEID') or
+                    (name.startswith('NX_') and name.endswith(('_TOUR', '_PROBE'))))
     env = {k: v for k, v in os.environ.items() if inherited(k)}
     env['NX_DATA_ROOT'] = str(root)
     if configure:

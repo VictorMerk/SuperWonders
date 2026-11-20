@@ -26,6 +26,27 @@ HITCH_MS = (25.0, 33.4, 50.0, 100.0)
 STUTTER_MS = 4.0  # a frame this much longer than the one before it: a visible swing
 
 
+LOG_PHASES = {"mutex_wait": "log_mutex", "platform_sink": "log_platform",
+              "file_write_flush": "log_file", "file_open_rotation": "log_setup"}
+LOG_PHASE_SCOPE = ("Completed phase calls; nested in total logging duration. Totals may overlap across threads, "
+                   "and phases/parent calls may finish in different presentation intervals. Snapshots are non-transactional. "
+                   "Do not sum these with total logging or infer exclusive frame cost. File sink includes formatted write/flush; "
+                   "initial open/rotation is separate; uninstrumented formatting/gaps remain in the total.")
+
+
+def logging_phase_summary(rows):
+    if not any(prefix + "_ms" in row for prefix in LOG_PHASES.values() for row in rows):
+        return None  # legacy trace: unknown, not measured zero
+    phases = {}
+    for name, prefix in LOG_PHASES.items():
+        totals = [row[prefix + "_ms"] for row in rows if prefix + "_ms" in row]
+        maxima = [row[prefix + "_max_ms"] for row in rows if prefix + "_max_ms" in row]
+        phases[name] = {"total_ms": round(sum(totals), 3) if totals else None,
+                        "max_ms": round(max(maxima), 3) if maxima else None,
+                        "total_rows": len(totals), "maximum_rows": len(maxima)}
+    return {"rows": len(rows), "phases": phases, "scope": LOG_PHASE_SCOPE}
+
+
 def load(path, t_from, t_to, pictures="original"):
     with open(path, encoding="utf-8") as f:
         rows = []
@@ -52,7 +73,7 @@ def picture_rows(rows, pictures):
     additive = ("acquire_ms", "queue_present_ms", "replay_ms", "encode_ms", "fence_ms", "upload_mb",
                 "present_cpu_ms", "guest_presents", "guest_cpu_ms", "guest_replay_wait_ms", "guest_pace_ms",
                 "pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads", "file_mb", "file_ms",
-                "minflt", "majflt", "log_ms", "input_poll_ms", "present_pace_requested_ms", "present_pace_actual_ms")
+                "minflt", "majflt", "log_ms", "input_poll_ms", "present_pace_requested_ms", "present_pace_actual_ms") + tuple(prefix + "_ms" for prefix in LOG_PHASES.values())
     available = set().union(*(r.keys() for r in rows))
     additive = tuple(k for k in additive if k in available)
     out, pending, previous = [], [], None
@@ -67,7 +88,7 @@ def picture_rows(rows, pictures):
             for key in additive:
                 merged[key] = sum(r.get(key, 0) for r in pending)
             merged["guest_gap_ms"] = max(r.get("guest_gap_ms", 0) for r in pending)
-            for key in ("log_max_ms", "input_poll_max_ms"):
+            for key in ("log_max_ms", "input_poll_max_ms") + tuple(prefix + "_max_ms" for prefix in LOG_PHASES.values()):
                 if key in available: merged[key] = max(r.get(key, 0) for r in pending)
             out.append(merged)
         previous, pending = row, []
@@ -227,11 +248,21 @@ def main():
     tot = lambda k: sum(r[k] for r in rows)
     st["totals"] = {k: round(tot(k), 1) for k in ("pipelines", "pipeline_ms", "skipped", "astc", "astc_ms", "file_reads",
                                                    "file_mb", "file_ms", "majflt")}
-    for key in ("log_ms", "input_poll_ms"):
+    for key in ("log_ms", "input_poll_ms") + tuple(prefix + "_ms" for prefix in LOG_PHASES.values()):
         if any(key in r for r in rows): st["totals"][key] = round(sum(r.get(key, 0) for r in rows), 1)
+
+    log_phases = logging_phase_summary(rows)
+    if log_phases is not None:
+        st["logging_phases"] = log_phases
 
     print("## %s\n" % st["label"])
     print("Timing domain: %s pictures at host presentation; not physical display scanout.\n" % a.pictures)
+    if log_phases is not None:
+        print("Logging phase scope: " + LOG_PHASE_SCOPE + "\n")
+        for name, phase in log_phases["phases"].items():
+            print("Logging %s: total %s ms; largest completed phase %s ms (%d/%d rows)." %
+                  (name, phase["total_ms"], phase["max_ms"], phase["total_rows"], log_phases["rows"]))
+        print()
     print("| frames | s | avg fps | 1% low | 0.1% low | p50 | p99 | p99.9 | max ms | >25 | >33 | >50 | >100 | stutters/min | paced | missed target intervals |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     print("| {frames} | {seconds} | {avg_fps} | **{low1_fps}** | **{low01_fps}** | {p50_ms} | {p99_ms} | {p999_ms} | {max_ms} | "
@@ -289,6 +320,11 @@ def main():
             if "log_ms" in h:
                 print("    completed calls, total / longest: logging %.3f / %.3f ms; input poll %.3f / %.3f ms (totals may overlap across threads)" %
                       (h.get("log_ms",0),h.get("log_max_ms",0),h.get("input_poll_ms",0),h.get("input_poll_max_ms",0)))
+            phase = logging_phase_summary([h])
+            if phase is not None:
+                print("    logging phases total / largest (ms): " + "; ".join(
+                    "%s %s / %s" % (name, value["total_ms"], value["max_ms"])
+                    for name, value in phase["phases"].items()) + " (nested/overlapping; not exclusive frame cost)")
             if "present_pace_actual_ms" in h:
                 print("    presentation sleep: requested %.3f ms, actual %.3f ms (includes wake scheduling)" %
                       (h.get("present_pace_requested_ms",0),h["present_pace_actual_ms"]))

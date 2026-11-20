@@ -23,6 +23,7 @@ using namespace vk;
 
 VkQueue vk_queue();
 uint32_t vk_queue_family();
+void paired_shadow_draw_counters(const char* phase,uint64_t frame,uint64_t present);
 
 namespace {
 
@@ -259,7 +260,10 @@ bool frame_dump_due(uint64_t presents) {
         if(step==diagnostic::BoundedFramePair::Step::Capture) {
             log("nvn: paired shadow capture guest %llu present %llu remaining %u",
                 (unsigned long long)frame,(unsigned long long)presents,paired.remaining());
-            if(!paired.active())log("nvn: paired shadow capture complete: six sequence-verified originals");
+            if(!paired.active()) {
+                paired_shadow_draw_counters("end",frame,presents);
+                log("nvn: paired shadow capture complete: six sequence-verified originals");
+            }
             return true;
         }
     }
@@ -278,6 +282,7 @@ bool frame_dump_due(uint64_t presents) {
                 log("nvn: paired shadow capture REJECTED: requires FG0, pipeline0, replay-thread0, manual dumps off and shadow-only request");
                 return false;
             }
+            paired_shadow_draw_counters("begin",frame,presents);
             log("nvn: paired shadow shot %s armed after guest %llu present %llu; next six paired originals",shot,
                 (unsigned long long)frame,(unsigned long long)presents);
             return false; // Arming presentation was already drawn; never pretend it was traced.

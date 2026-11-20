@@ -29,21 +29,26 @@ enum Counter {
     kUploadBytes,  // bytes through the upload buffer
     kLogLines,     // log() lines written (the report prints a hitch's lines from the NX_LOG file)
     kLogNs, kInputPollNs,  // elapsed completed calls; totals can overlap across threads
+    kLogMutexNs, kLogPlatformNs, kLogFileNs, kLogSetupNs,
     kCount
 };
 extern std::atomic<uint64_t> g_counter[kCount];
 inline void add(Counter k, uint64_t v = 1) { g_counter[k].fetch_add(v, std::memory_order_relaxed); }
 
 bool enabled();
-enum class TimedCall { Logging, InputPoll };
+enum class TimedCall { Logging, InputPoll, LogMutexWait, LogPlatformSink, LogFileSink, LogFileSetup, Count };
 // No clock reads when tracing is off. Records total and longest completed call
 // per host-present interval; these are diagnostic correlations, not scanout latency.
+// Logging phases nest within the total; completed phases/parents can fall into
+// different intervals and overlap across threads. Never sum them as exclusive
+// frame cost. File setup includes rotation/open; file sink includes write/flush.
 class CallTimer {
     TimedCall kind;
     uint64_t started;
 public:
     explicit CallTimer(TimedCall);
     ~CallTimer();
+    void finish() noexcept; // idempotent; phases may finish before their lexical scope ends
     CallTimer(const CallTimer&) = delete;
     CallTimer& operator=(const CallTimer&) = delete;
 };

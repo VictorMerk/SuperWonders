@@ -98,6 +98,7 @@ namespace nx::ft {
 std::atomic<uint64_t> g_counter[kCount]{};
 CallTimer::CallTimer(TimedCall value):kind(value),started(0) {}
 CallTimer::~CallTimer() { (void)kind;(void)started; }
+void CallTimer::finish() noexcept { (void)kind;(void)started; }
 }
 namespace nx {
 void backtrace(CPU&) {}

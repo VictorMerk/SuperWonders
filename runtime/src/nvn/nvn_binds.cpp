@@ -16,6 +16,8 @@
 #include <cstring>
 
 #include "nvn.h"
+#include "deferred_bind_policy.h"
+#include "nvn_draw_state.h"
 #include "kernel.h"
 
 namespace nx::nvn {
@@ -49,25 +51,30 @@ void BindImages(CPU& c);
 void BindUniformBuffers(CPU& c);
 void BindStorageBuffers(CPU& c);
 
-// Off unless NX_DEFERRED_BINDS=1: reading at submit or replay did not fix the dark course actors and multiplied
-// the render passes (1.1 M ended against 125 k), so the arrays are read at recording as before until understood.
+// Existing NX_DEFERRED_BINDS keeps its presence-based opt-in for all four kinds.
+// NX_DEFERRED_TEXTURE_BINDS=1 is a separate, default-off texture-only candidate;
+// it leaves image and buffer bindings, and every ordinary API, unchanged.
 template <uint32_t Kind>
 void bind_deferred(CPU& c) {
-    static const bool on = std::getenv("NX_DEFERRED_BINDS") != nullptr;
-    if (!on) {
+    static const bool global = std::getenv("NX_DEFERRED_BINDS") != nullptr;
+    static const bool textures_only = [] {const char* e=std::getenv("NX_DEFERRED_TEXTURE_BINDS");return e && std::strcmp(e,"1")==0;}();
+    const deferred_bind::Request request{int32_t(c.x[1]),int32_t(c.x[2]),int32_t(c.x[3]),c.x[4]};
+    deferred_bind::dispatch(Kind,request,global,textures_only,[&] {
         if (Kind == 0) BindTextures(c);
         if (Kind == 1) BindImages(c);
         if (Kind == 2) BindUniformBuffers(c);
         if (Kind == 3) BindStorageBuffers(c);
-        return;
-    }
-    if (!c.x[4] || int32_t(c.x[3]) <= 0) return;
-    Cmd cmd{Cmd::BindDeferred};
-    cmd.mask = Kind;
-    cmd.i[0] = int32_t(c.x[1]), cmd.i[1] = int32_t(c.x[2]);
-    cmd.n = uint32_t(c.x[3]);
-    cmd.a[0] = c.x[4];
-    record(c.x[0], cmd);
+    },[&](const deferred_bind::Request& r) {
+        Cmd cmd{Cmd::BindDeferred};
+        cmd.mask=Kind;cmd.i[0]=r.stage;cmd.i[1]=r.first;
+        cmd.n=uint32_t(r.count);cmd.a[0]=r.address;
+        static const bool origin=std::getenv("NX_TRACE_DEFERRED_TEXTURES")!=nullptr;
+        if(Kind==0 && origin && r.stage==1 && r.first>=0 && r.first<=9 && r.count<=32 && r.count>9-r.first) {
+            cmd.a[1]=ld<uint64_t>(r.address+8ull*uint32_t(9-r.first));
+            cmd.a[2]=g_frame.load(std::memory_order_relaxed);cmd.a[3]=0x44544639; // bounded slot9 provenance
+        }
+        record(c.x[0],cmd);
+    });
 }
 
 void BindUniformBuffers(CPU& c) { bind_ranges(c, Cmd::BindUniformBuffer); }
@@ -203,6 +210,9 @@ namespace nx::nvn {
 // The arrays of every Deferred bind in the submitted lists (and the lists they call), read now.
 DeferredValues deferred_snapshot(const std::vector<std::shared_ptr<CmdList>>& lists) {
     DeferredValues v;
+    std::unordered_map<uint64_t,uint32_t> spans;
+    struct Origin {uint64_t recorded=0,frame=0;int first=0;uint32_t count=0;};
+    std::unordered_map<uint64_t,Origin> origins;
     std::vector<std::pair<std::shared_ptr<CmdList>, int>> todo;
     for (auto& l : lists) todo.push_back({l, 0});
     while (!todo.empty()) {
@@ -212,13 +222,29 @@ DeferredValues deferred_snapshot(const std::vector<std::shared_ptr<CmdList>>& li
         for (const Cmd& c : l->cmds) {
             if (c.op == Cmd::CallList && depth < 8) {
                 todo.push_back({command_list(c.a[0]), depth + 1});
-            } else if (c.op == Cmd::BindDeferred && c.n <= 64 && !v.count(c.a[0])) {
-                uint32_t words = c.mask >= 2 ? 2 : 1;  // ranges {address, size}, handles
-                std::vector<uint64_t> vals(size_t(c.n) * words);
-                for (size_t k = 0; k < vals.size(); k++) vals[k] = ld<uint64_t>(c.a[0] + 8 * k);
-                v.emplace(c.a[0], std::move(vals));
+            } else if (c.op == Cmd::BindDeferred) {
+                // Gather the full word span BEFORE reading anything: a later
+                // command can use more handles, or two-word buffer ranges, at
+                // the same address (also through a nested command list).
+                deferred_bind::note_span(spans,c.a[0],c.mask,c.n);
+                if(c.mask==0 && c.a[3]==0x44544639)
+                    origins.try_emplace(c.a[0],Origin{c.a[1],c.a[2],c.i[1],c.n});
             }
         }
+    }
+    const bool observe=!origins.empty() && replay::paired_shadow_observation_window();
+    for(const auto& [address,words]:spans) {
+        auto vals=deferred_bind::capture_span(words,[&](size_t k){return ld<uint64_t>(address+8*k);});
+        if(observe)if(auto it=origins.find(address);it!=origins.end()) {
+            const auto& origin=it->second;
+            const size_t slot=size_t(9-origin.first);
+            static std::atomic<unsigned> logs{0};
+            if(slot<vals.size() && origin.recorded!=vals[slot] && logs.fetch_add(1,std::memory_order_relaxed)<8)
+                log("nvn: deferred texture origin guest %llu recorded-frame %llu stage 1 slot 9 array %llx first %d count %u snapshot-words %u recorded %llx submitted %llx changed 1",
+                    (unsigned long long)g_frame.load(),(unsigned long long)origin.frame,(unsigned long long)address,
+                    origin.first,origin.count,words,(unsigned long long)origin.recorded,(unsigned long long)vals[slot]);
+        }
+        v.emplace(address,std::move(vals));
     }
     return v;
 }

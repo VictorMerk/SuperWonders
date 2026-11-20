@@ -62,7 +62,7 @@ Start with ordinary rendering and a modest internal resolution. Change one setti
 - Optional frame generation can make motion look smoother while adding artifacts or latency. Record whether it is enabled when reporting performance.
 - The Low VRAM profile can reduce decoded texture storage with a possible image-quality tradeoff. Its cleanup threshold is not a hard limit on live GPU memory.
 
-A controlled Product.120 test preserved the in-game pause/gear background blur across ten close/reopen cycles with frame generation and pipeline draw skipping disabled. This does not cover every scene or settings combination. Dark stage-map artifacts during movement remain under investigation; no general graphics fix is certified.
+A controlled Product.120 test preserved the in-game pause/gear background blur across ten close/reopen cycles with frame generation and pipeline draw skipping disabled. This does not cover every scene or settings combination. Dark stage-map artifacts during movement remain under [active investigation](WONDER-GRAPHICS-INVESTIGATION.md); no general graphics fix is certified.
 
 ## Mods
 

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 
@@ -28,6 +29,8 @@ bool trace_requests_enabled() {
 uint64_t trace_request_serial = 0;
 uint64_t trace_request_checked = UINT64_MAX,trace_request_from = 0,trace_request_until = 0;
 bool paired_trace_active = false;
+std::mutex paired_observation_lock;
+uint64_t paired_observation_first=0,paired_observation_until=0;
 }
 
 static bool trace_request_window() {
@@ -60,11 +63,20 @@ bool begin_paired_shadow_trace(uint64_t first_frame,uint32_t count) {
        std::getenv("NX_TRACE_REQUEST") || !count || count>6 || first_frame>UINT64_MAX-count)return false;
     trace_request_from=first_frame;trace_request_until=first_frame+count;paired_trace_active=true;
     trace_request_checked=UINT64_MAX;++trace_request_serial;
+    {std::lock_guard lock(paired_observation_lock);paired_observation_first=first_frame;paired_observation_until=first_frame+count;}
     log("nvn: paired shadow trace guest frames %llu..%llu",(unsigned long long)first_frame,
         (unsigned long long)(trace_request_until-1));
     return true;
 }
-void cancel_paired_shadow_trace() {trace_request_until=0;paired_trace_active=false;}
+void cancel_paired_shadow_trace() {
+    trace_request_until=0;paired_trace_active=false;
+    std::lock_guard lock(paired_observation_lock);paired_observation_until=0;
+}
+bool paired_shadow_observation_window() {
+    std::lock_guard lock(paired_observation_lock);
+    const auto frame=g_frame.load(std::memory_order_relaxed);
+    return paired_observation_first && frame>=paired_observation_first && frame<paired_observation_until;
+}
 
 bool trace_capture() {
     // Shadow-only requests share the bounded trigger without enabling the much

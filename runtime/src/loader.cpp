@@ -58,8 +58,11 @@ void log(const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
+    ft::CallTimer mutex_wait(ft::TimedCall::LogMutexWait);
     std::lock_guard lk(g_log_lock);
+    mutex_wait.finish();
     if (!g_log_file) {
+        ft::CallTimer setup(ft::TimedCall::LogFileSetup);
         const char* path = std::getenv("NX_LOG");
 #if defined(__ANDROID__)
         std::string def = plat::data_root() + "/nx.log";  // next to the data, readable from the phone
@@ -77,9 +80,10 @@ void log(const char* fmt, ...) {
         std::rename(file.c_str(), (file + ".prev").c_str());
         g_log_file = plat::fopen_utf8(file, "w");
     }
-    plat::log_line(buf);
+    { ft::CallTimer sink(ft::TimedCall::LogPlatformSink); plat::log_line(buf); }
     ft::add(ft::kLogLines);  // the frame trace's log position (frametrace.h)
     if (g_log_file) {
+        ft::CallTimer sink(ft::TimedCall::LogFileSink);
         std::fprintf(g_log_file, "%s\n", buf);
         std::fflush(g_log_file);
     }

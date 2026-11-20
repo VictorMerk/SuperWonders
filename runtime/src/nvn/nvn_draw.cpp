@@ -1081,6 +1081,22 @@ void draw_begin_submit() {
 
 uint64_t recorded_draws();
 
+// Called only at the two boundaries of an explicitly paired diagnostic window,
+// under the GPU lock. Read cumulative counters without resetting ordinary stats.
+void paired_shadow_draw_counters(const char* phase,uint64_t frame,uint64_t present) {
+    log("nvn: paired shadow counters phase=%s guest=%llu present=%llu draws=%llu total=%llu "
+        "pass_submit=%llu pass_draw=%llu pass_dispatch=%llu pass_other_clear=%llu pass_large_clear=%llu "
+        "pass_copy=%llu pass_snapshot=%llu pass_targets=%llu break_textures=%llu break_targets=%llu dispatches=%llu",
+        phase,(unsigned long long)frame,(unsigned long long)present,
+        (unsigned long long)g_stats.done,(unsigned long long)g_stats.total,
+        (unsigned long long)g_pass_ends[0],(unsigned long long)g_pass_ends[1],
+        (unsigned long long)g_pass_ends[2],(unsigned long long)g_pass_ends[3],
+        (unsigned long long)g_pass_ends[4],(unsigned long long)g_pass_ends[5],
+        (unsigned long long)g_pass_ends[6],(unsigned long long)g_pass_ends[7],
+        (unsigned long long)g_stats.breaks_textures,(unsigned long long)g_stats.breaks_targets,
+        (unsigned long long)g_stats.dispatches);
+}
+
 void draw_log_stats() {
     if (g_vertex_barriers) log("nvn passes: %llu vertex-read barriers (G4)", (unsigned long long)g_vertex_barriers);
     dedup_log();

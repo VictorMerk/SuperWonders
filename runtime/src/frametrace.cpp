@@ -59,7 +59,7 @@ struct Guest {  // the latest game-side present, written by the game's thread, r
 FILE* g_file = nullptr;
 std::mutex g_lock;
 uint64_t g_t0 = 0;
-std::atomic<uint64_t> g_call_max[2]{};
+std::atomic<uint64_t> g_call_max[size_t(TimedCall::Count)]{};
 
 FILE* open_file() {
     static bool tried = false;
@@ -75,7 +75,7 @@ FILE* open_file() {
                  "frame,t_ms,frame_ms,acquire_ms,queue_present_ms,replay_ms,encode_ms,fence_ms,upload_mb,"
                  "present_cpu_ms,guest_presents,guest_gap_ms,guest_cpu_ms,guest_replay_wait_ms,guest_pace_ms,"
                  "guest_interval,pipelines,pipeline_ms,skipped,astc,astc_ms,file_reads,file_mb,file_ms,minflt,majflt,"
-                 "log_line,log_ms,log_max_ms,input_poll_ms,input_poll_max_ms,sample_to_present_ms,original_picture,present_pace_requested_ms,present_pace_actual_ms\n");
+                 "log_line,log_ms,log_max_ms,input_poll_ms,input_poll_max_ms,sample_to_present_ms,original_picture,present_pace_requested_ms,present_pace_actual_ms,log_mutex_ms,log_mutex_max_ms,log_platform_ms,log_platform_max_ms,log_file_ms,log_file_max_ms,log_setup_ms,log_setup_max_ms\n");
     std::atexit([] {
         std::lock_guard lk(g_lock);
         if (g_file) std::fflush(g_file);
@@ -95,13 +95,18 @@ bool enabled() {
 }
 
 CallTimer::CallTimer(TimedCall call) : kind(call), started(enabled() ? plat::monotonic_ns() : 0) {}
-CallTimer::~CallTimer() {
+CallTimer::~CallTimer() { finish(); }
+void CallTimer::finish() noexcept {
     if (!started) return;
+    const auto begin = started;
+    started = 0;
     const auto now = plat::monotonic_ns();
-    if (now < started) return;
-    const auto elapsed = now - started;
-    add(kind == TimedCall::Logging ? kLogNs : kInputPollNs, elapsed);
-    auto& maximum = g_call_max[kind == TimedCall::Logging ? 0 : 1];
+    if (now < begin) return;
+    const auto elapsed = now - begin;
+    constexpr Counter counters[]={kLogNs,kInputPollNs,kLogMutexNs,kLogPlatformNs,kLogFileNs,kLogSetupNs};
+    static_assert(std::size(counters)==size_t(TimedCall::Count));
+    add(counters[size_t(kind)], elapsed);
+    auto& maximum = g_call_max[size_t(kind)];
     auto old = maximum.load(std::memory_order_relaxed);
     while (elapsed > old && !maximum.compare_exchange_weak(old, elapsed, std::memory_order_relaxed)) {}
 }
@@ -163,7 +168,7 @@ uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t e
     auto ms = [](uint64_t ns) { return double(ns) / 1e6; };
     std::fprintf(f,
                  "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llu,%.3f,%.3f,%.3f,%.3f,%d,%llu,%.3f,%llu,%llu,%.3f,"
-                 "%llu,%.3f,%.3f,%llu,%llu,%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%.3f,%.3f\n",
+                 "%llu,%.3f,%.3f,%llu,%llu,%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                  (unsigned long long)frame, ms(t - g_t0), last_t ? ms(t - last_t) : 0.0, ms(acquire_ns),
                  ms(queue_present_ns), ms(d[kReplayNs]), ms(encode_total_ns - last_encode),
                  ms(fence_total_ns - last_fence), double(d[kUploadBytes]) / 1e6, last_cpu ? ms(cpu - last_cpu) : 0.0,
@@ -175,7 +180,11 @@ uint64_t host_present(uint64_t acquire_ns, uint64_t queue_present_ns, uint64_t e
                  (unsigned long long)now[kLogLines], ms(d[kLogNs]), ms(g_call_max[0].exchange(0, std::memory_order_relaxed)),
                  ms(d[kInputPollNs]), ms(g_call_max[1].exchange(0, std::memory_order_relaxed)),
                  input_sample_ns && t >= input_sample_ns ? ms(t-input_sample_ns) : -1.0,
-                 unsigned(original_picture), ms(pace_requested_ns), ms(pace_actual_ns));
+                 unsigned(original_picture), ms(pace_requested_ns), ms(pace_actual_ns),
+                 ms(d[kLogMutexNs]), ms(g_call_max[size_t(TimedCall::LogMutexWait)].exchange(0,std::memory_order_relaxed)),
+                 ms(d[kLogPlatformNs]), ms(g_call_max[size_t(TimedCall::LogPlatformSink)].exchange(0,std::memory_order_relaxed)),
+                 ms(d[kLogFileNs]), ms(g_call_max[size_t(TimedCall::LogFileSink)].exchange(0,std::memory_order_relaxed)),
+                 ms(d[kLogSetupNs]), ms(g_call_max[size_t(TimedCall::LogFileSetup)].exchange(0,std::memory_order_relaxed)));
     const uint64_t row = frame;
     if (++frame % 600 == 0) std::fflush(f);
     for (int k = 0; k < kCount; k++) last[k] = now[k];

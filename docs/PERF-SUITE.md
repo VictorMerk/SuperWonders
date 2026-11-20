@@ -138,6 +138,15 @@ The reporter sums totals and takes maxima when reconstructing original pictures,
 It does not automatically blame a hitch on logging/input. Unit regressions check accumulation, interval reset,
 maxima and legacy reports. Native hitch attribution with these new columns remains pending.
 
+With frame tracing enabled, logging additionally records completed mutex-wait,
+platform-output, file-write/flush and initial file-open/rotation phases. Each has
+a total and maximum duration; older traces omit them and remain unknown. The
+existing logging total also includes formatting and other gaps. Phases nest in
+that total, may overlap across threads, and can finish in a different presentation
+interval from their parent. Do not sum them as exclusive frame time or call them
+proof of the critical path. Disabled tracing adds no timing clock reads. Logging
+output order, synchronous writes and flushing are unchanged.
+
 ## Presentation wait attribution
 
 Frame traces also append `present_pace_requested_ms` and `present_pace_actual_ms` for the frame-generation deadline wait before each host present. The actual duration includes the timer wait and scheduling before the thread resumes. Tracing off adds no post-wait clock read and leaves the pacing deadline unchanged.
@@ -167,6 +176,14 @@ Older fixture captures and unrelated files remain untouched. This keeps one
 verified copy instead of retaining duplicate capture trees. Reuse neither a live
 save nor another test's output as the fixture. Dense readbacks add GPU and disk
 cost and are unsuitable for an FPS comparison.
+
+Native `dump_frames` requests must be published atomically. The helper
+`Publish-WonderCaptureRequest` writes and flushes a temporary file in the data
+directory, then moves it into place without replacing pending work. Directly
+creating/truncating the marker can expose an empty file to the runtime, selecting
+its default capture count/interval instead of the requested values. This helper
+starts no game and owns no reservation; callers still need their normal test
+reservation and capture budget.
 
 ## Paired shadow diagnostic captures
 

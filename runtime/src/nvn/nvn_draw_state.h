@@ -14,6 +14,8 @@ bool trace_capture();
 // worker/frame generation/pipelining off. No draw/presentation policy changes.
 bool begin_paired_shadow_trace(uint64_t first_frame,uint32_t count);
 void cancel_paired_shadow_trace();
+// Thread-safe bounded observation gate; never changes replay/rendering policy.
+bool paired_shadow_observation_window();
 bool rendering_enabled();
 void reports_begin_submit();
 std::vector<WriteBack> reports_take_write_backs();

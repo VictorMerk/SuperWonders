@@ -43,6 +43,27 @@ class PictureCadence(unittest.TestCase):
         self.assertEqual(merged[1]['input_poll_max_ms'],3.)
         self.assertNotIn('log_ms',report.picture_rows(self.rows(),'original')[0])
 
+    def test_logging_phases_preserve_sum_peak_and_unknown_legacy(self):
+        rows = self.rows()
+        for index, elapsed in ((5, 2.), (6, 3.)):
+            rows[index].update(log_ms=elapsed * 4, log_max_ms=elapsed * 4)
+            for prefix in report.LOG_PHASES.values():
+                rows[index][prefix + '_ms'] = elapsed
+                rows[index][prefix + '_max_ms'] = elapsed
+        merged = report.picture_rows(rows, 'original')[1]
+        for prefix in report.LOG_PHASES.values():
+            self.assertEqual(merged[prefix + '_ms'], 5.)
+            self.assertEqual(merged[prefix + '_max_ms'], 3.)
+        phase = report.logging_phase_summary([merged])
+        self.assertEqual(phase['phases']['mutex_wait']['total_ms'], 5.)
+        self.assertEqual(phase['phases']['platform_sink']['max_ms'], 3.)
+        self.assertIn('different presentation intervals', phase['scope'])
+        self.assertIn('exclusive frame cost', phase['scope'])
+        self.assertIsNone(report.logging_phase_summary(self.rows()))
+        partial = report.logging_phase_summary([dict(log_mutex_ms=4.)])
+        self.assertIsNone(partial['phases']['platform_sink']['total_ms'])
+        self.assertIsNone(partial['phases']['mutex_wait']['max_ms'])
+
     def test_upload_volume_does_not_invent_a_measured_stall(self):
         fields = ('frame_ms','acquire_ms','queue_present_ms','replay_ms','fence_ms','present_cpu_ms',
                   'guest_cpu_ms','guest_replay_wait_ms','guest_gap_ms','minflt','pipeline_ms','astc_ms',

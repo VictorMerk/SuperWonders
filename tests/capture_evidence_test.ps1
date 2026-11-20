@@ -4,6 +4,7 @@ function Check($Value,[string]$Message){if(!$Value){throw $Message}}
 $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $leaf='wonder-capture-evidence-'+[guid]::NewGuid().ToString('N')
 $root=[IO.Path]::GetFullPath((Join-Path $tempBase $leaf))
+$observer=$null
 try {
     Check ((Get-WonderCaptureCompletionReason 'exited' 299 300) -eq 'exited') 'Ordinary completion below capture budget stays successful'
     Check ((Get-WonderCaptureCompletionReason 'exited' 300 300) -eq 'capture budget reached') 'Final exact-limit capture cannot pass between polls'
@@ -12,6 +13,55 @@ try {
     Check ((Get-WonderCaptureCompletionReason 'foreign game started' 301 300) -eq 'foreign game started') 'Budget metadata preserves foreign-game reason'
     $source=Join-Path $root 'frames';$output=Join-Path $root 'evidence'
     New-Item -ItemType Directory -Path $source,$output | Out-Null
+    Publish-WonderCaptureRequest -DataRoot $root -Count 3 -Every 1
+    $request=Join-Path $root 'dump_frames'
+    Check ([IO.File]::ReadAllText($request) -eq "3 1`n") 'Native request becomes visible with complete count and interval'
+    $blocked=$false
+    try{Publish-WonderCaptureRequest -DataRoot $root -Count 7 -Every 2}catch{$blocked=$true}
+    Check ($blocked -and [IO.File]::ReadAllText($request) -eq "3 1`n") 'A pending native request cannot be overwritten'
+    Check (@(Get-ChildItem -LiteralPath $root -Filter 'dump_frames.pending-*').Count -eq 0) 'Failed publication cleans only its temporary file'
+    Remove-Item -LiteralPath $request
+    # A real concurrent consumer exercises visibility, not a mirror of Move().
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Threading;
+using System.Collections.Generic;
+public sealed class WonderCaptureRequestObserver {
+    public readonly List<string> Seen = new List<string>();
+    public string Error;
+    private readonly string path;
+    private readonly Thread thread;
+    private volatile bool stop;
+    public WonderCaptureRequestObserver(string request) {
+        path=request;thread=new Thread(Run);thread.IsBackground=true;thread.Start();
+    }
+    private void Run() {
+        try {
+            while(!stop) {
+                if(File.Exists(path)) {
+                    try { var bytes=File.ReadAllText(path);File.Delete(path);Seen.Add(bytes); }
+                    catch(IOException) { }
+                }
+                Thread.Sleep(1);
+            }
+        } catch(Exception e) { Error=e.GetType().Name; }
+    }
+    public bool Finish() {stop=true;return thread.Join(5000);}
+}
+'@
+    $observer=New-Object WonderCaptureRequestObserver($request)
+    for($i=1;$i -le 48;++$i) {
+        $deadline=[DateTime]::UtcNow.AddSeconds(5)
+        while([IO.File]::Exists($request) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 2}
+        Check (![IO.File]::Exists($request)) 'Concurrent consumer completed within its deadline'
+        Publish-WonderCaptureRequest -DataRoot $root -Count $i -Every 1
+    }
+    $deadline=[DateTime]::UtcNow.AddSeconds(5)
+    while([IO.File]::Exists($request) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 2}
+    Check ($observer.Finish() -and !$observer.Error -and $observer.Seen.Count -eq 48) 'Concurrent native request consumer completed every publication'
+    for($i=1;$i -le 48;++$i){Check ($observer.Seen[$i-1] -eq "$i 1`n") 'Consumer never observes an empty or partial request'}
+    $observer=$null
     Assert-WonderEmptyCaptureDirectory (Join-Path $root 'missing')
     Assert-WonderEmptyCaptureDirectory $source
     $since=[DateTime]::UtcNow.AddMinutes(-1)
@@ -60,6 +110,7 @@ try {
     Check ($empty.count -eq 0 -and $empty.bytes -eq 0) 'Missing capture directory has zero usage'
     Write-Output 'Capture evidence: fresh-byte accounting, growth, verified transfer and preservation passed'
 } finally {
+    if($observer){$null=$observer.Finish()}
     # This exact test-owned directory is the only recursive cleanup target.
     $resolved=[IO.Path]::GetFullPath($root)
     if($resolved -ne (Join-Path $tempBase $leaf) -or

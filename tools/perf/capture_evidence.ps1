@@ -1,4 +1,28 @@
 # Helpers for task-owned captures. No game, process or reservation operations.
+function Publish-WonderCaptureRequest {
+    param([Parameter(Mandatory=$true)][string]$DataRoot,
+          [ValidateRange(1,120)][int]$Count=1,
+          [ValidateRange(1,600)][int]$Every=1)
+    $directory=(Resolve-Path -LiteralPath $DataRoot -ErrorAction Stop).Path
+    if(!(Test-Path -LiteralPath $directory -PathType Container)){throw 'Capture request needs an existing data directory.'}
+    $target=Join-Path $directory 'dump_frames'
+    $temporary=Join-Path $directory ('dump_frames.pending-'+[guid]::NewGuid().ToString('N'))
+    $stream=$null;$created=$false
+    try {
+        $bytes=[Text.Encoding]::ASCII.GetBytes("$Count $Every`n")
+        $stream=[IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $created=$true
+        $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true);$stream.Dispose();$stream=$null
+        # Publish complete bytes in the same directory. Move never replaces an
+        # existing request: a second producer must not discard pending work.
+        # Direct truncate/write can expose empty bytes, selecting native defaults.
+        [IO.File]::Move($temporary,$target)
+    } finally {
+        if($stream){$stream.Dispose()}
+        if($created -and [IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}
+    }
+}
+
 function Assert-WonderEmptyCaptureDirectory([string]$Directory) {
     if(!(Test-Path -LiteralPath $Directory -ErrorAction Stop)){return}
     if(!(Test-Path -LiteralPath $Directory -PathType Container -ErrorAction Stop)) {

@@ -96,6 +96,11 @@ constexpr float kBody1080 = 29.0f;  // the menu rows at 1080 p (Savage Wind's si
 
 ImFont* g_body = nullptr;
 ImFont* g_title = nullptr;
+ImFont* g_wordmark = nullptr;
+// The cover is much larger than menu headings. Bake only its six letters at
+// display size, avoiding a large duplicate atlas of all localized menu glyphs.
+constexpr float kWordmarkBake = 192.f;
+const ImWchar kWordmarkRanges[] = {0x44,0x45,0x4e,0x4f,0x52,0x52,0x57,0x57,0};
 
 // Latin-1 plus menu punctuation. Script glyphs used by the in-game menu and launcher are merged below.
 const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2013, 0x2014, 0x2018, 0x201E, 0x2022, 0x2026, 0x2190, 0x2193, 0};
@@ -214,13 +219,14 @@ void apply_style(float height) {
 void load_fonts() {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
-    g_body = g_title = nullptr;
+    g_body = g_title = g_wordmark = nullptr;
     ImFontConfig cfg;
     cfg.OversampleH = 2;
 #ifdef NX_NUNITO
     cfg.FontDataOwnedByAtlas = false;  // (static data)
     g_body = io.Fonts->AddFontFromMemoryTTF((void*)kBodyFont, int(sizeof kBodyFont), kBodyBake, &cfg, kRanges);
     g_title = io.Fonts->AddFontFromMemoryTTF((void*)kTitleFont, int(sizeof kTitleFont), kTitleBake, &cfg, kRanges);
+    g_wordmark = io.Fonts->AddFontFromMemoryTTF((void*)kTitleFont, int(sizeof kTitleFont), kWordmarkBake, &cfg, kWordmarkRanges);
     if (g_body) nx::log("overlay: font Nunito (embedded)");
 #endif
     cfg.FontDataOwnedByAtlas = true;
@@ -229,7 +235,11 @@ void load_fonts() {
         if (FILE* f = std::fopen(path, "rb")) {
             std::fclose(f);
             g_body = io.Fonts->AddFontFromFileTTF(path, kBodyBake, &cfg, kRanges);
-            if (g_body) g_title = io.Fonts->AddFontFromFileTTF(path, kTitleBake, &cfg, kRanges), nx::log("overlay: font %s", path);
+            if (g_body) {
+                g_title = io.Fonts->AddFontFromFileTTF(path, kTitleBake, &cfg, kRanges);
+                g_wordmark = io.Fonts->AddFontFromFileTTF(path, kWordmarkBake, &cfg, kWordmarkRanges);
+                nx::log("overlay: font %s", path);
+            }
         }
     }
     if (!g_body) {
@@ -238,6 +248,7 @@ void load_fonts() {
         g_body = io.Fonts->AddFontDefault(&c);
     }
     if (!g_title) g_title = g_body;
+    if (!g_wordmark) g_wordmark = g_title;
     ImFontGlyphRangesBuilder glyph_builder;
     glyph_builder.AddText(kLocalizedGlyphs);
     glyph_builder.AddText(kAdditionalLocalizedGlyphs);
@@ -322,6 +333,7 @@ void load_fonts() {
 
 ImFont* body() { return g_body; }
 ImFont* title() { return g_title; }
+ImFont* wonder_wordmark() { return g_wordmark; }
 
 float font_scale(float height) { return kBody1080 * std::clamp(height / 1080.0f, 0.5f, 3.0f) / kBodyBake; }
 

@@ -34,6 +34,7 @@ void apply_style(float height);
 void load_fonts();
 ImFont* body();   // rows, text
 ImFont* title();  // headings
+ImFont* wonder_wordmark(); // Large Latin WONDER cover only; localized headings use title().
 // FontGlobalScale for an image `height` pixels tall: the body font at about 29 px at 1080 p.
 float font_scale(float height);
 

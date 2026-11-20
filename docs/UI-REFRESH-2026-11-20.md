@@ -30,9 +30,11 @@ not bundled game artwork or a gameplay screenshot.
 
 The [launcher hero](images/ui-launcher-2026-11-20.png) and
 [controller page](images/ui-controls-2026-11-20.png) are native Vulkan captures of
-the current layout, using intentionally empty, isolated test data. They contain
-no game assets or personal connection details. The unprepared hero is verified;
-a prepared-installation hero capture remains pending.
+the current layout using isolated test data. The hero shows a prepared
+installation and its Play action; the controller page uses empty test data.
+Neither image contains game assets or personal connection details. The large
+WONDER wordmark has its own six-letter font bake so the cover stays crisp
+without duplicating all localized menu glyphs at cover size.
 
 The five bundled Noto fallback subsets now include the localized Controls
 captions. Their sources are pinned to the authoritative Google Fonts repository,
@@ -44,7 +46,7 @@ bundled font cmaps. Character availability does not certify shaping or layout.
 
 ## Validation and limits
 
-The current Windows runtime passes all 112 CPU regressions and six native
+The earlier input-navigation build passed all 112 CPU regressions and six native
 overlay input cases, including stale polls/events, remapping capture, held
 preset changes and rapid close/reopen. Six isolated native UI tours completed
 cleanly: launcher and controller pages at 1280 x 720 and 640 x 360, German
@@ -55,6 +57,13 @@ Current source checks pass: font coverage, all 21 library tests and all three
 pure library geometry tests. The hidden Tk construction/resize smoke passed at
 960 x 740, 640 x 440 and 520 x 420 while the window remained withdrawn; it is not
 a screenshot or visual approval.
+
+The cover-font follow-up passed nine focused CPU checks, six native overlay
+input cases and seven native UI tours, including a 1920 x 1080 launcher.
+Prepared-installation Play captures were also visually inspected. That private
+capture helper encountered a post-exit log-sharing error; a separate postflight
+verified all 18 complete images, ready status, no loaded game library and the
+64 MiB final capture limit. This is not an uninterrupted helper-script pass.
 
 These checks do not establish every language/device combination, accessibility,
 correct gameplay graphics, multiplayer synchronization or an FPS improvement.

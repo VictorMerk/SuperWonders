@@ -30,7 +30,7 @@ See [preparing and selecting editions](docs/PLAYING-WONDER.md#choose-an-edition)
 
 ![SuperWonders PC launcher](docs/images/ui-launcher-2026-11-20.png)
 
-*The PC launcher in an isolated test installation, with no game data configured. The LAN entry is experimental; this screenshot does not demonstrate working multiplayer.*
+*The PC launcher in an isolated prepared installation. The cover uses runtime-owned typography and shapes. The LAN entry is experimental; this screenshot does not demonstrate working multiplayer.*
 
 ## Play on PC
 

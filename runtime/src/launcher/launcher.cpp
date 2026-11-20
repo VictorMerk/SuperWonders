@@ -748,9 +748,9 @@ void page_play() {
     const float brand_y=origin.y+pad+18*k;
     dl->AddText(ui::body(),font*1.10f,{origin.x+pad,brand_y},th.text_dim,"Super Mario Bros.");
     float title_size=std::min(hero_height*.32f,inner*.25f);
-    const float natural=ui::title()->CalcTextSizeA(title_size,FLT_MAX,0,"WONDER").x;
+    const float natural=ui::wonder_wordmark()->CalcTextSizeA(title_size,FLT_MAX,0,"WONDER").x;
     if(natural>inner)title_size*=inner/natural;
-    dl->AddText(ui::title(),title_size,{origin.x+pad,brand_y+font*1.5f},th.text,"WONDER");
+    dl->AddText(ui::wonder_wordmark(),title_size,{origin.x+pad,brand_y+font*1.5f},th.text,"WONDER");
     dl->PopClipRect();
 
     const float button_y=corner.y-pad-button_size.y;

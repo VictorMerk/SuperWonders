@@ -14,6 +14,7 @@
 
 #include "overlay/settings.h"
 #include "platform.h"
+#include "overlay/pad_navigation_gate.h"
 
 namespace nx::overlay {
 
@@ -38,6 +39,7 @@ Settings current_settings();
 std::string key_binding_name(int key);
 void apply_settings(const Settings& s, bool persist = true);
 void mark_game_started();  // snapshots settings after leaving the launcher, before guest resource loading
+void open_controls(int section = 0);  // Keyboard, Controller, Players & devices
 void open_settings(int tab = 0);  // Video, Audio, Controls, Overlay, System
 
 // ---- input (any thread) ----
@@ -61,11 +63,16 @@ using ScreenFn = void (*)(float w, float h);
 void set_screen(ScreenFn fn);
 bool screen_shown();
 uint64_t pad_buttons();  // the player's pad as the overlay last saw it (NpadButton bits, through the bindings)
+uint64_t navigation_buttons(); // presenting thread: current, generation-checked navigation; respects capture quarantine
 bool wants_mouse();     // the pointer is over the menu or the menu is open
 bool wants_keyboard();  // keys go to the menu, not the game
 // Called from plat::read_pad with the player's pad: navigates the menu with a controller, toggles it with
 // Minus + Plus held together, and clears `p` while the menu is open so the game does not see the presses.
 void filter_pad(plat::PadState& p);
+// Real pollers take this ticket BEFORE reading host input. The one-argument
+// overload is for immediately supplied synthetic samples in native probes.
+PadNavigationGate::Ticket begin_pad_poll();
+void filter_pad(plat::PadState& p, PadNavigationGate::Ticket ticket, uint64_t physical_buttons=0);
 
 // ---- metrics (any thread) ----
 void rendered(uint64_t now_ns, bool interpolated);  // once per game picture, separate from display FPS

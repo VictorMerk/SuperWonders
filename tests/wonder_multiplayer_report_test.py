@@ -169,6 +169,104 @@ class ReportTest(unittest.TestCase):
         self.assertIn("legacy_evidence_identity_conflict", result["correlation"]["reasons"])
         self.assertFalse(result["comparisons"])
 
+    def test_shared_runtime_cannot_hide_declared_source_edition_mismatch(self):
+        original = "cd6e42aee7934f4d8393cd43893ae25edc83d338000000000000000000000000"
+        updated = "ff773e90972d544eb79406eaa65396d53c43efb9000000000000000000000000"
+        left = dict(session=self.session(mode="legacy_lan", source_build_id=original),
+                    application_trace=self.application("left.csv", 0))
+        right = dict(session=self.session("right", mode="legacy_lan", source_build_id=updated),
+                     application_trace=self.application("right.csv", 1))
+        result = reporter.summarize(left, right)
+        self.assertFalse(result["correlation"]["eligible"])
+        self.assertIn("source_build_id_mismatch", result["correlation"]["reasons"])
+        identity = result["correlation"]["game_code_identity"]
+        self.assertEqual(identity["fields"]["source_build_id"], "declared_mismatch")
+        self.assertEqual(identity["fields"]["game_library_sha256"], "unknown")
+        self.assertFalse(result["comparisons"])
+        right["session"] = self.session("right", mode="legacy_lan", source_build_id=original)
+        same_source = reporter.summarize(left, right)
+        self.assertTrue(same_source["correlation"]["eligible"])
+        self.assertEqual(same_source["comparisons"]["legacy_application"]["matched_applied_ticks"], 1)
+
+    def test_same_source_with_different_generated_libraries_blocks_pairing(self):
+        left = dict(session=self.session(source_build_id="12" * 32, game_library_sha256="34" * 32), native_stats=self.native())
+        right = dict(session=self.session("right", source_build_id="12" * 32, game_library_sha256="56" * 32), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertFalse(result["correlation"]["eligible"])
+        self.assertIn("game_library_sha256_mismatch", result["correlation"]["reasons"])
+        self.assertEqual(result["correlation"]["game_code_identity"]["fields"]["source_build_id"], "declared_match")
+        self.assertFalse(result["comparisons"])
+
+    def test_matching_case_insensitive_declarations_are_not_measured_proof(self):
+        left = dict(session=self.session(source_build_id="ab" * 32, game_library_sha256="cd" * 32), native_stats=self.native())
+        right = dict(session=self.session("right", source_build_id="AB" * 32, game_library_sha256="CD" * 32), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertTrue(result["correlation"]["eligible"])
+        identity = result["correlation"]["game_code_identity"]
+        self.assertEqual(identity["status"], "declared_match")
+        self.assertIn("not measured loaded modules", identity["scope"])
+        self.assertEqual(result["peers"]["right"]["metadata"]["game_code_declarations"]["source_build_id"]["value"], "ab" * 32)
+
+    def test_missing_old_game_code_declarations_remain_unknown(self):
+        left = dict(session=self.session(), native_stats=self.native())
+        right = dict(session=self.session("right"), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertTrue(result["correlation"]["eligible"])
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "unknown")
+        self.assertIn("game_code_identity_incomplete", self.codes(result))
+        # A declaration on just one PC does not fill in the other PC's identity.
+        right["session"] = self.session("right", source_build_id="ab" * 32, game_library_sha256="cd" * 32)
+        result = reporter.summarize(left, right)
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "unknown")
+        left["session"] = self.session(source_build_id="AB" * 32)
+        result = reporter.summarize(left, right)
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "partial_declared_match")
+
+    def test_invalid_game_code_declarations_fail_closed_without_echoing(self):
+        for field in reporter.GAME_CODE_FIELDS:
+            for value in (True, ["private-secret"], "path/private-secret", "a" * 63):
+                with self.subTest(field=field, value=value):
+                    left = dict(session=self.session(**{field: value}), native_stats=self.native())
+                    right = dict(session=self.session("right"), native_stats=self.native("right-native.json"))
+                    result = reporter.summarize(left, right)
+                    self.assertFalse(result["correlation"]["eligible"])
+                    self.assertIn(field + "_invalid", result["correlation"]["reasons"])
+                    self.assertTrue(any(note["code"] == field + "_invalid" and note["level"] == "error" for note in result["diagnostics"]))
+                    self.assertNotIn("private-secret", json.dumps(result))
+                    self.assertFalse(result["comparisons"])
+
+    def test_planned_library_match_does_not_fill_loaded_or_source_identity(self):
+        left = dict(session=self.session(planned_game_library_sha256="ab" * 32), native_stats=self.native())
+        right = dict(session=self.session("right", planned_game_library_sha256="AB" * 32), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertTrue(result["correlation"]["eligible"])
+        self.assertEqual(result["correlation"]["planned_game_library_identity"]["status"], "planned_match")
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "unknown")
+        self.assertIn("not proof of the loaded library", result["correlation"]["planned_game_library_identity"]["scope"])
+        right["session"] = self.session("right", game_library_sha256="ab" * 32)
+        result = reporter.summarize(left, right)
+        self.assertEqual(result["correlation"]["planned_game_library_identity"]["status"], "unknown")
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "unknown")
+
+    def test_planned_library_conflict_blocks_pair_even_with_matching_declarations(self):
+        common = dict(source_build_id="12" * 32, game_library_sha256="34" * 32)
+        left = dict(session=self.session(planned_game_library_sha256="ab" * 32, **common), native_stats=self.native())
+        right = dict(session=self.session("right", planned_game_library_sha256="cd" * 32, **common), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertFalse(result["correlation"]["eligible"])
+        self.assertEqual(result["correlation"]["game_code_identity"]["status"], "declared_match")
+        self.assertEqual(result["correlation"]["planned_game_library_identity"]["status"], "planned_mismatch")
+        self.assertIn("planned_game_library_sha256_mismatch", result["correlation"]["reasons"])
+        self.assertFalse(result["comparisons"])
+
+    def test_invalid_planned_library_digest_is_not_echoed_or_accepted(self):
+        left = dict(session=self.session(planned_game_library_sha256=["private-library-path"]), native_stats=self.native())
+        right = dict(session=self.session("right"), native_stats=self.native("right-native.json"))
+        result = reporter.summarize(left, right)
+        self.assertFalse(result["correlation"]["eligible"])
+        self.assertIn("planned_game_library_sha256_invalid", self.codes(result))
+        self.assertNotIn("private-library-path", json.dumps(result))
+
 
 if __name__ == "__main__":
     unittest.main()

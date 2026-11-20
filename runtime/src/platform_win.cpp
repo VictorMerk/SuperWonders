@@ -1128,6 +1128,7 @@ bool headless() {  // NX_HEADLESS (platform.h)
 void rumble(float low, float high) { rumble_player(0, low, high); }
 
 void read_pad(PadState& p) {
+    const auto overlay_poll = overlay::begin_pad_poll();
     ft::CallTimer timing(ft::TimedCall::InputPoll);
     std::array<bool, kPcControlCount> physical{};
     PadState controller;
@@ -1175,7 +1176,9 @@ void read_pad(PadState& p) {
         PadState view = nav;
         view.buttons |= p.buttons;
         const bool had = view.buttons != 0;
-        overlay::filter_pad(view);  // Minus + Plus toggles; while open the menu takes the pad
+        uint64_t physical_buttons=0;
+        for(size_t i=0;i<physical.size();++i)if(physical[i])physical_buttons|=uint64_t{1}<<i;
+        overlay::filter_pad(view, overlay_poll, physical_buttons); // ticket precedes the host poll
         if (overlay::wants_keyboard() || (had && view.buttons == 0)) p = {};
     }
 }

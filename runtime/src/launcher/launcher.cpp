@@ -796,7 +796,7 @@ void page_play() {
     const char* network="LAN co-op  /  Experimental";
     const bool inline_coop=width>ImGui::CalcTextSize(local).x+ImGui::CalcTextSize(network).x+80*k;
     const float coop_width=inline_coop?(width-gap)*.5f:width;
-    if(ui::navigation_button(local,false,coop_width))overlay::open_settings(2);
+    if(ui::navigation_button(local,false,coop_width))overlay::open_controls(2);
     if(inline_coop)ImGui::SameLine();
     ImGui::BeginDisabled(!ready);
     if(ui::navigation_button(network,false,coop_width))open_lan();
@@ -1098,7 +1098,7 @@ void page_controls() {
     }
     rows::section(text.together);
     if (rows::action(text.local, text.devices, text.local_help))
-        overlay::open_settings(2);
+        overlay::open_controls(2);
     rows::action(text.lan, text.one_per_pc, text.lan_help, true);
     rows::section(text.shortcuts);
     rows::action(text.navigate, text.arrows, text.navigation, true);
@@ -1323,6 +1323,16 @@ void page_settings() {
             overlay::apply_settings(s);
             ui::notify("Graphics preset saved. Start or restart the game to apply all changes.");
         }
+    rows::section("Comfort shortcuts");
+    if(rows::action("Quiet play","Apply","Mute audio and turn off controller rumble. You can change either setting separately in Settings.")) {
+        auto s=overlay::current_settings();s.muted=true;s.rumble=0;overlay::apply_settings(s);ui::notify("Quiet play applied.");
+    }
+    if(rows::action("Clean screen","Apply","Hide the performance HUD for an unobstructed picture. Open the Escape menu to turn it back on.")) {
+        auto s=overlay::current_settings();s.metrics_enabled=false;overlay::apply_settings(s);ui::notify("Performance HUD hidden.");
+    }
+    if(rows::action("Enable sound & full rumble","Apply","Unmute audio and restore rumble to 100%. Your volume setting stays as configured.")) {
+        auto s=overlay::current_settings();s.muted=false;s.rumble=100;overlay::apply_settings(s);ui::notify("Sound enabled; rumble set to 100%.");
+    }
     rows::section("Make it yours");
     const char* sections[] = {"Video & graphics", "Audio & language", "Controllers & keyboard", "FPS & performance", "System & memory"};
     const char* descriptions[] = {
@@ -1354,16 +1364,6 @@ void page_settings() {
 
 void page_mods() {
     rows::begin("##mods", ImGui::GetContentRegionAvail().y);
-    rows::section("Built-in comfort presets");
-    if(rows::action("Quiet play","Apply","Mute audio and turn off controller rumble. You can change either setting separately in Settings.")) {
-        auto s=overlay::current_settings();s.muted=true;s.rumble=0;overlay::apply_settings(s);ui::notify("Quiet play applied.");
-    }
-    if(rows::action("Clean screen","Apply","Hide the performance HUD for an unobstructed picture. Open the Escape menu to turn it back on.")) {
-        auto s=overlay::current_settings();s.metrics_enabled=false;overlay::apply_settings(s);ui::notify("Performance HUD hidden.");
-    }
-    if(rows::action("Restore sound & rumble","Apply","Unmute audio and restore rumble to 100%. Your volume setting stays as configured.")) {
-        auto s=overlay::current_settings();s.muted=false;s.rumble=100;overlay::apply_settings(s);ui::notify("Sound and rumble restored.");
-    }
     rows::section("Installed game mods");
     if (g->mods.empty())
         rows::action("No mods yet", "", "Put each mod in a folder of its own in the mods folder. A mod holds a romfs "
@@ -1645,7 +1645,7 @@ void screen(float w, float h) {
     draw_profiles(w,h);
 
     // The controller, by the player's own bindings (the pad as the overlay saw it: NpadButton bits), and the keys.
-    const uint64_t pad = overlay::pad_buttons(), pressed = pad & ~g->pad_before;
+    const uint64_t pad = overlay::navigation_buttons(), pressed = pad & ~g->pad_before;
     g->pad_before = pad;
     if (menu_open || g->lan_open || profiles_open()) return;
     const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, false) ||
@@ -1864,8 +1864,14 @@ void run() {
             g->follow_hold = 2;  // the tour owns the page even while a sidebar item has keyboard focus
             const int step = int(frames / uint64_t(tour));
             if (step < kPages - 1) g->page = kNavigation[step];  // (not Quit)
-            if (step >= kPages - 1 && step < kPages - 1 + 5)
-                g->page = PageSettings, overlay::open_settings(step - (kPages - 1));
+            if (step >= kPages - 1 && step < kPages - 1 + 5) {
+                g->page = PageSettings;
+                const int tab = step - (kPages - 1);
+                const char* section = std::getenv("NX_CONTROLS_TOUR_SECTION");
+                if (tab == 2 && section && section[0] >= '0' && section[0] <= '2' && !section[1])
+                    overlay::open_controls(section[0] - '0');
+                else overlay::open_settings(tab);
+            }
             if (step == kPages - 1 + 5) {  // the setup card at 62%, its sheen sweeping
                 if (overlay::is_open()) overlay::toggle();
                 g->page = PageFiles, g->demo_progress = true, g->job.progress = 0.62f;

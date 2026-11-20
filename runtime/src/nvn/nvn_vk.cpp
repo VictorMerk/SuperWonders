@@ -957,7 +957,7 @@ bool overlay_input_probe() {
     if (!present_ui_frame()) return false;
     // Exercise the real render-thread capture gate: a binding press must not
     // also close settings or activate a focused navigation control.
-    overlay::open_settings(2);
+    overlay::open_controls(1);
     if (!present_ui_frame()) return false;
     auto& remap = overlay::controller_remap_state();
     remap.capture = int(overlay::CtlB);
@@ -987,7 +987,7 @@ bool overlay_input_probe() {
     if (!present_ui_frame()) return false;
     capture_ok = !overlay::is_open() && capture_ok; // A genuinely new B may close.
     pad = {}; overlay::filter_pad(pad);
-    overlay::open_settings(2);
+    overlay::open_controls(1);
     if (!present_ui_frame()) return false;
     overlay::cancel_controller_remapping();
     pad = {}; overlay::filter_pad(pad);
@@ -998,6 +998,84 @@ bool overlay_input_probe() {
     capture_ok = overlay::is_open() && remap.capture < 0 && capture_ok;
     log("overlay capture gate probe: Esc cancels listening; B/L/R do not close settings: %s", capture_ok ? "PASS" : "FAIL");
     ok = capture_ok && ok;
+    // A physical poll can begin before capture ends, then publish its old
+    // neutral result after extra generated/presented frames. It must not
+    // release the held-button barrier for a subsequent binding press.
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    const auto before_capture = overlay::begin_pad_poll();
+    remap.capture = int(overlay::CtlB);
+    if (!present_ui_frame()) return false;
+    overlay::cancel_controller_remapping();
+    if (!present_ui_frame() || !present_ui_frame()) return false;
+    pad = {}; overlay::filter_pad(pad, before_capture);
+    if (!present_ui_frame()) return false;
+    pad.buttons = plat::kPlus; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    bool ordering_ok = overlay::is_open() && overlay::pad_buttons() == plat::kPlus &&
+        overlay::navigation_buttons() == 0; // Raw feedback must not bypass the gate in launcher shortcuts.
+    pad.buttons = plat::kB; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    ordering_ok = overlay::is_open() && ordering_ok;
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    pad.buttons = plat::kB; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    ordering_ok = !overlay::is_open() && ordering_ok;
+
+    overlay::open_controls(1);
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    const auto previous_menu = overlay::begin_pad_poll();
+    overlay::toggle(); overlay::toggle();
+    pad = {}; overlay::filter_pad(pad); // Fresh neutral belongs to the new menu.
+    if (!present_ui_frame()) return false;
+    pad.buttons = plat::kB; overlay::filter_pad(pad, previous_menu);
+    if (!present_ui_frame()) return false;
+    ordering_ok = overlay::is_open() && overlay::navigation_buttons() == 0 && ordering_ok;
+    // An Esc queued for the old menu must not close a newly reopened one.
+    overlay::key_event(27,overlay::KeyEscape,true);
+    overlay::key_event(0,overlay::KeyF1,true);
+    overlay::key_event(0,overlay::KeyF1,true);
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    ordering_ok = overlay::is_open() && ordering_ok;
+    overlay::key_event(27,overlay::KeyEscape,true);
+    if (!present_ui_frame()) return false;
+    ordering_ok = !overlay::is_open() && ordering_ok; // Fresh Esc still closes.
+
+    // Presets can change bindings without entering the remapper. Model the
+    // same held physical South changing from logical A to logical B.
+    const auto before_preset = overlay::current_settings();
+    auto preset = before_preset;
+    preset.controller_preset=0;preset.controller_custom_mask=0;
+    overlay::apply_settings(preset,false);
+    overlay::open_settings(0);
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    pad.buttons=plat::kA;overlay::filter_pad(pad,overlay::begin_pad_poll(),1);
+    preset.controller_preset=1;overlay::apply_settings(preset,false);
+    pad.buttons=plat::kB;overlay::filter_pad(pad,overlay::begin_pad_poll(),1);
+    if (!present_ui_frame()) return false;
+    ordering_ok = overlay::is_open() && overlay::pad_buttons()==plat::kB &&
+        overlay::navigation_buttons()==0 && ordering_ok;
+    pad={};overlay::filter_pad(pad,overlay::begin_pad_poll(),1); // Async logical zero, still physically held.
+    if (!present_ui_frame()) return false;
+    ordering_ok = overlay::is_open() && overlay::navigation_buttons()==0 && ordering_ok;
+    pad={};overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    pad.buttons=plat::kB;overlay::filter_pad(pad,overlay::begin_pad_poll(),1);
+    if (!present_ui_frame()) return false;
+    ordering_ok = !overlay::is_open() && ordering_ok; // Released then newly pressed B still closes.
+    overlay::apply_settings(before_preset,false);
+    overlay::open_controls(1);
+    if (!present_ui_frame()) return false;
+    pad={};overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    log("overlay capture ordering probe: stale polls/events, fresh release, preset holds and reopened menu generations: %s", ordering_ok ? "PASS" : "FAIL");
+    ok = ordering_ok && ok;
     if (std::getenv("NX_OVERLAY_LAYOUT_TOUR")) {
         for (int tab = 0; tab < 5; ++tab) {
             overlay::open_settings(tab);

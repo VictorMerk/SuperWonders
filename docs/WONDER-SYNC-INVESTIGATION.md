@@ -76,6 +76,23 @@ route and settings with input pipeline enabled versus disabled. This tests a
 specific buffering hypothesis; disabling it is not an established fix. Do not
 rewrite all guest/kernel clocks or discard additional barriers without evidence.
 
+## Loading publication asymmetry
+
+The CPU regression `netplay_game_loading` exercises the actual runtime paths
+with bounded fake transport replies. A peer inside `loading_event()` exchanges
+an unmatched marker without publishing it, then exposes only the final neutral
+commit after both markers match. An ordinary peer's `next_frame()` can publish
+and return from an exchange containing the other peer's unmatched loading
+marker. Matching transport ticks therefore do not establish matching framework
+returns or input publication.
+
+This test executes no guest simulation and does not prove the historical
+course divergence's cause. Simply waiting inside the ordinary path could prevent
+that peer from reaching its own loading event. A correction needs a verified
+loading/frame progression policy, with paired application and framework traces;
+an unconditional extra barrier is not an established fix. The existing analyzer
+reports `gameplay_applies_with_peer_loading_marker` for retained examples.
+
 ## Native game networking census
 
 `NX_NATIVE_NET_TRACE=1` enables an independent, default-off SDK call census for

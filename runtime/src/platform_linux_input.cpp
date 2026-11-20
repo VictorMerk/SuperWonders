@@ -35,6 +35,8 @@ using linux_host::g_window;
 
 std::mutex g_pad_lock;
 PadState g_pad;
+overlay::PadNavigationGate::Ticket g_pad_ticket;
+uint64_t g_pad_physical_buttons=0;
 
 // Player settings (overlay/settings.h). Keyboard bindings are SDL scancodes. g_settings_lock guards g_settings; the
 // bindings are copied into atomics for the input sampling.
@@ -147,9 +149,12 @@ void rumble(float low, float high) {
 }
 
 void read_pad(PadState& p) {
+    overlay::PadNavigationGate::Ticket overlay_poll;
+    uint64_t physical_buttons=0;
     ft::CallTimer timing(ft::TimedCall::InputPoll);
     {
         std::lock_guard lk(g_pad_lock);
+        overlay_poll=g_pad_ticket;physical_buttons=g_pad_physical_buttons;
         p.buttons |= g_pad.buttons;
         if (g_pad.lx) p.lx = g_pad.lx;
         if (g_pad.ly) p.ly = g_pad.ly;
@@ -157,7 +162,7 @@ void read_pad(PadState& p) {
         if (g_pad.ry) p.ry = g_pad.ry;
     }
     input_script(p);
-    overlay::filter_pad(p);  // controller navigation of the menu; the game sees nothing while it is open
+    overlay::filter_pad(p, overlay_poll, physical_buttons); // ticket belongs to the actual host poll
 }
 
 namespace linux_host {
@@ -246,8 +251,12 @@ bool handle_event(const SDL_Event& e) {
 }
 
 void sample_input() {
+    const auto overlay_poll=overlay::begin_pad_poll();
     PadState p;
-    read_controller(0, p);
+    std::array<bool,kPcControlCount> physical{};
+    read_controller(0, p, &physical);
+    uint64_t physical_buttons=0;
+    for(size_t i=0;i<physical.size();++i)if(physical[i])physical_buttons|=uint64_t{1}<<i;
     // Named PC actions are translated before LAN sampling and without changing gamepad input.
     static input::KeyboardActionState keyboard_state;
     bool tab = false;
@@ -269,6 +278,7 @@ void sample_input() {
     g_fast_forward = tab;
     std::lock_guard lk(g_pad_lock);
     g_pad = p;
+    g_pad_ticket=overlay_poll;g_pad_physical_buttons=physical_buttons;
 }
 
 }  // namespace linux_host

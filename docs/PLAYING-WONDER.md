@@ -43,6 +43,14 @@ The launcher now has a dedicated **Controls** page. In the in-game menu, choose
 **Players & devices**. Keyboard bindings appear first; secondary choices are under
 **Keyboard options** below the binding list. Esc cancels an active remapping
 capture. Release the controller button before navigating after a new binding.
+Local co-op shortcuts open **Players & devices** directly; the general bindings
+shortcut opens **Keyboard remapping**. Changing keyboard mode replaces its key
+bindings with that mode's defaults. Comfort shortcuts live in launcher **Settings**,
+while **Mods** contains installed game mods. **Enable sound & full rumble** unmutes
+sound and sets vibration to 100%; it does not restore an earlier custom strength.
+The quick **Show/Hide performance HUD** action toggles the whole panel, preserving
+its individual metric selections.
+
 See the [interface refresh](UI-REFRESH-2026-11-20.md) for the changes and test scope.
 
 ## Graphics and smoothness
@@ -54,7 +62,7 @@ Start with ordinary rendering and a modest internal resolution. Change one setti
 - Optional frame generation can make motion look smoother while adding artifacts or latency. Record whether it is enabled when reporting performance.
 - The Low VRAM profile can reduce decoded texture storage with a possible image-quality tradeoff. Its cleanup threshold is not a hard limit on live GPU memory.
 
-Reopened in-game pause/gear blur and dark stage-map artifacts remain visual follow-up items. A previously documented screenshot does not establish those sequences fixed on the current build.
+A controlled Product.120 test preserved the in-game pause/gear background blur across ten close/reopen cycles with frame generation and pipeline draw skipping disabled. This does not cover every scene or settings combination. Dark stage-map artifacts during movement remain under investigation; no general graphics fix is certified.
 
 ## Mods
 

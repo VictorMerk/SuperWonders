@@ -104,6 +104,22 @@ The tool also accepts Steam lifecycle statistics and legacy packet/application
 traces. It keeps the modes separate, checks declarations and evidence freshness,
 and requires matching runtime/session identities plus distinct peer IDs before
 correlating the pair. Old runs without those fields remain uncorrelated evidence.
+Session JSON may additionally declare `source_build_id` (the 64 hexadecimal NSO
+build ID) and `game_library_sha256` (the generated game library's SHA256). These
+identify game code separately from the shared runtime executable, which can run
+both Wonder editions. Conflicting declarations block comparison; malformed ones
+are errors. Missing declarations in older sessions remain explicitly `unknown`,
+and a declaration on one PC cannot establish the other PC's identity. Matching
+declarations are reported as `declared_match`, not measured loaded-module proof.
+The launchers do not automatically record those two optional loaded-code
+declarations. The native developer launcher instead records
+`planned_game_library_sha256` plus a scoped selection record: it hashes the first
+determinable file from the child process's override, runtime-adjacent and prepared
+data search order. Locked/unreadable or ambiguous paths stay unknown. This does
+not execute or validate the DLL, infer its source edition, or prove which bytes
+were loaded later. Planned conflicts also block pair comparison; a
+`planned_match` never fills unknown loaded-code declarations. Preserve original
+session evidence and measure identities rather than guessing from folder names.
 Counts of API calls and returned bytes are not wire throughput or round-trip time.
 Exit code zero means the report parsed without malformed-input errors; it is not
 a passing multiplayer test. Keep original traces private and inspect the report's

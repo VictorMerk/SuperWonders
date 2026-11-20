@@ -20,7 +20,7 @@ $cases = @(
     @{Name='counter-pipelined'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='pipelined'},
     @{Name='counter-async'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='async'},
     @{Name='framegen'; Kind='Framegen'; Flag='NX_FRAMEGEN_PROBE'; Count=87; Pattern='framegen probe \d+x .*: PASS'; Mode='sync'},
-    @{Name='overlay'; Kind='Overlay'; Flag='NX_OVERLAY_INPUT_PROBE'; Count=5; Pattern='(?:overlay input probe: .*|overlay capture gate probe: .*|controller bridge probe preset \d): PASS'; Mode='sync'},
+    @{Name='overlay'; Kind='Overlay'; Flag='NX_OVERLAY_INPUT_PROBE'; Count=6; Pattern='(?:overlay input probe: .*|overlay capture (?:gate|ordering) probe: .*|controller bridge probe preset \d): PASS'; Mode='sync'},
     @{Name='texture'; Kind='Texture'; Flag='NX_TEXTURE_CONVERSION_PROBE'; Count=8; Pattern='texture conversion probe .*: PASS'; Mode='sync'}
 )
 $results = @()

@@ -701,6 +701,12 @@ void controls(MenuContext& c, const Labels& l) {
         const char* requested=std::getenv("NX_CONTROLS_TOUR_SECTION");
         return requested&&requested[0]>='0'&&requested[0]<='2'&&!requested[1]?requested[0]-'0':0;
     }();
+    if (c.controls_section_request >= 0 && c.controls_section_request < 3) {
+        section = c.controls_section_request;
+        c.capture_action = -1;
+        cancel_controller_remapping();
+        rows::focus_first();
+    }
     const char* sections[]={"Keyboard remapping","Controller remapping","Players & devices"};
     float section_min=0;
     for(const char* title:sections)section_min=std::max(section_min,ImGui::CalcTextSize(title).x+28);
@@ -770,7 +776,7 @@ void controls(MenuContext& c, const Labels& l) {
     if(options_open) {
     int keyboard_mode=s.keyboard_actions?0:1;
     const char* modes[]={"Dedicated PC actions","Legacy Switch buttons"};
-    if(rows::choice("Keyboard controls",&keyboard_mode,modes,2,0,
+    if(rows::choice("Keyboard mode (resets keys)",&keyboard_mode,modes,2,0,
         "Named PC actions include single-key ground pound and standee shortcuts. Sprint/grab/throw remain one contextual action. Legacy preserves direct Switch-button mappings. Switching mode applies its default keyboard layout; controllers are unchanged.")) {
         s.keyboard_actions=keyboard_mode==0;
         s.keyboard_bindings=s.keyboard_actions?input::recommended_keyboard_bindings():input::legacy_keyboard_bindings(input::native_keyboard_codes());
@@ -996,7 +1002,7 @@ void draw_menu(MenuContext& c) {
 
     if(!compact_header) {
     const char* actions[]={c.startup_settings ? "Resume game" : "Back to launcher",
-        s.muted?"Unmute":"Mute audio",s.metrics_enabled?"Hide FPS":"Show FPS"};
+        s.muted?"Unmute":"Mute audio",s.metrics_enabled?"Hide performance HUD":"Show performance HUD"};
     float action_min=0;
     for(const char* text:actions)action_min=std::max(action_min,ImGui::CalcTextSize(text).x+32);
     const int action_columns=plat::menu_layout::columns(ImGui::GetContentRegionAvail().x,action_min,3,ImGui::GetStyle().ItemSpacing.x);

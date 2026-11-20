@@ -84,10 +84,10 @@ inline void controller_remapping(Settings& s,bool appearing,bool open=true) {
     const ImVec2 avail=ImGui::GetContentRegionAvail();
     // Keep readable action/value columns instead of forcing a diagram beside a
     // 250-pixel list. Compact windows give the action list priority.
-    const bool wide=avail.x>=840.f*unit&&avail.y>=300.f*unit;
+    const bool wide=avail.x>=720.f*unit&&avail.y>=220.f*unit;
     const bool short_window=avail.y<460.f*unit;
     ImGui::BeginDisabled(just_bound);
-    const bool show_art=!compact&&(wide||(!short_window)||ImGui::CollapsingHeader("Controller preview"));
+    const bool show_art=wide||(!compact&&(!short_window||ImGui::CollapsingHeader("Controller preview")));
     if(show_art) {
         const float art_width=wide?avail.x*.40f:avail.x;
         const float art_height=wide?avail.y:std::min(220.f*unit,std::max(90.f,avail.y*.32f));

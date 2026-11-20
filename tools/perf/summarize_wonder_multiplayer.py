@@ -8,8 +8,13 @@ Session metadata: mode (native_lan/legacy_lan/steam_dev), runtime_sha256,
 session_id (shared experiment identity), peer_id (distinct participant identity),
 optional machine_id and started (timezone-qualified ISO timestamp). Older explicit
 native_lan:true metadata is recognized, but missing identities block pairing.
+Optional source_build_id (64 hex NSO build ID) and game_library_sha256 declare
+the game code independently of the shared runtime executable. Declared conflicts
+block pairing; missing old declarations remain explicitly unknown, not verified.
+planned_game_library_sha256 is compared separately: it fingerprints a prelaunch
+candidate, not the actual loaded module or the source build identity.
 Optional artifacts maps native_stats/steam_stats/legacy_trace/application_trace
-to SHA256 digests. Identities/paths/addresses/keys are not copied to the report.
+to SHA256 digests. Participant identifiers/paths/addresses/keys are not copied.
 Legacy CSV parsing/comparison reuses the existing diagnostic tools. JSON input
 is bounded to1MiB; CSV to256MiB (legacy packet ring retains its own8MiB limit).
 Exit0 means a report without malformed-input errors, never a game/test pass.
@@ -31,6 +36,8 @@ NATIVE_OPS = set("initialize initialize_config finalize is_initialized socket bi
 STEAM_STATUS = set("disabled invalid-path unsupported-platform load-failed missing-exports already-active init-failed init-exception ready busy stopped deferred callback-failed shutdown-failed".split())
 SCOPE = ("Local diagnostic evidence only. Matching declarations, inputs, counters or API lifecycle do not certify rooms, physical connectivity, world synchronization, RTT, display/input latency, FPS, Remote Play Together or P2P.")
 _TOOLS = {}
+GAME_CODE_FIELDS = ("source_build_id", "game_library_sha256")
+PLANNED_LIBRARY_FIELD = "planned_game_library_sha256"
 
 
 def _tool(name):
@@ -58,6 +65,63 @@ def _uint(value):
 
 def _hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _digest_declaration(value, field, label, notes):
+    if value is None or value == "":
+        return {"status": "missing", "value": None}
+    if _hash(value):
+        return {"status": "declared", "value": value.lower()}
+    # Never echo arbitrary malformed metadata into a shareable report.
+    _note(notes, field + "_invalid", label, error=True)
+    return {"status": "invalid", "value": None}
+
+
+def _game_code_declarations(session, label, notes):
+    result = {field: _digest_declaration(session.get(field), field, label, notes)
+              for field in GAME_CODE_FIELDS}
+    if any(item["status"] == "missing" for item in result.values()):
+        _note(notes, "game_code_identity_incomplete", label)
+    return result
+
+
+def _compare_game_code_declarations(left, right, reasons):
+    fields = {}
+    for field in GAME_CODE_FIELDS:
+        a, b = left[field], right[field]
+        if "invalid" in (a["status"], b["status"]):
+            status = "invalid"
+            reasons.append(field + "_invalid")
+        elif a["status"] != "declared" or b["status"] != "declared":
+            status = "unknown"
+        elif a["value"] != b["value"]:
+            status = "declared_mismatch"
+            reasons.append(field + "_mismatch")
+        else:
+            status = "declared_match"
+        fields[field] = status
+    states = set(fields.values())
+    status = ("invalid" if "invalid" in states else
+              "declared_mismatch" if "declared_mismatch" in states else
+              "declared_match" if states == {"declared_match"} else
+              "partial_declared_match" if "declared_match" in states else "unknown")
+    return {"status": status, "fields": fields,
+            "scope": "Session declarations only, not measured loaded modules. Matching runtime executables do not establish matching source editions or generated game libraries. Missing declarations remain unknown; no gameplay or simulation synchronization is verified."}
+
+
+def _compare_planned_libraries(left, right, reasons):
+    if "invalid" in (left["status"], right["status"]):
+        status = "invalid"
+        reasons.append(PLANNED_LIBRARY_FIELD + "_invalid")
+    elif left["status"] != "declared" or right["status"] != "declared":
+        status = "unknown"
+    elif left["value"] != right["value"]:
+        status = "planned_mismatch"
+        reasons.append(PLANNED_LIBRARY_FIELD + "_mismatch")
+    else:
+        status = "planned_match"
+    return {"status": status,
+            "scope": "Declared prelaunch file fingerprints only. A planned match is not proof of the loaded library, source edition, ABI or unchanged files at startup. Missing planned identities remain unknown and never fill loaded-module declarations."}
 
 
 def _identity(value):
@@ -241,6 +305,9 @@ def _peer(label, paths, notes):
     else:
         runtime = runtime.lower()
     metadata = {"mode": mode, "runtime_sha256": runtime,
+                "game_code_declarations": _game_code_declarations(session, label, notes),
+                "planned_game_library_declaration": _digest_declaration(
+                    session.get(PLANNED_LIBRARY_FIELD), PLANNED_LIBRARY_FIELD, label, notes),
                 "session_identity_present": _identity(session.get("session_id")),
                 "peer_identity_present": _identity(session.get("peer_id")),
                 "machine_identity_present": _identity(session.get("machine_id"))}
@@ -323,6 +390,10 @@ def summarize(left, right=None):
         reasons.append("mode_missing_or_mismatched")
     if not a["runtime_sha256"] or a["runtime_sha256"] != b["runtime_sha256"]:
         reasons.append("runtime_hash_missing_or_mismatched")
+    report["correlation"]["game_code_identity"] = _compare_game_code_declarations(
+        a["game_code_declarations"], b["game_code_declarations"], reasons)
+    report["correlation"]["planned_game_library_identity"] = _compare_planned_libraries(
+        a["planned_game_library_declaration"], b["planned_game_library_declaration"], reasons)
     for key in ("session_id", "peer_id"):
         av, bv = li["session"].get(key), ri["session"].get(key)
         if not _identity(av) or not _identity(bv):

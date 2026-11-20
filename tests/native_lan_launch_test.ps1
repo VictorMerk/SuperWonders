@@ -72,6 +72,58 @@ try {
            $roundtrip.run_id -eq 'local-run-fixture') 'Cross-PC diagnostic metadata was not preserved'
     $ungrouped=New-WonderNativeSessionMetadata ('a'*64) '' '' '' 'local-run-fixture' $checked ([DateTime]::UtcNow)
     Check (!$ungrouped.session_id -and !$ungrouped.peer_id) 'Launcher invented a shared session or peer identifier'
+    $fixtureData=Join-Path $temp 'data';$fixtureGame=Join-Path $fixtureData 'game'
+    New-Item -ItemType Directory -Path $fixtureGame | Out-Null
+    $adjacentLibrary=Join-Path $temp 'wonder_game.dll'
+    $dataLibrary=Join-Path $fixtureGame 'wonder_game.dll'
+    $overrideLibrary=Join-Path $temp 'override.dll'
+    [IO.File]::WriteAllText($dataLibrary,'different fixture data library, never executable')
+    [IO.File]::WriteAllText($adjacentLibrary,'invalid fixture adjacent library must not fall through, never executable')
+    [IO.File]::WriteAllText($overrideLibrary,'explicit fixture library, never executable')
+    $selectionInfo=New-WonderNativeStartInfo $runtime $fixtureData '' ''
+    $selectionInfo.EnvironmentVariables.Remove('NX_GAMELIB')
+    $selected=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+    Check ($selected.status -eq 'file_hashed' -and $selected.candidate_source -eq 'runtime_adjacent' -and
+           $selected.sha256 -eq (Get-FileHash -LiteralPath $adjacentLibrary -Algorithm SHA256).Hash.ToLowerInvariant()) 'Adjacent first-readable library was not fingerprinted; invalid DLL must not fall through'
+    $selectionInfo.EnvironmentVariables['NX_GAMELIB']='override.dll'
+    $selected=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+    Check ($selected.status -eq 'file_hashed' -and $selected.candidate_source -eq 'environment_override' -and
+           $selected.sha256 -eq (Get-FileHash -LiteralPath $overrideLibrary -Algorithm SHA256).Hash.ToLowerInvariant()) 'Child relative override was not resolved against its working directory'
+    $withIdentity=New-WonderNativeSessionMetadata ('a'*64) '' '' '' 'fixture' $checked ([DateTime]::UtcNow) $selected
+    $withIdentity=$withIdentity | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    Check ($withIdentity.planned_game_library_sha256 -eq $selected.sha256 -and
+           !$withIdentity.game_library_sha256 -and !$withIdentity.source_build_id -and
+           $withIdentity.planned_game_library_identity.scope -match 'not loaded-module') 'Planned file hash was promoted to loaded-module or source-build proof'
+    $lock=[IO.File]::Open($overrideLibrary,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+    try {
+        $locked=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+        Check ($locked.status -eq 'unknown' -and !$locked.sha256 -and $locked.candidate_source -eq 'environment_override') 'Unreadable first override silently fell back to a lower-priority library'
+    } finally {$lock.Dispose()}
+    foreach($ambiguousPath in @('C:override.dll','C:','\override.dll')) {
+        $selectionInfo.EnvironmentVariables['NX_GAMELIB']=$ambiguousPath
+        $unknown=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+        Check ($unknown.status -eq 'unknown' -and !$unknown.sha256 -and $unknown.reason -eq 'ambiguous_relative_path') 'Drive/root-relative override was guessed'
+    }
+    foreach($nonstandardPath in @('override','override.dll:stream','override.dll.')) {
+        $selectionInfo.EnvironmentVariables['NX_GAMELIB']=$nonstandardPath
+        $unknown=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+        Check ($unknown.status -eq 'unknown' -and !$unknown.sha256 -and $unknown.reason -eq 'nonstandard_library_path') 'Nonstandard/extensionless override risked fingerprinting different LoadLibrary bytes'
+    }
+    foreach($networkPath in @('\\offline-fixture\share\override.dll','\\.\pipe\override.dll')) {
+        $selectionInfo.EnvironmentVariables['NX_GAMELIB']=$networkPath
+        $unknown=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+        Check ($unknown.status -eq 'unknown' -and !$unknown.sha256 -and $unknown.reason -eq 'network_or_device_path') 'Metadata probe opened a network/device path'
+    }
+    $selectionInfo.EnvironmentVariables['NX_GAMELIB']='missing-override.dll'
+    $selected=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+    Check ($selected.candidate_source -eq 'runtime_adjacent' -and $selected.status -eq 'file_hashed') 'Missing explicit override did not preserve runtime fallback policy'
+    Remove-Item -LiteralPath $adjacentLibrary
+    $selected=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+    Check ($selected.status -eq 'file_hashed' -and $selected.candidate_source -eq 'data_root' -and
+           $selected.sha256 -eq (Get-FileHash -LiteralPath $dataLibrary -Algorithm SHA256).Hash.ToLowerInvariant()) 'Prepared data library fallback was not fingerprinted'
+    Remove-Item -LiteralPath $dataLibrary
+    $missingIdentity=Get-WonderNativePlannedLibraryIdentity $selectionInfo
+    Check ($missingIdentity.status -eq 'no_candidate' -and !$missingIdentity.sha256) 'Missing libraries invented a planned identity'
     Rejects {Assert-WonderNativeAssignedAddress '192.168.50.99' @($a,$b)} 'Unassigned but private address accepted'
     Rejects {Assert-WonderNativeAssignedAddress $a.ipv4 @($a,$a)} 'Same IPv4 on multiple adapters silently guessed'
     foreach($address in @('8.8.8.8','127.0.0.1','192.168.50.0','192.168.50.255')) {
@@ -98,7 +150,8 @@ try {
     foreach($key in $keys){[Environment]::SetEnvironmentVariable($key,$original[$key])}
     if($temp) {
         # Only exact fixture files created by this test; no recursive cleanup.
-        foreach($file in @($runtime,$manifest,$helper)){if($file -and (Test-Path -LiteralPath $file)){Remove-Item -LiteralPath $file}}
+        foreach($file in @($runtime,$manifest,$helper,$adjacentLibrary,$dataLibrary,$overrideLibrary)){if($file -and (Test-Path -LiteralPath $file)){Remove-Item -LiteralPath $file}}
+        foreach($folder in @($fixtureGame,$fixtureData)){if($folder -and (Test-Path -LiteralPath $folder)){Remove-Item -LiteralPath $folder}}
         Remove-Item -LiteralPath $temp
     }
 }

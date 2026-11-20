@@ -23,13 +23,16 @@ not bundled game artwork or a gameplay screenshot.
 | Keyboard options precede the actual bindings | Binding rows first, secondary options below | Show movement, jump and sprint immediately |
 | Binding B or a shoulder can also navigate | Capture blocks menu navigation until release | Avoid closing or switching pages while remapping |
 | Capture can survive a rapid close/reopen | Menu transitions cancel listening | Prevent an unexpected later binding |
+| Held button changes meaning after a preset | Require a fresh physical release after effective bindings change | Prevent a selection press becoming an unintended Back action |
+| Queued Esc survives a rapid reopen | Generation-tag events and clear previous held input | Keep old input from acting on a new menu |
+| Preview hidden in ordinary desktop settings | Side-by-side preview when width and height permit | Keep the controller and its bindings visible together |
 | Unbounded footer text | Measured, wrapped device-aware hints | Preserve content space and current button prompts |
 
-The [initial launcher capture](images/ui-launcher-2026-11-20.png) and
-[initial controller capture](images/ui-controls-2026-11-20.png) document an earlier
-layout, not the final hero. Those native Vulkan captures use intentionally empty,
-isolated test data; they contain no game assets or personal connection details.
-Final prepared and unprepared hero captures are still pending.
+The [launcher hero](images/ui-launcher-2026-11-20.png) and
+[controller page](images/ui-controls-2026-11-20.png) are native Vulkan captures of
+the current layout, using intentionally empty, isolated test data. They contain
+no game assets or personal connection details. The unprepared hero is verified;
+a prepared-installation hero capture remains pending.
 
 The five bundled Noto fallback subsets now include the localized Controls
 captions. Their sources are pinned to the authoritative Google Fonts repository,
@@ -41,11 +44,13 @@ bundled font cmaps. Character availability does not certify shaping or layout.
 
 ## Validation and limits
 
-The final hero and refreshed embedded fonts compile in the current Windows
-runtime. Windows CPU regressions pass, including the shared geometry,
-font coverage and launcher/library checks. Earlier native tours cover preceding
-layout iterations; the final hero still requires its native capture pass, so
-rendered approval is not yet established.
+The current Windows runtime passes all 112 CPU regressions and six native
+overlay input cases, including stale polls/events, remapping capture, held
+preset changes and rapid close/reopen. Six isolated native UI tours completed
+cleanly: launcher and controller pages at 1280 x 720 and 640 x 360, German
+controller settings at 800 x 600, and player/device settings at 1280 x 720.
+Their captures were visually inspected. Wide controller panels now retain the
+preview beside the bindings; small windows prioritize a scrollable binding list.
 Current source checks pass: font coverage, all 21 library tests and all three
 pure library geometry tests. The hidden Tk construction/resize smoke passed at
 960 x 740, 640 x 440 and 520 x 420 while the window remained withdrawn; it is not

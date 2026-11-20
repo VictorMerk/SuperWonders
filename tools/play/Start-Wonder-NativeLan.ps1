@@ -126,10 +126,67 @@ function Get-WonderNativePrelaunchEvidence([string]$Executable,[string]$Address,
     Write-Warning 'Optional native LAN preflight helper is missing. Interface selection will be checked by the runtime; no interface has been guessed. Place native_lan_preflight.exe beside the runtime to validate before launch.'
     return [pscustomobject]@{schema=1;source='not_run';status='helper_missing';selected=$null;scope='No prelaunch interface selection check; runtime validation remains active.'}
 }
-function New-WonderNativeSessionMetadata([string]$RuntimeHash,[string]$Address,[string]$SharedSession,[string]$Peer,[string]$RunId,$Prelaunch,[DateTime]$Started) {
+function Get-WonderNativePlannedLibraryIdentity($StartInfo) {
+    # Mirrors gamelib.cpp places(), using the child environment and working
+    # directory. This measures a planned file, never a loaded module or NSO ID.
+    $result=[ordered]@{schema=1;status='unknown';candidate_source=$null;sha256=$null;bytes=$null;
+        observed=[DateTime]::UtcNow.ToString('o');
+        scope='Planned first-readable game-library file measured before launch; not loaded-module, ABI, source-build or valid-DLL proof. The file can change after this observation.'}
+    if(!$StartInfo -or !$StartInfo.WorkingDirectory -or !$StartInfo.EnvironmentVariables['NX_DATA_ROOT']){$result['reason']='launch_selection_incomplete';return $result}
+    $candidates=@()
+    $override=$StartInfo.EnvironmentVariables['NX_GAMELIB']
+    if($override){$candidates+=@{source='environment_override';path=$override}}
+    $candidates+=@{source='runtime_adjacent';path=(Join-Path (Split-Path -Parent $StartInfo.FileName) 'wonder_game.dll')}
+    $candidates+=@{source='data_root';path=(Join-Path $StartInfo.EnvironmentVariables['NX_DATA_ROOT'] 'game/wonder_game.dll')}
+    foreach($candidate in $candidates) {
+        $result['candidate_source']=$candidate.source
+        $stream=$null;$algorithm=$null
+        try {
+            $path=[string]$candidate.path
+            # Drive-relative and root-relative Windows paths depend on state
+            # outside the supplied working directory. Do not guess that state.
+            if($path -match '^[A-Za-z]:([^\\/]|$)' -or $path -match '^[\\/][^\\/]'){$result['reason']='ambiguous_relative_path';return $result}
+            if($path.StartsWith('\\')){$result['reason']='network_or_device_path';return $result}
+            if($path -match ':' -and $path -notmatch '^[A-Za-z]:[^:]*$'){$result['reason']='nonstandard_library_path';return $result}
+            if(![IO.Path]::GetExtension($path).Equals('.dll',[StringComparison]::OrdinalIgnoreCase)){$result['reason']='nonstandard_library_path';return $result}
+            if(![IO.Path]::IsPathRooted($path)){$path=Join-Path $StartInfo.WorkingDirectory $path}
+            $path=[IO.Path]::GetFullPath($path)
+            if($path.StartsWith('\\')){$result['reason']='network_or_device_path';return $result}
+            # LoadLibrary can append .dll to an extensionless override even
+            # after fopen selected the extensionless file. Do not fingerprint
+            # different bytes or open arbitrary devices/network shares here.
+            if(![IO.Path]::GetExtension($path).Equals('.dll',[StringComparison]::OrdinalIgnoreCase)){$result['reason']='nonstandard_library_path';return $result}
+            # No fallback after a readable but invalid library: the runtime
+            # fatals on that same file. This probe does not execute/validate it.
+            $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+            if($stream.Length -gt 512MB){$result['reason']='file_size_limit';return $result}
+            $algorithm=[Security.Cryptography.SHA256]::Create()
+            $result['sha256']=([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-','').ToLowerInvariant()
+            $result['bytes']=$stream.Length;$result['status']='file_hashed'
+            return $result
+        } catch [IO.FileNotFoundException] {
+            continue
+        } catch [IO.DirectoryNotFoundException] {
+            continue
+        } catch {
+            # Inaccessible/locked/ambiguous first candidate is unknown. Never
+            # hash a lower-priority DLL and imply it is what will be selected.
+            $result['sha256']=$null;$result['bytes']=$null
+            $result['reason']='candidate_unreadable_or_invalid_path';return $result
+        } finally {
+            if($algorithm){$algorithm.Dispose()}
+            if($stream){$stream.Dispose()}
+        }
+    }
+    $result['status']='no_candidate';$result['candidate_source']=$null
+    return $result
+}
+function New-WonderNativeSessionMetadata([string]$RuntimeHash,[string]$Address,[string]$SharedSession,[string]$Peer,[string]$RunId,$Prelaunch,[DateTime]$Started,$LibraryIdentity=$null) {
     Assert-WonderNativeDiagnosticIds $SharedSession $Peer
     return [ordered]@{schema=1;runtime_sha256=$RuntimeHash;mode='native_lan';run_id=$RunId;session_id=$SharedSession;peer_id=$Peer;
         native_lan=$true;local_address=$Address;preflight=$Prelaunch;started=$Started.ToUniversalTime().ToString('o');
+        planned_game_library_sha256=$(if($LibraryIdentity -and $LibraryIdentity.status -eq 'file_hashed'){$LibraryIdentity.sha256}else{$null});
+        planned_game_library_identity=$LibraryIdentity;
         scope='Host-provider diagnostics; no whole-world synchronization certification.'}
 }
 function New-WonderNativeStartInfo([string]$Executable,[string]$Data,[string]$Address,[string]$Run) {
@@ -164,7 +221,9 @@ Assert-WonderNativeDiagnosticIds $SessionId $PeerId
 $prelaunch=Get-WonderNativePrelaunchEvidence $executable $LocalAddress $Preflight
 $runId=[Guid]::NewGuid().ToString('N') # local run only; never invent a shared session ID
 if($DryRun) {
-    $metadata=New-WonderNativeSessionMetadata $feature.runtime_sha256 $LocalAddress $SessionId $PeerId $runId $prelaunch ([DateTime]::UtcNow)
+    $startInfo=New-WonderNativeStartInfo $executable $data $LocalAddress ''
+    $identity=Get-WonderNativePlannedLibraryIdentity $startInfo
+    $metadata=New-WonderNativeSessionMetadata $feature.runtime_sha256 $LocalAddress $SessionId $PeerId $runId $prelaunch ([DateTime]::UtcNow) $identity
     $metadata['runtime']=$executable;$metadata['data_root']=$data;$metadata['launch_performed']=$false
     $metadata | ConvertTo-Json -Depth 8
     return
@@ -178,10 +237,12 @@ try {
     $run=Join-Path $OutputRoot ([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
     New-Item -ItemType Directory -Path $run | Out-Null
     $started=[DateTime]::UtcNow
-    New-WonderNativeSessionMetadata $feature.runtime_sha256 $LocalAddress $SessionId $PeerId $runId $prelaunch $started |
+    $startInfo=New-WonderNativeStartInfo $executable $data $LocalAddress $run
+    $identity=Get-WonderNativePlannedLibraryIdentity $startInfo
+    New-WonderNativeSessionMetadata $feature.runtime_sha256 $LocalAddress $SessionId $PeerId $runId $prelaunch $started $identity |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'session.json')
     $game=New-Object Diagnostics.Process
-    $game.StartInfo=New-WonderNativeStartInfo $executable $data $LocalAddress $run
+    $game.StartInfo=$startInfo
     if(!$game.Start()){throw 'Could not start Wonder.'}
     $retainedHandle=$game.Handle;$game.WaitForExit();$exitCode=$game.ExitCode
     $stats=Join-Path $data 'native-lan-stats.json'

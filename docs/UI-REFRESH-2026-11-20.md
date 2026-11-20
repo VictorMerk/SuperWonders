@@ -42,7 +42,7 @@ bundled font cmaps. Character availability does not certify shaping or layout.
 ## Validation and limits
 
 The final hero and refreshed embedded fonts compile in the current Windows
-runtime. All 107 configured CPU tests pass, including the shared geometry,
+runtime. Windows CPU regressions pass, including the shared geometry,
 font coverage and launcher/library checks. Earlier native tours cover preceding
 layout iterations; the final hero still requires its native capture pass, so
 rendered approval is not yet established.

@@ -150,6 +150,21 @@ The reporter sums both values when reconstructing original-picture intervals. On
 
 Successful same-size observations suppress further periodic queries until a pipeline changes the cache. They still owe a forced shutdown save, because serialized size alone cannot establish that the bytes are unchanged. Failed size queries, snapshots and file commits remain retryable; changes arriving during a successful save remain pending. Shutdown waits for the background writer before deciding whether a final export is owed.
 
+## Source-smoke capture evidence
+
+`tools/perf/run_wonder_source_smoke.ps1` monitors fresh PPM captures against
+`-MaxCaptureMiB` (256 by default). Reaching that budget stops only the owned test
+and fails the smoke. The check is polled, so captures can exceed the threshold
+between polls; it is not a filesystem quota. An interrupted final image can be
+incomplete and must not be counted as valid visual evidence.
+
+After the process stops, fresh captures are copied into the new output's
+`frames` folder and SHA-256 checked before their exact source files are removed.
+Older fixture captures and unrelated files remain untouched. This keeps one
+verified copy instead of retaining duplicate capture trees. Reuse neither a live
+save nor another test's output as the fixture. Dense readbacks add GPU and disk
+cost and are unsuitable for an FPS comparison.
+
 ## Rules
 
 - Two runs per scenario at least; compare medians.

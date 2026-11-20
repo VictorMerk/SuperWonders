@@ -328,6 +328,16 @@ if(NX_TESTS AND NOT ANDROID)
     target_include_directories(netplay_input_snapshot_test PRIVATE runtime/src runtime/include)
     target_link_libraries(netplay_input_snapshot_test PRIVATE Threads::Threads)
     add_test(NAME netplay_input_snapshot COMMAND netplay_input_snapshot_test)
+    if((MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # Include the real HLE handlers; discard unrelated, unregistered host
+        # handlers so this ABI/history regression needs no window or device.
+        add_executable(hle_hid_snapshot_test tests/hle_hid_snapshot_test.cpp)
+        target_include_directories(hle_hid_snapshot_test PRIVATE runtime/src runtime/include "${NX_VULKAN_SDK}/Include")
+        target_compile_options(hle_hid_snapshot_test PRIVATE -O1 -ffunction-sections -fdata-sections)
+        target_link_options(hle_hid_snapshot_test PRIVATE -Wl,--gc-sections)
+        target_link_libraries(hle_hid_snapshot_test PRIVATE Threads::Threads)
+        add_test(NAME hle_hid_snapshot COMMAND hle_hid_snapshot_test)
+    endif()
     if(TARGET native_lan_udp_test)
         target_link_libraries(native_lan_udp_test PRIVATE Threads::Threads)
         target_link_libraries(native_lan_guest_test PRIVATE Threads::Threads)
@@ -911,6 +921,8 @@ if(NX_TESTS AND NOT ANDROID)
 endif()
 
 if(NX_TESTS AND WIN32)
+  add_test(NAME capture_evidence COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+           -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/capture_evidence_test.ps1")
   add_test(NAME native_lan_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_lan_launch_test.ps1")
   add_test(NAME wonder_steam_dev_launch COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass

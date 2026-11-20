@@ -8,6 +8,7 @@ param(
     [ValidateRange(60,100000)][int]$QuitAfterFrames=1800,
     [ValidateRange(60,3600)][int]$TimeoutSeconds=600,
     [ValidateRange(1,10000)][int]$CaptureEvery=300,
+    [ValidateRange(1,4096)][int]$MaxCaptureMiB=256,
     [string]$ValidationLayer='',
     [switch]$TraceTextureSources,
     [switch]$TracePipelineMisses,
@@ -24,6 +25,7 @@ param(
 # Use only a task-owned fixture: gameplay can update that fixture's saves.
 # A successful smoke is not whole-game, visual or Switch 2 content certification.
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'capture_evidence.ps1')
 $runtimePath=(Resolve-Path -LiteralPath $Runtime).Path
 $dataPath=(Resolve-Path -LiteralPath $DataRoot).Path
 if(Test-Path -LiteralPath $Output){throw 'Choose a new evidence folder.'}
@@ -87,12 +89,16 @@ try {
     foreach($key in $options.Keys){$info.EnvironmentVariables[$key]=$options[$key]}
     $game=New-Object Diagnostics.Process;$game.StartInfo=$info
     $began=[DateTime]::UtcNow
+    $captureDirectory=Join-Path $dataPath 'frames'
+    [long]$captureBudgetBytes=[long]$MaxCaptureMiB*1MB
     $null=$game.Start();$started=$true
     $stdout=$game.StandardOutput.ReadToEndAsync();$stderr=$game.StandardError.ReadToEndAsync()
     $reason='exited';$deadline=$began.AddSeconds($TimeoutSeconds)
     while(!$game.HasExited) {
         $foreign=@(Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue | Where-Object {$_.Id -ne $game.Id})
         if($foreign.Count){$reason='foreign game started';$game.Kill();break}
+        $usage=Get-WonderCaptureUsage $captureDirectory $began
+        if($usage.bytes -ge $captureBudgetBytes){$reason='capture budget reached';$game.Kill();break}
         if([DateTime]::UtcNow -gt $deadline){$reason='timeout';$game.Kill();break}
         Start-Sleep -Milliseconds 500
     }
@@ -106,10 +112,11 @@ try {
     $intentional=if($quitFilePath){$requestQuit.Success}else{$quit.Success -and [int64]$quit.Groups[1].Value -ge $QuitAfterFrames}
     $audioPath=Join-Path $outputPath 'audio.wav'
     $audioBytes=if(Test-Path -LiteralPath $audioPath){(Get-Item -LiteralPath $audioPath).Length}else{0}
-    $frames=@(Get-ChildItem -LiteralPath (Join-Path $dataPath 'frames') -File -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTimeUtc -ge $began})
+    $usage=Get-WonderCaptureUsage $captureDirectory $began
+    $frames=@($usage.frames)
     if($frames.Count) {
         $capture=Join-Path $outputPath 'frames';$null=New-Item -ItemType Directory -Path $capture
-        foreach($frame in $frames){Copy-Item -LiteralPath $frame.FullName -Destination (Join-Path $capture $frame.Name)}
+        Move-WonderCaptureEvidence $frames $capture
     }
     $contentPassed=$null;$audioPassed=$null
     if($contentPythonPath) {
@@ -122,6 +129,7 @@ try {
         runtime=$runtimePath;data_root=$dataPath;reason=$reason;exit_code=$game.ExitCode;
         intentional_quit=$intentional;shutdown_mode=$(if($quitFilePath){'request-file'}else{'frame'});
         fresh_captures=$frames.Count;fatal_errors=[regex]::Matches($log,'FATAL:').Count;
+        capture_bytes=$usage.bytes;capture_budget_bytes=$captureBudgetBytes;
         validation_enabled=[bool]$layerPath;
         audio_bytes=$audioBytes;audio_required=[bool]$RequireAudio;
         audio_checked=[bool]$contentPythonPath;non_silent_audio_observed=$audioPassed;

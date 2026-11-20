@@ -52,3 +52,24 @@ Switch 2-exclusive content.
 See [capture and timing tools](PERF-SUITE.md),
 [shader preparation](SHADER-PREPARATION.md), and the
 [playing guide](PLAYING-WONDER.md) for the current supported behavior.
+
+
+## Gear-menu follow-up with frame generation
+
+A controlled clean-mod comparison exercised ten real gear-menu close/reopen
+cycles per renderer variant at 1280 x 720 with FG2 and draw skipping enabled.
+All 46 sampled pictures were confirmed generated presentations; the adjacent
+original presentations were not captured. Main Menu returns retained their blur
+and Settings reopens showed the actual game page. No draw omissions occurred,
+so this does not test the effect of an actual skipped draw. Both processes exited
+normally. The default renderer and texture-only Deferred candidate both passed
+this bounded check; it does not establish a universal blur cure or FPS gain.
+
+The user's ordinary setup includes the built-in recomp-menu override, which the
+clean comparison intentionally excluded. A byte-level archive comparison confirms
+its Bootup matches Product120 except for the intended Pause menu edit; it is not
+an original-edition archive accidentally overlaid on the upgraded game. Three
+resource-table allocation entries predate the current generator's alignment.
+Isolated regeneration and a modded-menu test sampling both original and generated
+presentations remain pending. No live mod was replaced on the strength of the
+clean comparison.

@@ -27,6 +27,8 @@ For a prepared Windows installation, this launcher starts one ordinary local-co-
 
 The scripts are run from the repository root. Launch scripts honor the shared game-test reservation and check for recognized game processes. Close other games before running an experiment. They do not configure a streaming application, approve a connection or send an invitation. Confirm that a guest's virtual controller is a separate player before starting a course.
 
+The local co-op launcher clears inherited room, input-replay, capture, trace and probe/tour settings before starting the child process. GPU and rendering preferences remain available, and the parent shell is unchanged.
+
 A single simulation avoids disagreement between two independently running games. Streaming still adds encoding, network and decoding costs; it is not a zero-latency promise. Steam Remote Play Together availability is not established by adding a non-Steam shortcut or writing an AppID file. See [the Steam prototype](WONDER-STEAM-DEV.md).
 
 ## Game-native LAN experiment

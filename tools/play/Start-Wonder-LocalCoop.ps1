@@ -13,7 +13,9 @@ function New-WonderLocalCoopStartInfo([string]$Executable,[string]$Data) {
     # controller configuration from the shell used for previous LAN diagnostics.
     foreach($key in @($info.EnvironmentVariables.Keys)) {
         if($key -like 'NX_LAN_*' -or $key -like 'NX_NATIVE_*' -or $key -like 'NX_STEAM_*' -or $key -like 'NX_TEST_*' -or $key -like 'NX_INPUT_*' -or
-           $key -like 'NX_PROBE*' -or $key -in @('NX_HEADLESS','NX_HEADLESS_PRESENT','NX_MUTE','NX_FRAMETRACE','NX_AUDIO_DUMP','NX_LOG','SteamAppId','SteamGameId')) {
+           $key -like 'NX_PROBE*' -or $key -like 'NX_*_PROBE' -or $key -like 'NX_*_TOUR' -or
+           $key -like 'NX_PLAY_*' -or $key -like 'NX_TRACE_*' -or $key -like 'NX_DUMP_*' -or
+           $key -in @('NX_HEADLESS','NX_HEADLESS_PRESENT','NX_MUTE','NX_FRAMETRACE','NX_AUDIO_DUMP','NX_LOG','NX_PIPELINE_MISS_TRACE','NX_PIPELINE_CACHE_TRACE','SteamAppId','SteamGameId')) {
             $info.EnvironmentVariables.Remove($key)
         }
     }

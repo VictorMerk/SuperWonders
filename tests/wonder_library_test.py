@@ -31,7 +31,7 @@ class LibraryTests(unittest.TestCase):
     def test_argument_paths_are_passed_without_a_shell_and_qa_overrides_removed(self):
         with patch.dict(os.environ, {'NX_TEST_QUIT_FRAME': '1', 'NX_GAMELIB': 'wrong.dll', 'NX_DATA_ROOT': 'wrong'}):
             argv, cwd, env = launch_spec(self.config, 'original')
-        self.assertEqual(argv, [str(self.executable.resolve())])
+        self.assertEqual(argv, [str(self.executable.resolve()), '--play'])
         self.assertEqual(cwd, str(self.root.resolve()))
         self.assertEqual(env['NX_DATA_ROOT'], str(self.data.resolve()))
         self.assertNotIn('NX_GAMELIB', env)

@@ -183,7 +183,7 @@ def launch_spec(config, key, *, configure=False):
         launcher = executable.with_name('wonder-launcher.exe')
         if os.name == 'nt' and launcher.is_file():
             executable = launcher
-    return [str(executable)] + (['--config'] if configure else []), str(executable.parent), env
+    return [str(executable), '--config' if configure else '--play'], str(executable.parent), env
 
 
 def library_window_geometry(work_area):

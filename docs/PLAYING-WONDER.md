@@ -25,7 +25,7 @@ The primary upstream version is **1.0.0**. The inspected **Product.120** update 
 python tools/wonder_library.py
 ```
 
-Configure a prepared runtime executable and a **separate data folder for each edition**. The library selects an existing installation; it does not turn an arbitrary NUP into a playable build. It does not migrate saves between editions. Closing the library leaves a launched game running.
+Configure a prepared runtime executable and a **separate data folder for each edition**. **Play** starts that edition directly; **LAN, mods & settings** opens its native management launcher. Esc/F1 remains available in-game. The library selects an existing installation; it does not turn an arbitrary NUP into a playable build. It does not migrate saves between editions. Closing the library leaves a launched game running.
 
 ## First launch and controls
 

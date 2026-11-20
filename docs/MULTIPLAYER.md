@@ -78,6 +78,16 @@ The older mode synchronizes input rather than the full game world. Loading, sche
 
 Replacing TCP with UDP or Steam transport alone does not establish a deterministic simulation. The [synchronization investigation](WONDER-SYNC-INVESTIGATION.md) tracks applied-input traces, bounded retention, native SDK probes and the evidence needed for the next controlled test. Keep both peers on the same runtime, version, save baseline and mod set when collecting evidence. Preserve private diagnostics locally and redact pairing codes before sharing.
 
+For protocol 6, one controller Input is 152 bytes and one Commit is 280 bytes,
+including the 40-byte protocol header and 32-byte MAC. At 60 exchanges per second,
+a two-PC gameplay pair therefore carries about 25.3 KiB/s in both directions
+combined. This is a calculation from the current encoder, excluding TCP/IP,
+transport acknowledgements, retransmissions, setup/save transfer and loading
+pumps; it is not a measured network rate. Gameplay sends no separate game-level
+Ack per tick, and TCP_NODELAY is enabled. Waiting at an input barrier can still
+add latency even when the byte rate is small. Lowering traffic alone does not
+repair different input application or world state.
+
 ## Compare diagnostic evidence
 
 `tools/perf/summarize_wonder_multiplayer.py` accepts explicit session and artifact

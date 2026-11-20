@@ -66,6 +66,7 @@ try {
     MustFail {Invoke-WonderSteamDev $stopped 'Launch' -ProcessLauncher {throw 'must not launch'}} 'Missing Steam process did not block manual launch'
     Check (!(Test-Path -LiteralPath $stopped.dev_root)) 'Blocked launch changed files'
     $manifest=Invoke-WonderSteamDev $plan 'Prepare'
+    Check ($manifest.game_library_sha256 -eq $hashes[(Join-Path $data 'game/wonder_game.dll')].ToLowerInvariant()) 'Prepared game-library bytes were not pinned independently of runtime and SDK DLL'
     Check (([IO.File]::ReadAllText((Join-Path $dev 'steam_appid.txt'))).Trim() -eq '480') 'Isolated AppID is wrong'
     Check ($manifest.steam_api_library -eq $api -and !(Test-Path -LiteralPath (Join-Path $dev 'steam_api64.dll'))) 'External SDK path was replaced with installed/unofficial DLL'
     Check (!(Test-Path -LiteralPath (Join-Path $dev 'wonder_game.dll')) -and !(Test-Path -LiteralPath (Join-Path $dev 'data'))) 'Game library/assets were copied'
@@ -73,6 +74,36 @@ try {
     $stageFeature=Join-Path $dev 'wonder-features.json'
     Check ((Get-FileHash -LiteralPath $stageFeature -Algorithm SHA256).Hash -eq $hashes[(Join-Path $runtimeRoot 'wonder-features.json')]) 'Hash-bound capability manifest was not staged unchanged'
     MustFail {Invoke-WonderSteamDev $plan 'Prepare'} 'Existing developer fixture was overwritten'
+    $manifestPath=Join-Path $dev 'steam-dev-manifest.json'
+    $manifestText=[IO.File]::ReadAllText($manifestPath)
+    foreach($badIdentity in @($null,'not-a-file-digest',('f'*64))) {
+        $changedManifest=$manifestText | ConvertFrom-Json
+        if($null -eq $badIdentity){$changedManifest.PSObject.Properties.Remove('game_library_sha256')}
+        else{$changedManifest.game_library_sha256=$badIdentity}
+        $changedManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        $script:unexpectedLaunch=$false
+        try {
+            MustFail {Invoke-WonderSteamDev $plan 'Launch' -ProcessLauncher {$script:unexpectedLaunch=$true;return 'must not launch'}} 'Missing/malformed/misbound game-library identity was accepted'
+            Check (!$script:unexpectedLaunch) 'Unpinned game library reached the injected process launch'
+        } finally {[IO.File]::WriteAllText($manifestPath,$manifestText)}
+    }
+    $gameLibrary=Join-Path $data 'game/wonder_game.dll'
+    $originalGameBytes=[IO.File]::ReadAllBytes($gameLibrary)
+    try {
+        [IO.File]::WriteAllText($gameLibrary,'different generated game at the same path, never execute')
+        $script:unexpectedLaunch=$false
+        MustFail {Invoke-WonderSteamDev $plan 'Launch' -ProcessLauncher {$script:unexpectedLaunch=$true;return 'must not launch'}} 'Changed game-library bytes at the same prepared path were accepted'
+        Check (!$script:unexpectedLaunch) 'Changed game library reached the injected process launch'
+        Remove-Item -LiteralPath $gameLibrary
+        MustFail {Invoke-WonderSteamDev $plan 'Launch' -ProcessLauncher {$script:unexpectedLaunch=$true;return 'must not launch'}} 'Missing prepared game library was accepted'
+        Check (!$script:unexpectedLaunch) 'Missing game library reached the injected process launch'
+    } finally {[IO.File]::WriteAllBytes($gameLibrary,$originalGameBytes)}
+    $session=New-WonderSteamSessionMetadata $manifest 'fixture-run' ([DateTime]::UtcNow)
+    $session=$session | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    Check ($session.planned_game_library_sha256 -eq $manifest.game_library_sha256 -and
+           $session.planned_game_library_identity.candidate_source -eq 'explicit_environment_override' -and
+           $session.planned_game_library_identity.scope -match 'not loaded-module' -and
+           !$session.game_library_sha256 -and !$session.source_build_id) 'Steam session promoted a planned file pin into loaded/source/ABI proof'
     $values=@{NX_LAN_MODE='join';NX_NATIVE_LAN='1';NX_LAN_LOBBY_AUTOSTART='join';NX_TEST_VIRTUAL_ONLY='1';NX_INPUT_FRAMES='1:A:2';NX_HEADLESS='1';NX_STEAM_API_LIBRARY='wrong';NX_GPU='discrete';SteamAppId='999';SteamGameId='999'}
     foreach($key in $values.Keys){$old[$key]=[Environment]::GetEnvironmentVariable($key);[Environment]::SetEnvironmentVariable($key,$values[$key])}
     $script:recorded=$null
@@ -111,7 +142,7 @@ try {
     MustFail {Invoke-WonderSteamDev $plan 'Launch' -ProcessLauncher {$script:unexpectedLaunch=$true;throw 'unexpected launch'}} 'Changed staged runtime was accepted'
     Check (!$script:unexpectedLaunch) 'Changed staged runtime reached process launch'
     foreach($file in $sourceFiles){Check ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $hashes[$file]) 'Source runtime/AppID/SDK/game library/config/save was modified'}
-    Write-Output 'Steam developer fixture: read-only preflight, isolated files, SDK-path control, source preservation and mocked local-coop process passed; no Steam/game/API/client launched.'
+    Write-Output 'Steam developer fixture: read-only preflight, isolated files, SDK-path control, prepared game-library hash pin/reuse rejection, scoped session identity, source preservation and mocked local-coop process passed; no Steam/game/API/client launched.'
 } finally {
     foreach($key in $old.Keys){[Environment]::SetEnvironmentVariable($key,$old[$key])}
     # Exact temporary test tree only; never pass paths between shells for deletion.

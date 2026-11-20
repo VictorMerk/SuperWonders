@@ -72,7 +72,10 @@ gameplay session uses the selected data and may save progress/settings normally.
 
 By default the SDK DLL remains at its explicit SDK path. `-CopySteamApi` copies
 only that caller-provided redistributable into the isolated DevRoot. A changed
-runtime, AppID or SDK DLL is rejected when reusing a prepared fixture.
+runtime, AppID, SDK DLL or generated game-library bytes are rejected when reusing
+a prepared fixture. The manifest pins `game_library_sha256` independently of the
+runtime and SDK. Older manifests without that identity require a fresh DevRoot;
+the launcher does not silently trust the existing path or recompile the game.
 
 ## Later manual test
 
@@ -95,6 +98,10 @@ A real developer launch creates a fresh `runs/<run-id>/` directory inside its
 isolated DevRoot. It retains `session.json`, `native.log`, `frametrace.csv`,
 `result.json` and, when the bootstrap runs, `steam-dev-stats.json`. A missing
 statistics file is missing evidence, not successful Steam initialization.
+The session records `planned_game_library_sha256` from the prepared hash rechecked
+before launch. This identifies planned file bytes, not a measured loaded module,
+source NSO edition or matching ABI; files can change after the observation. It is
+kept separate from loaded-code declarations in the multiplayer report.
 
 The statistics record actual initialization attempts, whether initialization ever
 succeeded, callback calls/completions/failures and shutdown calls/completions.

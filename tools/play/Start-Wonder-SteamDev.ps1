@@ -114,6 +114,27 @@ function New-WonderSteamDevStartInfo($Plan,$Manifest,[string]$Run='') {
     return $info
 }
 
+function Get-WonderSteamGameLibraryHash([string]$Library) {
+    if(!(Test-Path -LiteralPath $Library -PathType Leaf) -or (Get-Item -LiteralPath $Library).Length -gt 512MB){throw 'Prepared game library is missing or exceeds the diagnostic hash limit. Choose a fresh DevRoot after preparing the intended game library.'}
+    return (Get-FileHash -LiteralPath $Library -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+function Assert-WonderSteamGameLibraryIdentity($Manifest) {
+    if($Manifest.game_library_sha256 -isnot [string] -or $Manifest.game_library_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'Development manifest has no valid prepared game-library identity. Choose a fresh DevRoot; an older fixture is not silently trusted.'
+    }
+    if((Get-WonderSteamGameLibraryHash $Manifest.game_library) -ne $Manifest.game_library_sha256) {
+        throw 'Prepared game library changed. Choose a fresh DevRoot for the intended game library; no recompile is required by this launcher.'
+    }
+}
+function New-WonderSteamSessionMetadata($Manifest,[string]$RunId,[DateTime]$Started) {
+    return [ordered]@{schema=1;mode='steam_dev';run_id=$RunId;runtime_sha256=$Manifest.runtime_sha256;
+        planned_game_library_sha256=$Manifest.game_library_sha256;
+        planned_game_library_identity=@{schema=1;status='file_hashed';candidate_source='explicit_environment_override';
+            scope='Prepared file hash rechecked before launch; not loaded-module, source-build or ABI proof. The file can change after this observation.'};
+        started=$Started.ToUniversalTime().ToString('o');app_id=480;
+        scope='Local Steam API lifecycle test; no Remote Play or two-PC synchronization certification.'}
+}
+
 function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][string]$Mode='DryRun',
     [switch]$CopyApi,[scriptblock]$ProcessLauncher) {
     if($Mode -eq 'DryRun'){return $Plan}
@@ -154,6 +175,7 @@ function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][
         [IO.File]::WriteAllText((Join-Path $Plan.dev_root 'steam_appid.txt'),"480`n",[Text.Encoding]::ASCII)
         $manifest=[pscustomobject]@{schema=1;workflow='wonder-steam-dev';app_id=480;
             source_runtime=$Plan.source_runtime;source_data=$Plan.source_data;game_library=$Plan.game_library;
+            game_library_sha256=(Get-WonderSteamGameLibraryHash $Plan.game_library);
             runtime_sha256=(Get-FileHash -LiteralPath $Plan.source_runtime -Algorithm SHA256).Hash;
             steam_api_library=$api;sdk_root=$Plan.sdk.root;steam_api_copied=[bool]$CopyApi;
             sdk_library_sha256=(Get-FileHash -LiteralPath $Plan.sdk.library -Algorithm SHA256).Hash;
@@ -163,6 +185,7 @@ function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][
         $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
     }
     if($Mode -eq 'Prepare'){return $manifest}
+    Assert-WonderSteamGameLibraryIdentity $manifest
     if(!(Test-Path -LiteralPath $manifest.steam_api_library -PathType Leaf)){throw 'The caller-provided Steam SDK DLL is no longer available.'}
     $info=New-WonderSteamDevStartInfo $Plan $manifest
     if($ProcessLauncher){return & $ProcessLauncher $info} # CPU tests inject a recorder, never an app.
@@ -177,10 +200,8 @@ function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][
         $runId=[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')+'-'+[Guid]::NewGuid().ToString('N').Substring(0,8)
         $run=Join-Path $Plan.dev_root ('runs/'+$runId)
         New-Item -ItemType Directory -Path $run | Out-Null
-        @{schema=1;mode='steam_dev';run_id=$runId;runtime_sha256=$manifest.runtime_sha256;
-          started=[DateTime]::UtcNow.ToString('o');app_id=480;
-          scope='Local Steam API lifecycle test; no Remote Play or two-PC synchronization certification.'} |
-            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'session.json') -Encoding UTF8
+        New-WonderSteamSessionMetadata $manifest $runId ([DateTime]::UtcNow) |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $run 'session.json') -Encoding UTF8
         $info=New-WonderSteamDevStartInfo $Plan $manifest $run
         $game=New-Object Diagnostics.Process;$game.StartInfo=$info
         if(!$game.Start()){throw 'Could not start the developer runtime.'}

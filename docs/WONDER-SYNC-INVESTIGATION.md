@@ -95,6 +95,19 @@ CSV files without the trailing observation columns remain readable. Retention ca
 omit an entry or exit: an unpaired retained event alone is not evidence of a hang.
 These observations change no frame cadence, clocks, protocol or pause behavior.
 
+## Existing LAN timing guard
+
+Active shared-input LAN already bypasses Wonder's adaptive wall-clock frame step
+and uses the host-agreed 30 or 60 Hz step. The actual-production-code
+`wonder_lan_timing` CPU regression checks initialization before the first present
+and irregular presentation timestamps, including a long gap and a conflicting
+local interval. The stored simulation step stays fixed; the offline adaptive
+branch still works independently. The adaptive-step log from an ordinary local
+co-op run is therefore not evidence that active LAN uses adaptive timing.
+
+This covers that timing branch only. It does not establish deterministic guest
+thread scheduling, loading progression, all clocks, actor state or world sync.
+
 ## Loading publication asymmetry
 
 The CPU regression `netplay_game_loading` exercises the actual runtime paths

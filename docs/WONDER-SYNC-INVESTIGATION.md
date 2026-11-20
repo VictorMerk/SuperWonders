@@ -349,3 +349,33 @@ The combined multiplayer report raises `legacy_commit_fate_mismatch` when this
 evidence differs. The actual pipeline and serial CPU reproductions both produce
 that warning-worthy mismatch; twenty comparer tests and twenty combined-report
 tests cover the reporting path. This is diagnostic coverage, not a runtime fix.
+
+
+## Optional native task-phase observations
+
+With legacy application tracing enabled, `NX_LAN_TRACE_PHASES=1` additionally
+observes the source-verified pre/core/post task callbacks in both supported builds.
+The three hooks remain untouched by default. Before installing any hook, the
+runtime checks source version, text bounds, instruction fingerprints and all
+original function pointers. Each wrapper calls the original exactly once and
+preserves its CPU results and exception. It does not read or write guessed actor
+fields, change readiness, publish inputs, pause the game or perform exchanges.
+
+The nine optional `phase_pre/core/post_enter/exit/throw` events retain schema 1
+and use the existing bounded local invocation/thread identities. Phase tick and
+sampling identity come from an atomic publication-identity mirror without taking
+the input mutex; the loading marker and presentation count are separate local
+observations. This is not the complete atomic pad snapshot used for HID delivery.
+The parser keeps phase counts separate from framework counts and attributes file
+observations through retained, paired, same-thread ancestry only. Missing or
+truncated parents remain unknown. Explicit tracing adds work and is not an FPS
+benchmark mode.
+
+These are source-named lifecycle callbacks. In particular, the core callback can
+return without advancing actors. Invocation counts or cross-PC ordinal equality
+therefore do not establish shared simulation generations or scene readiness.
+The next physical test must correlate these observations with actual input/HID
+publication, loading and visible gameplay before choosing a new exchange gate.
+
+See [Wonder clock policy](WONDER-CLOCK-POLICY.md) for fixed-step versus ordinary
+clocks, the shared-clock ABI correction and the remaining legacy LAN limitation.

@@ -21,6 +21,7 @@ struct LobbyRequest {
     bool pipeline = false;
     uint8_t frame_rate = 60;
 };
+enum class CalcPhase : unsigned { Pre, Core, Post };
 struct FrameworkObservation {
     uint64_t invocation=0, parent=0, frame_before=0;
     uint32_t thread=0;
@@ -34,6 +35,9 @@ plat::PadState pad(uint32_t player);
 InputSnapshot input_snapshot(uint32_t player);
 void next_frame();
 void trace_framework_frame(uint64_t frame_before,uint64_t frame_after);
+bool trace_phases_enabled() noexcept;
+FrameworkObservation trace_phase_enter(const CPU&,CalcPhase) noexcept;
+void trace_phase_leave(const CPU&,FrameworkObservation,CalcPhase,bool threw=false) noexcept;
 FrameworkObservation trace_framework_enter(const CPU&) noexcept;
 void trace_framework_leave(const CPU&,FrameworkObservation,bool threw=false) noexcept;
 void trace_loading_file(const char* path,const CPU&) noexcept;
@@ -63,6 +67,9 @@ inline plat::PadState pad(uint32_t) { return {}; }
 inline InputSnapshot input_snapshot(uint32_t) {return {};}
 inline void next_frame() {}
 inline void trace_framework_frame(uint64_t,uint64_t) {}
+inline bool trace_phases_enabled() noexcept {return false;}
+inline FrameworkObservation trace_phase_enter(const CPU&,CalcPhase) noexcept {return {};}
+inline void trace_phase_leave(const CPU&,FrameworkObservation,CalcPhase,bool=false) noexcept {}
 inline FrameworkObservation trace_framework_enter(const CPU&) noexcept {return {};}
 inline void trace_framework_leave(const CPU&,FrameworkObservation,bool=false) noexcept {}
 inline void trace_loading_file(const char*,const CPU&) noexcept {}

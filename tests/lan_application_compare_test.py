@@ -278,6 +278,46 @@ class ComparisonTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.read(path)
 
+    def test_source_phase_nesting_correlates_file_without_inflating_framework(self):
+        def event(name, sequence, invocation, parent=0):
+            return row(0, name, sequence=sequence, invocation=invocation,
+                       parent_invocation=parent, thread_ordinal=1,
+                       resource_hash=0, caller_module=0, caller_offset=0)
+        rows = [event("framework_enter", 1, 1), event("phase_pre_enter", 2, 2, 1),
+                event("phase_core_enter", 3, 3, 2), event("loading_file", 4, 3),
+                event("phase_core_throw", 5, 3, 2), event("phase_pre_exit", 6, 2, 1),
+                event("framework_exit", 7, 1)]
+        path = self.write("phases", 0, rows, observations=True)
+        stats = module.read(path)[2]
+        self.assertEqual(stats["retained_framework_entries"], 1)
+        self.assertEqual(stats["retained_matched_framework_invocations"], 1)
+        self.assertEqual(stats["retained_matched_source_phase_invocations"], 2)
+        self.assertEqual(stats["retained_source_phase_exceptional_leaves"], 1)
+        self.assertEqual(stats["retained_loading_files_in_source_phase_pair"], 1)
+        self.assertEqual(stats["retained_loading_files_in_phase_with_framework_ancestor"], 1)
+        self.assertEqual(stats["retained_loading_files_in_framework_pair"], 1)
+        # Retained phase/file evidence survives eviction, but framework ancestry is unknown.
+        path = self.write("phaseonly", 0, rows[1:-1], observations=True)
+        stats = module.read(path)[2]
+        self.assertEqual(stats["retained_loading_files_in_source_phase_pair"], 1)
+        self.assertEqual(stats["retained_loading_files_in_framework_pair"], 0)
+        self.assertEqual(stats["retained_framework_entries"], 0)
+        # Incomplete exit does not certify containment.
+        path = self.write("partialphase", 0, rows[1:4], observations=True)
+        self.assertEqual(module.read(path)[2]["retained_loading_files_in_source_phase_pair"], 0)
+
+    def test_source_phase_invalid_pair_or_cycle_rejected(self):
+        def event(name, sequence, invocation, parent):
+            return row(0, name, sequence=sequence, invocation=invocation,
+                       parent_invocation=parent, thread_ordinal=1,
+                       resource_hash=0, caller_module=0, caller_offset=0)
+        for rows in ([event("phase_pre_enter", 1, 1, 0), event("phase_core_exit", 2, 1, 0)],
+                     [event("phase_pre_enter", 1, 1, 2), event("phase_core_enter", 2, 2, 1)],
+                     [event("phase_post_enter", 1, 1, 1)]):
+            path = self.write("badphase", 0, rows, observations=True)
+            with self.assertRaises(ValueError):
+                module.read(path)
+
     def test_invalid_schema_and_hid_player_rejected(self):
         left = self.write("left", 0, [row(1)])
         right = self.write("right", 1, [row(1, "hid_delivery", player=4)])

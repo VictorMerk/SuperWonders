@@ -53,6 +53,10 @@ int main() {
     check(depth.current(55).invocation==0,"nesting overflow does not falsely attribute loading file");
     depth.end(55,nested.back().invocation);
     check(depth.current(55).invocation==nested[7].invocation,"overflow unwinding restores tracked nesting");
+    ApplyTrace phases(4);e={};e.event=ApplyEvent::PhaseCoreEnter;phases.push(e);
+    e.event=ApplyEvent::PhaseCoreThrow;phases.push(e);text=csv(phases);
+    check(text.find("count_phase_core_enter=1")!=text.npos&&text.find("count_phase_core_throw=1")!=text.npos&&
+          text.find("count_framework_enter=0")!=text.npos,"phase counters do not inflate framework entries");
     ApplyTrace concurrent(8);
     const auto produce=[&] { for(unsigned i=0;i<1000;++i)concurrent.push({}); };
     std::thread a(produce),b(produce); a.join(); b.join();

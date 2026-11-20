@@ -125,6 +125,16 @@ static nx::lan::FrameInputs frame(uint64_t tick, uint64_t a, uint64_t b) {
 int main() {
   using namespace nx::lan;
   using fixture::check;
+  const auto phase_env=[](const char* value) {
+#ifdef _WIN32
+    check(_putenv_s("NX_LAN_TRACE_PHASES",value)==0,"set fixture phase flag");
+#else
+    check(setenv("NX_LAN_TRACE_PHASES",value,1)==0,"set fixture phase flag");
+#endif
+  };
+  phase_env("1");
+  check(!trace_phases_enabled(),"phase flag alone cannot enable trace");
+  phase_env("0");
   Session fake;
   const char *path = "fixture:/Sound/Resource/Stream/BGM_CourseFixture.bwav";
   uint64_t marker = 0xcbf29ce484222325ull;
@@ -173,6 +183,37 @@ int main() {
   check(unknown_callers.str().find(","+std::to_string(marker)+",0,0\n")!=std::string::npos&&
         unknown_callers.str().find("# count_framework_throw=1\n")!=std::string::npos,
         "invalid caller range stays unknown and exceptional exit is distinct");
+  check(!trace_phases_enabled()&&!trace_phase_enter(cpu,CalcPhase::Pre).invocation,"trace alone does not enable phases");
+  phase_env("true");check(!trace_phases_enabled(),"only exact phase flag1 enables");
+  phase_env("1");check(trace_phases_enabled(),"both opt-ins enable phases");
+  const auto phase_parent=trace_framework_enter(cpu);
+  const auto pre=trace_phase_enter(cpu,CalcPhase::Pre);
+  const auto core=trace_phase_enter(cpu,CalcPhase::Core);
+  check(pre.parent==phase_parent.invocation&&core.parent==pre.invocation,"real registry preserves nested phase ancestry");
+  trace_loading_file(path,cpu);
+  trace_phase_leave(cpu,core,CalcPhase::Core,true);
+  trace_phase_leave(cpu,pre,CalcPhase::Pre);
+  const auto post=trace_phase_enter(cpu,CalcPhase::Post);
+  // A changed opt-in after installation must not lose an in-flight exit.
+  phase_env("0");trace_phase_leave(cpu,post,CalcPhase::Post);
+  trace_framework_leave(cpu,phase_parent);
+  std::ostringstream phase_trace;apply_trace->write(phase_trace,0,1,true);
+  check(phase_trace.str().find("# count_phase_pre_enter=1\n")!=std::string::npos&&
+        phase_trace.str().find("# count_phase_pre_exit=1\n")!=std::string::npos&&
+        phase_trace.str().find("# count_phase_core_throw=1\n")!=std::string::npos&&
+        phase_trace.str().find("# count_phase_post_exit=1\n")!=std::string::npos,
+        "actual source-phase enter/exit/exception export without schema change");
+  check(observation_registry.current(cpu.tpidrro).invocation==0,"real phase unwind restores registry");
+  phase_env("1");
+  {
+    // A loader can hold this mutex while waiting for task work. Logging must
+    // still forward that task instead of waiting for the loader's mutex.
+    std::lock_guard guard(input_lock);
+    const auto observed=trace_phase_enter(cpu,CalcPhase::Pre);
+    check(observed.invocation!=0,"phase observation succeeds with input mutex held");
+    trace_phase_leave(cpu,observed,CalcPhase::Pre);
+  }
+  phase_env("0");
   reset(fake, 1);
   fixture::replies = {frame(1, marker, 0)};
   nx::lan::next_frame();

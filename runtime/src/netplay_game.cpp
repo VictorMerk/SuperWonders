@@ -437,17 +437,23 @@ void observation_caller(ApplyTraceEntry& entry,const CPU& cpu) {
     entry.caller_offset=relative;
 }
 }
-FrameworkObservation trace_framework_enter(const CPU& cpu) noexcept {
+static FrameworkObservation trace_observation_enter(const CPU& cpu,ApplyEvent event) noexcept {
     if(!apply_trace)return {};
     FrameworkObservation result;
     try {
         const auto identity=observation_registry.begin(cpu.tpidrro);
         result={identity.invocation,identity.parent,g_frame.load(),identity.thread};
         if(!result.invocation)return {};
-        ApplyTraceEntry entry;entry.event=ApplyEvent::FrameworkEnter;
+        ApplyTraceEntry entry;entry.event=event;
         entry.ns=plat::monotonic_ns();entry.frame=entry.frame_before=result.frame_before;
         entry.invocation=result.invocation;entry.parent_invocation=result.parent;
         entry.thread_ordinal=result.thread;entry.local_loading_event=pending_loading_event.load();
+        if(unsigned(event)>=unsigned(ApplyEvent::PhasePreEnter)) {
+            // A task may run while the loader owns input_lock and waits for
+            // other guest work. Observations must not acquire that mutex.
+            const auto identity=input_publication.sample_identity();
+            if(identity){entry.tick=identity-1;entry.sampling_number=identity;}
+        }
         observation_caller(entry,cpu);apply_trace->push(entry);
         return result;
     } catch(...) {
@@ -455,18 +461,42 @@ FrameworkObservation trace_framework_enter(const CPU& cpu) noexcept {
         return {};
     }
 }
-void trace_framework_leave(const CPU& cpu,FrameworkObservation observation,bool threw) noexcept {
+static void trace_observation_leave(const CPU& cpu,FrameworkObservation observation,ApplyEvent event) noexcept {
     if(!observation.invocation||!apply_trace)return;
     // No allocations, filesystem work or original guest calls, including during
     // exception unwinding. Observation failures never replace a guest exception.
     try {
         observation_registry.end(cpu.tpidrro,observation.invocation);
-        ApplyTraceEntry entry;entry.event=threw?ApplyEvent::FrameworkThrow:ApplyEvent::FrameworkExit;
+        ApplyTraceEntry entry;entry.event=event;
         entry.ns=plat::monotonic_ns();entry.frame=g_frame.load();entry.frame_before=observation.frame_before;
         entry.invocation=observation.invocation;entry.parent_invocation=observation.parent;
         entry.thread_ordinal=observation.thread;entry.local_loading_event=pending_loading_event.load();
+        if(unsigned(event)>=unsigned(ApplyEvent::PhasePreEnter)) {
+            const auto identity=input_publication.sample_identity();
+            if(identity){entry.tick=identity-1;entry.sampling_number=identity;}
+        }
         apply_trace->push(entry);
     } catch(...) {}
+}
+// This opt-in only controls source-verified observations; it never selects a
+// networking mode or modifies guest readiness, timing, or input publication.
+bool trace_phases_enabled() noexcept {
+    const char* value=std::getenv("NX_LAN_TRACE_PHASES");
+    return apply_trace && value && value[0]=='1' && value[1]=='\0';
+}
+FrameworkObservation trace_framework_enter(const CPU& cpu) noexcept {
+    return trace_observation_enter(cpu,ApplyEvent::FrameworkEnter);
+}
+void trace_framework_leave(const CPU& cpu,FrameworkObservation observation,bool threw) noexcept {
+    trace_observation_leave(cpu,observation,threw?ApplyEvent::FrameworkThrow:ApplyEvent::FrameworkExit);
+}
+FrameworkObservation trace_phase_enter(const CPU& cpu,CalcPhase phase) noexcept {
+    if(!trace_phases_enabled()||unsigned(phase)>unsigned(CalcPhase::Post))return {};
+    return trace_observation_enter(cpu,ApplyEvent(unsigned(ApplyEvent::PhasePreEnter)+unsigned(phase)*3));
+}
+void trace_phase_leave(const CPU& cpu,FrameworkObservation observation,CalcPhase phase,bool threw) noexcept {
+    if(unsigned(phase)>unsigned(CalcPhase::Post))return;
+    trace_observation_leave(cpu,observation,ApplyEvent(unsigned(ApplyEvent::PhasePreEnter)+unsigned(phase)*3+(threw?2:1)));
 }
 void trace_loading_file(const char* path,const CPU& cpu) noexcept {
     if(!apply_trace||!path)return;

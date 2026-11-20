@@ -9,6 +9,8 @@ COMPARE_FIELDS = ("event", "players") + tuple(
     f"p{p}_{field}" for p in range(4)
     for field in ("loading_event",) + PAD_FIELDS)
 APPLICATIONS = {"apply", "loading_neutral_apply"}
+PHASE_EVENTS = {f"phase_{phase}_{part}" for phase in ("pre", "core", "post")
+                for part in ("enter", "exit", "throw")}
 
 
 def read(path, *, include_fates=False):
@@ -48,7 +50,7 @@ def read(path, *, include_fates=False):
                     raise ValueError("Invalid committed tick in publication evidence")
                 fates.setdefault(tick, {}).setdefault(event, (
                     int(row["frame"]), int(row["sequence"]) if row.get("sequence") else None))
-            if event in {"framework_enter", "framework_exit", "framework_throw", "loading_file"} and metadata.get("observation_identity") == "local_invocation_v1":
+            if event in PHASE_EVENTS | {"framework_enter", "framework_exit", "framework_throw", "loading_file"} and metadata.get("observation_identity") == "local_invocation_v1":
                 def number(field, maximum=(1 << 64) - 1):
                     if row.get(field) in (None, ""):
                         raise ValueError("Missing observation field: " + field)
@@ -68,9 +70,9 @@ def read(path, *, include_fates=False):
                 if event == "loading_file":
                     files.append((invocation, thread, sequence))
                 else:
-                    if not invocation:
-                        raise ValueError("Framework observation requires an invocation")
-                    part = "enter" if event == "framework_enter" else "leave"
+                    if not invocation or invocation == parent:
+                        raise ValueError("Observation requires a nonzero, non-self-parent invocation")
+                    part = "enter" if event.endswith("_enter") else "leave"
                     recorded = observations.setdefault(invocation, {})
                     if part in recorded:
                         raise ValueError("Duplicate framework observation identity")
@@ -135,26 +137,81 @@ def read(path, *, include_fates=False):
     phase = [tick for tick, (_, values) in applied.items()
              if values[0] == "apply" and any(values[2 + p * 6] for p in range(4))]
     observation_contract = metadata.get("observation_identity") == "local_invocation_v1"
-    matched = sum("enter" in pair and "leave" in pair and
-                  pair["enter"][0] == pair["leave"][0] and
-                  pair["enter"][1] < pair["leave"][1] and
-                  pair["enter"][2] == pair["leave"][2]
-                  for pair in observations.values())
-    contained_files = 0
+    def kind(pair):
+        event = pair.get("enter", pair.get("leave"))[3]
+        return event.rsplit("_", 1)[0]
+
+    def paired(pair):
+        if "enter" not in pair or "leave" not in pair:
+            return False
+        before, after = pair["enter"], pair["leave"]
+        if before[3].rsplit("_", 1)[0] != after[3].rsplit("_", 1)[0]:
+            raise ValueError("Mismatched local observation phase")
+        return before[0] == after[0] and before[1] < after[1] and before[2] == after[2]
+
+    paired_ids = {invocation for invocation, pair in observations.items() if paired(pair)}
+    framework = {key: pair for key, pair in observations.items() if kind(pair) == "framework"}
+    phases = {key: pair for key, pair in observations.items() if kind(pair) != "framework"}
+    matched = len(paired_ids & framework.keys())
+    # Validate retained ancestry only, at the same bounded depth as the runtime.
+    # Missing/evicted ancestors remain unknown, never implicitly framework-owned.
+    for invocation in observations:
+        visited = {invocation}
+        parent = observations[invocation].get("enter", observations[invocation].get("leave"))[2]
+        for _ in range(8):
+            if not parent or parent not in observations:
+                break
+            if parent in visited:
+                raise ValueError("Cyclic local observation ancestry")
+            visited.add(parent)
+            pair = observations[parent]
+            parent = pair.get("enter", pair.get("leave"))[2]
+
+    def contains(invocation, thread, sequence):
+        pair = observations.get(invocation)
+        return (thread and invocation in paired_ids and pair["enter"][0] == thread and
+                pair["enter"][1] < sequence < pair["leave"][1])
+
+    contained_files = phase_files = phase_files_in_framework = 0
     for invocation, thread, sequence in files:
-        pair = observations.get(invocation, {})
-        if (thread and "enter" in pair and "leave" in pair and
-                pair["enter"][0] == thread == pair["leave"][0] and
-                pair["enter"][2] == pair["leave"][2] and
-                pair["enter"][1] < sequence < pair["leave"][1]):
+        if not contains(invocation, thread, sequence):
+            continue
+        if invocation in framework:
             contained_files += 1
+            continue
+        phase_files += 1
+        child = observations[invocation]
+        parent = child["enter"][2]
+        for _ in range(8):
+            if not parent or not contains(parent, thread, sequence):
+                break
+            ancestor = observations[parent]
+            if not (ancestor["enter"][1] < child["enter"][1] and
+                    child["leave"][1] < ancestor["leave"][1]):
+                break
+            if parent in framework:
+                contained_files += 1
+                phase_files_in_framework += 1
+                break
+            child = ancestor
+            parent = ancestor["enter"][2]
+    stats.update(
+        retained_source_phase_entries=sum("enter" in pair for pair in phases.values()) if observation_contract else None,
+        retained_source_phase_leaves=sum("leave" in pair for pair in phases.values()) if observation_contract else None,
+        retained_matched_source_phase_invocations=len(paired_ids & phases.keys()) if observation_contract else None,
+        retained_unpaired_source_phase_invocations=len(phases) - len(paired_ids & phases.keys()) if observation_contract else None,
+        retained_source_phase_exceptional_leaves=sum(pair.get("leave", (0, 0, 0, ""))[3].endswith("_throw") for pair in phases.values()) if observation_contract else None,
+        retained_source_phase_counts={name: sum(kind(pair) == "phase_" + name for pair in phases.values()) for name in ("pre", "core", "post")} if observation_contract else None,
+        retained_loading_files_in_source_phase_pair=phase_files if observation_contract else None,
+        retained_loading_files_in_phase_with_framework_ancestor=phase_files_in_framework if observation_contract else None,
+        source_phase_observation_scope="Source-named local pre/core/post callback observations can include lifecycle, wait or skipped work. They are not actor-step, readiness, shared generation, FPS or world synchronization proof. Missing ancestors and truncated nesting are unknown.")
     stats.update(
         framework_observation_contract="local_invocation_v1" if observation_contract else "legacy_or_unknown",
-        retained_framework_entries=sum("enter" in pair for pair in observations.values()) if observation_contract else None,
-        retained_framework_leaves=sum("leave" in pair for pair in observations.values()) if observation_contract else None,
-        retained_framework_exceptional_leaves=sum(pair.get("leave", (0, 0, 0, ""))[3] == "framework_throw" for pair in observations.values()) if observation_contract else None,
+        retained_framework_entries=sum("enter" in pair for pair in framework.values()) if observation_contract else None,
+        retained_framework_leaves=sum("leave" in pair for pair in framework.values()) if observation_contract else None,
+        retained_framework_exceptional_leaves=sum(pair.get("leave", (0, 0, 0, ""))[3] == "framework_throw" for pair in framework.values()) if observation_contract else None,
         retained_matched_framework_invocations=matched if observation_contract else None,
-        retained_unpaired_framework_invocations=len(observations) - matched if observation_contract else None,
+        retained_unpaired_framework_invocations=len(framework) - matched if observation_contract else None,
         retained_loading_file_observations=len(files) if observation_contract else None,
         retained_loading_files_in_framework_pair=contained_files if observation_contract else None,
         retained_loading_files_without_framework_pair=len(files) - contained_files if observation_contract else None,

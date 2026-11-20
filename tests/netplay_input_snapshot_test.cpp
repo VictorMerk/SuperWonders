@@ -23,6 +23,7 @@ int main() {
         return reset?published.reset_locked(value):published.publish_locked(value);
     };
     check(read(0).sampling_number==0&&!read(0).connected,"unpublished state has no fabricated sample");
+    check(published.sample_identity()==0,"observation identity starts unknown");
     check(put(frame(0),true),"publish actual lobby tick zero");
     const auto first=read(0);
     check(first.connected&&first.players==2&&first.committed_tick==0&&first.sampling_number==1,
@@ -33,6 +34,10 @@ int main() {
               "repeated reads without publication keep both sample identity and payload");
     }
     check(put(frame(1)),"next agreed input can publish without a present");
+    {
+        std::lock_guard guard(published.mutex());
+        check(published.sample_identity()==2,"identity observation never reacquires the held publication mutex");
+    }
     check(read(0).sampling_number==2&&read(0).pad.buttons==1001,
           "changed published commit gets a new HID identity independently of presentation");
     for(uint64_t loading_tick=2;loading_tick<100;++loading_tick) {

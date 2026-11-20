@@ -70,6 +70,32 @@ std::shared_ptr<KSharedMemory> time_shared_memory() {
                 st<uint64_t>(v + 16, kSourceLo);
                 st<uint64_t>(v + 24, kSourceHi);
             }
+        // Both Wonder SDKs also consume ContinuousAdjustmentTimePoint here:
+        // u32 sequence, padding, two 0x38-byte parity-selected records. The
+        // legacy context above is still used for the system-clock offset.
+        // A zero multiplier/offset/limit means no adjustment to host steady
+        // nanoseconds. Its source UUID MUST match the system-clock context:
+        // a zero/uninitialized UUID makes the SDK reject the context and its
+        // public current-time wrapper can silently return POSIX zero.
+        // Keep the older steady record at 0x0 intact for earlier consumers.
+        // Preserve legacy lockstep LAN's previous shared-clock behavior: its
+        // IPC Unix clock is frame-based, whereas this SDK fast path adds REAL
+        // host steady time. Enabling only the fast path would expose a second,
+        // divergent clock policy. This is not a deterministic LAN clock fix.
+        // boot() settles the launcher/lan::initialize before guest services;
+        // connection failure exits to a NEW process, not an offline->LAN mode
+        // transition. A future in-process mode switch must revisit this cache.
+        // The separate experimental native socket provider is not lockstep LAN.
+        if (!lan::active()) {
+            st<uint32_t>(p + 0xd0, 0);
+            for (int k = 0; k < 2; ++k) {
+                const uint64_t v = p + 0xd8 + k * 0x38;
+                for (uint64_t field : {0ull, 8ull, 16ull, 24ull, 32ull})
+                    st<int64_t>(v + field, 0);
+                st<uint64_t>(v + 0x28, kSourceLo);
+                st<uint64_t>(v + 0x30, kSourceHi);
+            }
+        }
         return s;
     }();
     return shm;

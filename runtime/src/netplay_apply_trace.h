@@ -9,12 +9,13 @@ namespace nx::lan {
 enum class ApplyEvent : unsigned {
     Initial, PipelineSample, PipelineSubmitReturn, PipelineReceive, LeadIn,
     ExchangeComplete, Apply, LoadingBegin, LoadingDrainDiscard, LoadingDrainEmpty,
-    LoadingExchange, LoadingNeutralApply, LoadingEnd, HidDelivery, FrameworkFrame, FrameworkEnter, FrameworkExit, FrameworkThrow, LoadingFile, Count
+    LoadingExchange, LoadingNeutralApply, LoadingEnd, HidDelivery, FrameworkFrame, FrameworkEnter, FrameworkExit, FrameworkThrow, LoadingFile, PhasePreEnter, PhasePreExit, PhasePreThrow, PhaseCoreEnter, PhaseCoreExit, PhaseCoreThrow, PhasePostEnter, PhasePostExit, PhasePostThrow, Count
 };
 inline const char* apply_event_name(ApplyEvent e) {
     constexpr const char* names[]={"initial","pipeline_sample","pipeline_submit_return","pipeline_receive","neutral_lead_in",
         "exchange_complete","apply","loading_begin","loading_drain_discard","loading_drain_empty",
-        "loading_exchange","loading_neutral_apply","loading_end","hid_delivery","framework_frame","framework_enter","framework_exit","framework_throw","loading_file"};
+        "loading_exchange","loading_neutral_apply","loading_end","hid_delivery","framework_frame","framework_enter","framework_exit","framework_throw","loading_file",
+        "phase_pre_enter","phase_pre_exit","phase_pre_throw","phase_core_enter","phase_core_exit","phase_core_throw","phase_post_enter","phase_post_exit","phase_post_throw"};
     return names[unsigned(e)];
 }
 struct ApplyTraceEntry {
@@ -96,7 +97,7 @@ public:
         if(commit_hid_identity)out << ",hid_identity=exposed_commit_plus_one";
         out << ",observation_identity=local_invocation_v1";
         out << '\n';
-        out << "# scope=application events; monotonic clocks are local; sample precedes queue insertion; apply is exposure to HID, not proof of a guest read or world agreement; observations use local invocation/thread ordinals, guest module-relative callers (not host callers), and noncryptographic resource hashes; file notification is before guest API return, not loader readiness\n";
+        out << "# scope=application events; monotonic clocks are local; sample precedes queue insertion; apply is exposure to HID, not proof of a guest read or world agreement; observations use local invocation/thread ordinals, guest module-relative callers (not host callers), and noncryptographic resource hashes; phase callbacks are source-named local observations, not actor-step or scene-ready proof; file notification is before guest API return, not loader readiness\n";
         for(unsigned i=0;i<unsigned(ApplyEvent::Count);++i)
             out << "# count_" << apply_event_name(ApplyEvent(i)) << '=' << counts[i] << '\n';
         out << "sequence,event,monotonic_ns,frame,tick,sampled_ns,local_loading_event,agreed,players,player,sampling_number,caller,framework_sequence,frame_before";

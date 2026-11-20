@@ -1,5 +1,6 @@
 #pragma once
 #include "netplay_wire.h"
+#include <atomic>
 #include <limits>
 #include <mutex>
 
@@ -24,6 +25,7 @@ class InputPublication {
     mutable std::mutex mutex_;
     FrameInputs current_;
     bool initialized_=false;
+    std::atomic<uint64_t> sample_identity_{0};
 
     static bool valid(const FrameInputs& next) noexcept {
         // Npad sampling is signed s64; zero is reserved for no publication.
@@ -34,11 +36,15 @@ class InputPublication {
     }
 public:
     std::mutex& mutex() noexcept {return mutex_;}
+    // Observation-only identity, not a pad/control-metadata snapshot. Worker
+    // instrumentation must not wait for a loader holding the input mutex.
+    uint64_t sample_identity() const noexcept {return sample_identity_.load(std::memory_order_acquire);}
     // Caller must hold mutex(), or be initializing before guest/worker startup.
     const FrameInputs& current_locked() const noexcept {return current_;}
     bool reset_locked(const FrameInputs& initial) noexcept {
         if(!valid(initial))return false;
-        current_=initial;initialized_=true;return true;
+        current_=initial;initialized_=true;
+        sample_identity_.store(initial.tick+1,std::memory_order_release);return true;
     }
     // Caller holds mutex(). Reject identity reuse with different delivered data;
     // diagnostics/timing can change without changing the HID payload.
@@ -48,7 +54,8 @@ public:
             if(next.players!=current_.players)return false;
             for(size_t i=0;i<kPlayers;++i)if(!same_pad(next.pads[i],current_.pads[i]))return false;
         }
-        current_=next;initialized_=true;return true;
+        current_=next;initialized_=true;
+        sample_identity_.store(next.tick+1,std::memory_order_release);return true;
     }
     template<class Metadata>
     InputSnapshot read(uint32_t player,Metadata metadata) const {

@@ -73,3 +73,12 @@ resource-table allocation entries predate the current generator's alignment.
 Isolated regeneration and a modded-menu test sampling both original and generated
 presentations remain pending. No live mod was replaced on the strength of the
 clean comparison.
+
+
+The regenerated Product120 menu was subsequently tested on the newer runtime:
+five reopen cycles, with adjacent original/generated pictures verified for all
+13 stable menu states. The sampled blurred map detail remained consistent and
+both picture kinds showed Settings correctly. The background was mostly blue
+before the first reopen, unlike the earlier clean comparison's terrain view;
+full background correctness and old/new-mod causality remain unverified. The
+live mod has not been replaced while that scene difference is investigated.

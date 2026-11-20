@@ -379,3 +379,26 @@ publication, loading and visible gameplay before choosing a new exchange gate.
 
 See [Wonder clock policy](WONDER-CLOCK-POLICY.md) for fixed-step versus ordinary
 clocks, the shared-clock ABI correction and the remaining legacy LAN limitation.
+
+
+### Actual two-instance follow-up
+
+A same-PC Product120 run reached course, pause and resume on both peers with the
+new runtime and both observation flags. Actual pre/post callbacks paired on both
+sides with no observation eviction; the registered core callback had zero events
+on both. The requested three-phase criterion therefore failed. A real-DLL
+metadata check found all hook targets, but target availability does not establish
+that the game invokes a particular delegate. Core dispatch remains under audit.
+
+The pair had 14,329 matched applied ticks with no retained applied-pad mismatch,
+but three explicit publication-fate mismatches. The first was a published commit
+on one peer versus loading-only exchange on the other. No usable position pairs
+were available, so this is not world-state verification. All loading-file
+observations lacked a retained phase/framework ancestor and remain unknown.
+
+At requested paired shutdown, the host quit normally and the client received a
+socket-close error before its own render-thread quit poll. Both exported their
+diagnostics; this was a shutdown race in that test, not a demonstrated spontaneous
+course crash. Corrected derivative session declarations are distinguished from
+the preserved original malformed metadata; correlation does not independently
+prove the loaded library hash or physical-PC provenance.

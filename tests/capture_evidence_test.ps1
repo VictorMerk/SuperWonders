@@ -5,12 +5,25 @@ $tempBase=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $leaf='wonder-capture-evidence-'+[guid]::NewGuid().ToString('N')
 $root=[IO.Path]::GetFullPath((Join-Path $tempBase $leaf))
 try {
+    Check ((Get-WonderCaptureCompletionReason 'exited' 299 300) -eq 'exited') 'Ordinary completion below capture budget stays successful'
+    Check ((Get-WonderCaptureCompletionReason 'exited' 300 300) -eq 'capture budget reached') 'Final exact-limit capture cannot pass between polls'
+    Check ((Get-WonderCaptureCompletionReason 'exited' 301 300) -eq 'capture budget reached') 'Final oversized capture cannot pass after ordinary exit'
+    Check ((Get-WonderCaptureCompletionReason 'timeout' 301 300) -eq 'timeout') 'Budget metadata preserves earlier timeout reason'
+    Check ((Get-WonderCaptureCompletionReason 'foreign game started' 301 300) -eq 'foreign game started') 'Budget metadata preserves foreign-game reason'
     $source=Join-Path $root 'frames';$output=Join-Path $root 'evidence'
     New-Item -ItemType Directory -Path $source,$output | Out-Null
+    Assert-WonderEmptyCaptureDirectory (Join-Path $root 'missing')
+    Assert-WonderEmptyCaptureDirectory $source
     $since=[DateTime]::UtcNow.AddMinutes(-1)
     $old=Join-Path $source 'old.ppm'
     [IO.File]::WriteAllBytes($old,(New-Object byte[] 50))
     (Get-Item -LiteralPath $old).LastWriteTimeUtc=$since.AddMinutes(-1)
+    $blocked=$false
+    try{Assert-WonderEmptyCaptureDirectory $source}catch{$blocked=$true}
+    Check $blocked 'Preflight refuses even old PPMs before runtime can overwrite fixed names'
+    $blocked=$false
+    try{Assert-WonderEmptyCaptureDirectory $old}catch{$blocked=$true}
+    Check $blocked 'Capture path cannot be an ordinary file'
     foreach($entry in @(@('one.ppm',100),@('two.ppm',200),@('other.raw',500))) {
         [IO.File]::WriteAllBytes((Join-Path $source $entry[0]),(New-Object byte[] $entry[1]))
     }

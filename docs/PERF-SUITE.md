@@ -154,7 +154,10 @@ Successful same-size observations suppress further periodic queries until a pipe
 
 `tools/perf/run_wonder_source_smoke.ps1` monitors fresh PPM captures against
 `-MaxCaptureMiB` (256 by default). Reaching that budget stops only the owned test
-and fails the smoke. The check is polled, so captures can exceed the threshold
+and fails the smoke, including when the final capture completes between polls.
+The runner refuses a fixture with existing PPMs before launch because runtime
+capture filenames restart and could overwrite those images.
+The check is polled, so captures can exceed the threshold
 between polls; it is not a filesystem quota. An interrupted final image can be
 incomplete and must not be counted as valid visual evidence.
 

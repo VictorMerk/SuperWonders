@@ -1,4 +1,19 @@
 # Helpers for task-owned captures. No game, process or reservation operations.
+function Assert-WonderEmptyCaptureDirectory([string]$Directory) {
+    if(!(Test-Path -LiteralPath $Directory -ErrorAction Stop)){return}
+    if(!(Test-Path -LiteralPath $Directory -PathType Container -ErrorAction Stop)) {
+        throw 'The capture path must be a directory.'
+    }
+    if(@(Get-ChildItem -LiteralPath $Directory -File -Filter '*.ppm' -ErrorAction Stop).Count) {
+        throw 'Fixture captures already exist. Preserve them and use an empty task-owned capture folder.'
+    }
+}
+
+function Get-WonderCaptureCompletionReason([string]$Reason,[long]$Bytes,[long]$Budget) {
+    if($Reason -eq 'exited' -and $Bytes -ge $Budget){return 'capture budget reached'}
+    return $Reason
+}
+
 function Get-WonderCaptureUsage([string]$Directory,[DateTime]$Since) {
     $frames=@(Get-ChildItem -LiteralPath $Directory -File -Filter '*.ppm' -ErrorAction SilentlyContinue |
         Where-Object {$_.LastWriteTimeUtc -ge $Since.ToUniversalTime()})

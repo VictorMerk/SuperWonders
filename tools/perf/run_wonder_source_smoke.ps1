@@ -28,6 +28,10 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'capture_evidence.ps1')
 $runtimePath=(Resolve-Path -LiteralPath $Runtime).Path
 $dataPath=(Resolve-Path -LiteralPath $DataRoot).Path
+$captureDirectory=Join-Path $dataPath 'frames'
+# Runtime filenames restart each run; freshness cannot protect an older image
+# from fopen(wb). Refuse before starting a process rather than overwrite it.
+Assert-WonderEmptyCaptureDirectory $captureDirectory
 if(Test-Path -LiteralPath $Output){throw 'Choose a new evidence folder.'}
 $outputPath=[IO.Path]::GetFullPath($Output)
 $inputPath=if($InputScript){(Resolve-Path -LiteralPath $InputScript).Path}else{''}
@@ -89,7 +93,6 @@ try {
     foreach($key in $options.Keys){$info.EnvironmentVariables[$key]=$options[$key]}
     $game=New-Object Diagnostics.Process;$game.StartInfo=$info
     $began=[DateTime]::UtcNow
-    $captureDirectory=Join-Path $dataPath 'frames'
     [long]$captureBudgetBytes=[long]$MaxCaptureMiB*1MB
     $null=$game.Start();$started=$true
     $stdout=$game.StandardOutput.ReadToEndAsync();$stderr=$game.StandardError.ReadToEndAsync()
@@ -113,6 +116,8 @@ try {
     $audioPath=Join-Path $outputPath 'audio.wav'
     $audioBytes=if(Test-Path -LiteralPath $audioPath){(Get-Item -LiteralPath $audioPath).Length}else{0}
     $usage=Get-WonderCaptureUsage $captureDirectory $began
+    # The last frame can finish and the process exit between polling checks.
+    $reason=Get-WonderCaptureCompletionReason $reason $usage.bytes $captureBudgetBytes
     $frames=@($usage.frames)
     if($frames.Count) {
         $capture=Join-Path $outputPath 'frames';$null=New-Item -ItemType Directory -Path $capture

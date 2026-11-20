@@ -24,6 +24,19 @@ try {
     $blocked=$false
     try{Assert-WonderEmptyCaptureDirectory $old}catch{$blocked=$true}
     Check $blocked 'Capture path cannot be an ordinary file'
+    # Exercise the real runner's early guard too. This ordinary text file can
+    # never execute as a game even if that guard regresses; no GPU is involved.
+    $fakeRuntime=Join-Path $root 'not-a-game.exe'
+    [IO.File]::WriteAllText($fakeRuntime,'not executable')
+    $blockedOutput=Join-Path $root 'blocked-output'
+    $failure=''
+    try {
+        & (Join-Path $PSScriptRoot '../tools/perf/run_wonder_source_smoke.ps1') `
+            -Runtime $fakeRuntime -DataRoot $root -Output $blockedOutput
+    } catch {$failure=$_.Exception.Message}
+    Check ($failure -like 'Fixture captures already exist*' -and
+        !(Test-Path -LiteralPath $blockedOutput) -and (Get-Item -LiteralPath $old).Length -eq 50) `
+        'Actual runner rejects old captures before creating output or starting a process'
     foreach($entry in @(@('one.ppm',100),@('two.ppm',200),@('other.raw',500))) {
         [IO.File]::WriteAllBytes((Join-Path $source $entry[0]),(New-Object byte[] $entry[1]))
     }

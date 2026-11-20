@@ -1,6 +1,23 @@
 # Wonder edition support investigation
 
-This checkout adds an external-runtime library for the two Wonder editions and a checked NUP reader. It does **not** yet implement or certify Switch 2 Edition gameplay. Mario Kart World is a technical reference, not a third launcher entry.
+This project compiles **both original Wonder 1.0.0 and the inspected Product.120
+Wonder executable supplied in the Switch 2 Edition package**. The shared library
+selects their separately prepared installations. Complete native Switch 2-exclusive
+content, including Bellabel Park, is still unverified. Mario Kart World is a
+technical reference and does not appear as a launcher entry.
+
+## Current build targets
+
+| Target | Generated code | Verified scope and remaining limits |
+| --- | --- | --- |
+| Original Wonder 1.0.0 | ABI2 main: 209,629 functions; SDK: 40,395 | Current-header library metadata matches; native title/render/audio/shutdown smoke passed. This does not certify every course or multiplayer. |
+| Supplied Product.120 executable | ABI2 main: 212,403 functions; SDK: 40,411 | Native course/map play, save reload and two independently controlled local players observed. Shared-input LAN desync and intermittent map graphics remain under investigation; complete upgraded content is not established. |
+
+Each target keeps its own generated library, assets, saves and caches. Runtime
+updates can reuse a matching ABI2 library; an old ABI1 library needs rebuilding.
+The following sections retain the package investigation and port-validation
+history, with their original test limitations.
+
 
 ## Shared launcher
 
@@ -25,7 +42,7 @@ Neither a `.nup` extension, a title ID, an NVN SDK marker nor a filename establi
 
 The measured main executable differs from 1.0.0. At initial inspection, the runtime's timing, camera, menu and deterministic-seed sites were tied to 1.0.0. Do not pass this source through that old patch table, mix its assets with a 1.0.0 generated library, or mark it supported because a package check passes.
 
-## Executable port in progress
+## Executable port and validation history
 
 The continuation adds an explicit layout for the supplied Product.120 main build. `recomp/nso.py` preserves the original NSO identity; generated module tables carry it to the runtime. The game-library ABI is raised to 2, so a runtime cannot load an old library with a different module-table layout. Existing installed runtimes and their libraries are not overwritten.
 

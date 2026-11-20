@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "nvn_vk.h"
+#include "nvn_draw_state.h"
+#include "bounded_frame_pair.h"
+#include <nx/runtime.h>
 #include "platform.h"
 #include "play.h"
 
@@ -237,7 +240,48 @@ uint32_t frame_dump_every() {
 // "<count> [<every>]", default 40 frames, every 2nd) dumps the next presented frames, then is deleted. The game runs
 // at full speed until then, for glitches that only show in a long session (DEBUG-2 #77). Checked once a second.
 bool frame_dump_due(uint64_t presents) {
+    static diagnostic::BoundedFramePair paired;
+    if(paired.active()) {
+        const char* worker=std::getenv("NX_REPLAY_THREAD");
+        if(framegen_enabled() || pipelined() || (worker && worker[0]=='1')) {
+            paired.cancel();replay::cancel_paired_shadow_trace();
+            log("nvn: paired shadow capture INVALID: unsupported presentation mode changed during window");
+            return false;
+        }
+        const auto frame=g_frame.load(std::memory_order_relaxed);
+        const auto step=paired.next(frame,presents);
+        if(step==diagnostic::BoundedFramePair::Step::Mismatch) {
+            replay::cancel_paired_shadow_trace();
+            log("nvn: paired shadow capture INVALID: frame/present sequence mismatch at guest %llu present %llu",
+                (unsigned long long)frame,(unsigned long long)presents);
+            return false;
+        }
+        if(step==diagnostic::BoundedFramePair::Step::Capture) {
+            log("nvn: paired shadow capture guest %llu present %llu remaining %u",
+                (unsigned long long)frame,(unsigned long long)presents,paired.remaining());
+            if(!paired.active())log("nvn: paired shadow capture complete: six sequence-verified originals");
+            return true;
+        }
+    }
     if (const char* shot = play::take_shot()) {  // NX_PLAY_SHOTS (play.cpp)
+        const char* arm=std::getenv("NX_TRACE_SHADOW_SHOT");
+        if(arm && *arm && std::strcmp(arm,shot)==0) {
+            const char* worker=std::getenv("NX_REPLAY_THREAD");
+            const auto frame=g_frame.load(std::memory_order_relaxed);
+            // Inline replay means QueuePresentTexture increments g_frame only
+            // after this completed gpu_present returns. Trace the NEXT six
+            // guest frames and verify that each maps to exactly one present.
+            if(framegen_enabled() || pipelined() || (worker && worker[0]=='1') ||
+               frame_dump_every() || !std::getenv("NX_TRACE_SHADOW_REQUEST") || std::getenv("NX_TRACE_REQUEST") ||
+               frame>=UINT64_MAX-6 || !paired.begin(frame,presents) || !replay::begin_paired_shadow_trace(frame+1,6)) {
+                paired.cancel();replay::cancel_paired_shadow_trace();
+                log("nvn: paired shadow capture REJECTED: requires FG0, pipeline0, replay-thread0, manual dumps off and shadow-only request");
+                return false;
+            }
+            log("nvn: paired shadow shot %s armed after guest %llu present %llu; next six paired originals",shot,
+                (unsigned long long)frame,(unsigned long long)presents);
+            return false; // Arming presentation was already drawn; never pretend it was traced.
+        }
         log("play: shot %s in frames/%05llu.ppm", shot, (unsigned long long)presents);
         return true;
     }

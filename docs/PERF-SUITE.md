@@ -168,6 +168,28 @@ verified copy instead of retaining duplicate capture trees. Reuse neither a live
 save nor another test's output as the fixture. Dense readbacks add GPU and disk
 cost and are unsuitable for an FPS comparison.
 
+## Paired shadow diagnostic captures
+
+For a controlled native named-shot test, `NX_TRACE_SHADOW_SHOT=<shot-name>`
+uses that scheduled `NX_PLAY_SHOTS` shot to arm the next six original frames.
+The arming image is excluded. Enable the existing shadow-only request mode and
+set frame generation, pipelining and the replay worker off. Automatic periodic
+frame dumps and the general trace mode are rejected for this experiment.
+
+Each captured frame checks that both the actual guest-frame counter and the
+presentation counter advanced by exactly one. A repeated/skipped counter or an
+unsupported mode change invalidates the diagnostic. The log maps both counter
+values; verify all six entries against the captured filenames and trace window.
+External trace-file requests are deferred until the paired window ends. Detailed
+fragment-filtered projection tracing uses a fresh bounded request budget so it
+cannot silently spend that budget on earlier loading frames. Choose the actual
+receiver shader filter for the scene; absent draws remain missing evidence.
+
+This opt-in path changes no draw or pacing policy and is disabled in ordinary
+play. It aligns diagnostic evidence; it does not fix shadows or certify motion,
+visual correctness or performance. Readbacks and tracing are unsuitable for FPS
+comparisons. Preserve a bounded output directory for each attempt.
+
 ## Rules
 
 - Two runs per scenario at least; compare medians.

@@ -26,13 +26,16 @@ bool trace_requests_enabled() {
 }
 // Replay-thread state, advanced only when a valid explicit request is consumed.
 uint64_t trace_request_serial = 0;
+uint64_t trace_request_checked = UINT64_MAX,trace_request_from = 0,trace_request_until = 0;
+bool paired_trace_active = false;
 }
 
 static bool trace_request_window() {
     if (!trace_requests_enabled()) return false;
-    static uint64_t checked = UINT64_MAX, until = 0;
-    if (checked != g_frame) {
-        checked = g_frame;
+    if (trace_request_checked != g_frame) {
+        trace_request_checked = g_frame;
+        if(paired_trace_active && g_frame>=trace_request_until)paired_trace_active=false;
+        if(paired_trace_active)return g_frame>=trace_request_from && g_frame<trace_request_until;
         const std::string path = plat::data_root() + "/trace_capture";
         if (FILE* f = plat::fopen_utf8(path, "r")) {
             unsigned frames = 0;
@@ -41,15 +44,27 @@ static bool trace_request_window() {
             std::error_code ec;
             std::filesystem::remove(std::filesystem::u8path(path), ec);
             if (valid && frames) {
-                until = g_frame + std::min(frames, 6u);
+                trace_request_from = g_frame;
+                trace_request_until = g_frame + std::min(frames, 6u);
                 ++trace_request_serial;
                 log("nvn: bounded trace capture frames %llu..%llu", (unsigned long long)g_frame,
-                    (unsigned long long)(until-1));
+                    (unsigned long long)(trace_request_until-1));
             }
         }
     }
-    return g_frame < until;
+    return g_frame >= trace_request_from && g_frame < trace_request_until;
 }
+
+bool begin_paired_shadow_trace(uint64_t first_frame,uint32_t count) {
+    if(!trace_requests_enabled() || !std::getenv("NX_TRACE_SHADOW_REQUEST") ||
+       std::getenv("NX_TRACE_REQUEST") || !count || count>6 || first_frame>UINT64_MAX-count)return false;
+    trace_request_from=first_frame;trace_request_until=first_frame+count;paired_trace_active=true;
+    trace_request_checked=UINT64_MAX;++trace_request_serial;
+    log("nvn: paired shadow trace guest frames %llu..%llu",(unsigned long long)first_frame,
+        (unsigned long long)(trace_request_until-1));
+    return true;
+}
+void cancel_paired_shadow_trace() {trace_request_until=0;paired_trace_active=false;}
 
 bool trace_capture() {
     // Shadow-only requests share the bounded trigger without enabling the much
@@ -638,9 +653,19 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
                 (unsigned long long)g_stats.done, (unsigned long long)g_frame.load());
         }
     }
-    if (trace_capture() || (trace_env && triggered && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
+    // Native paired shots need projection evidence from the same six frames,
+    // not a legacy trigger budget spent earlier during loading. Keep ordinary
+    // NX_TRACE_DRAWS behavior unchanged when this explicit diagnostic is off.
+    static const bool paired_projection=std::getenv("NX_TRACE_SHADOW_SHOT")!=nullptr;
+    static uint64_t projection_serial=0,projection_frame=UINT64_MAX;
+    const bool projection_window=!paired_projection || trace_request_window();
+    if(paired_projection && projection_window && projection_serial!=trace_request_serial) {
+        projection_serial=trace_request_serial;projection_frame=UINT64_MAX;traced=0;
+    }
+    if (trace_capture() || (projection_window && (!paired_projection || projection_frame!=g_frame) &&
+        trace_env && triggered && g_stats.done >= trace_from && traced < trace_count && (!trace_target || t.colors[0] == trace_target) &&
         (!fs_env || (fs && std::strstr(fs_env, fs->hash.c_str()))))) {  // one hash or a comma list
-        traced++;
+        traced++;projection_frame=g_frame;
         if (std::getenv("NX_TRACE_GEOMETRY") && indexed && c.a[0] && c.i[0] > 0 && c.i[0] < 1000000) {
             const uint8_t* idx = guest_bytes(c.a[0]);
             uint32_t size = index_size(c.mask), lo = UINT32_MAX, hi = 0;

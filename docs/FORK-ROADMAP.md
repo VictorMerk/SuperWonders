@@ -20,15 +20,21 @@ course completion.
 
 The current follow-up adds a separate, opt-in Windows Product.120 native UDP/NIFM
 provider, guarded before guest imports are linked, plus isolated developer launchers
-and a Steam AppID480 API-bootstrap prototype. All 95 configured CPU tests pass.
+and a Steam AppID480 API-bootstrap prototype. The subsequent renderer and input
+follow-up passed 118 CPU regressions, three GPU tests and 137 native probe cases.
 Real native room discovery, two-PC gameplay, Steam Remote Play Together and FPS
 improvements are not established. The next physical test is deferred until both
 players' PCs are available; Steam testing also needs the official SDK runtime.
 
 The README, [playing guide](PLAYING-WONDER.md), [multiplayer guide](MULTIPLAYER.md)
 and [synchronization investigation](WONDER-SYNC-INVESTIGATION.md) describe current
-behavior and remaining checks. Reopened pause-menu blur and stage-map shadows
-still require visual reproduction and verification.
+behavior and remaining checks. The stage-map shadow artifact has now been
+reproduced in a controlled native sequence. A default-off Deferred texture-binding
+candidate improves which shadow handle replay reads, but both comparison clips
+were bright: a visual cure and FPS gain remain unproved. See the
+[graphics investigation](WONDER-GRAPHICS-INVESTIGATION.md). Repeated gear-menu
+blur stayed intact in one non-frame-generated case; the frame-generated case
+needs separate verification.
 
 ## Requested co-op interaction extension
 
@@ -40,6 +46,13 @@ detach behavior, state/animation transitions, death/scene cleanup and consistenc
 across participating peers. Existing character-specific riding is a useful baseline
 for a later controller test. No guessed player-position or velocity writes are
 installed. The feature must be tested separately from repairing LAN synchronization.
+
+Private two-controller contact tests confirmed independent Mario/Toad control.
+Changing only one collision-table cell did not establish solid contact; a second
+variant caused both actors to disappear followed by a death transition. Those
+experimental packs are not installed or shipped. Yoshi riding is being checked
+as an existing character-specific baseline; it does not implement arbitrary-player
+carrying. Input/capture timing must overlap before judging a jump or attachment.
 
 ## Evidence from the reported sessions
 

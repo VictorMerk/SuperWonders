@@ -8,6 +8,15 @@ is a shared local-co-op simulation, so slower rendering or a loading barrier on
 either PC can hold up both players. Matching controller traces alone do not
 verify all game state.
 
+The session rejects a frame containing different nonzero loading-event identities
+before the host sends its Commit or returns that frame locally. Clients also
+check received Commit identities, including authenticated packets from older
+hosts. A zero marker is still allowed while one peer has not reached the
+transition. This prevents a conflicting transition from being published; it does
+not align simulation steps, establish game readiness or repair whole-world desync.
+Production Session loopback tests cover two and four peers, valid asymmetric
+readiness, rejection on all peers, and an authenticated conflicting host packet.
+
 Music streaming can reopen a course track a different number of times on the two
 PCs. Those reopens must not add new loading barriers. A scene change or death
 allows the track to synchronize again. The trace comparison tool also reports

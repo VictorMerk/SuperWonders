@@ -113,6 +113,18 @@ uint64_t number(std::span<const uint8_t> bytes,size_t offset) {
     if(offset>bytes.size() || bytes.size()-offset<8) throw std::runtime_error("Truncated LAN session data");
     uint64_t v=0; for(size_t i=0;i<8;++i) v|=uint64_t(bytes[offset+i])<<(8*i); return v;
 }
+// Zero means a peer has not reached the transition yet. Different nonzero
+// identities cannot describe one compatible loading transition. Reject before
+// committing/exposing it; this does not establish simulation-step agreement.
+bool loading_events_agree(const FrameInputs& frame) {
+    uint64_t identity=0;
+    for(const uint64_t event:frame.loading_events) {
+        if(event&&identity&&event!=identity)return false;
+        if(event)identity=event;
+    }
+    return true;
+}
+
 }
 
 struct Session::Impl {
@@ -465,6 +477,11 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
                     throw std::runtime_error("LAN simulation diverged; restart from the same session state");
                 }
             }
+            if(!loading_events_agree(frame)) {
+                for(uint8_t role=1;role<s.count;++role)
+                    s.send(s.peers[role].get(),s.message(Message::Reject,0,s.tick),until);
+                throw std::runtime_error("LAN peers announced conflicting loading transitions");
+            }
             bool verified=true;
             for(uint8_t role=1;role<s.count;++role) verified=verified && s.position_probes[role].ready();
             s.probe_ready=verified;
@@ -477,6 +494,8 @@ FrameInputs Session::exchange(const plat::PadState& local,uint64_t hash,const Pl
             s.send(s.peers[0].get(),s.message(Message::Input,s.local_role,s.tick,encode_input(local,hash,state,work,event)),until);
             const auto commit=s.expected(s.peers[0].get(),Message::Commit,0,s.tick,until);
             frame=decode_commit(commit.payload); frame.tick=s.tick;
+            if(!loading_events_agree(frame))
+                throw std::runtime_error("LAN host committed conflicting loading transitions");
             if(frame.players!=s.count || (hash&&frame.state_hash&&hash!=frame.state_hash) || !s.position_probes[0].observe(event || frame.loading_events[0]?PlayerState{}:state,frame.state,s.options.probe_warmup)) throw std::runtime_error("LAN simulation state mismatch");
             s.probe_ready=s.position_probes[0].ready();
         }

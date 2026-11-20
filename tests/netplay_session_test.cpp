@@ -1,3 +1,15 @@
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <unistd.h>
+#endif
 #include "netplay_session.h"
 #include "netplay_save.h"
 #include "netplay_pipeline.h"
@@ -296,6 +308,148 @@ static void loading_events() {
     check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"loading event room starts");
     config.port=port.get();client.join(config);route(client,1);server.join();
 }
+static void conflicting_loading_events(uint8_t count) {
+    using namespace nx::lan;
+    std::array<Session,kPlayers> sessions;
+    auto config=options(count);
+    std::promise<uint16_t> listening;auto port=listening.get_future();
+    std::array<unsigned,kPlayers> completed{};
+    std::array<bool,kPlayers> rejected{};
+    std::array<std::string,kPlayers> reasons;
+    const auto route=[&](uint8_t role) {
+        try {
+            for(uint64_t tick=0;tick<3;++tick) {
+                const uint64_t marker=tick==0?0:tick==1&&role==0?0:42;
+                const auto frame=sessions[role].exchange({},0,{},0,marker);
+                check(frame.tick==tick,"valid transition ticks are not skipped");
+                check(frame.loading_events[0]==(tick<2?0:42),"zero readiness remains legitimate");
+                ++completed[role];
+            }
+            sessions[role].exchange({},0,{},0,role==count-1?77:42);
+        } catch(const std::exception& e) {rejected[role]=true;reasons[role]=e.what();}
+    };
+    std::thread server([&]{sessions[0].host(config,[&](uint16_t p){listening.set_value(p);});route(0);});
+    check(port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"conflict-test room starts");
+    config.port=port.get();std::vector<std::thread> clients;
+    for(uint8_t role=1;role<count;++role)clients.emplace_back([&,role]{sessions[role].join(config);route(role);});
+    server.join();for(auto& client:clients)client.join();
+    for(uint8_t role=0;role<count;++role)
+        check(rejected[role]&&completed[role]==3,"all peers reject conflicting transition before another frame returns");
+    check(reasons[0].find("conflicting loading transitions")!=std::string::npos,"host reports exact conflicting-transition reason");
+    const auto host=sessions[0].diagnostics();
+    check(host.sent_messages[size_t(Message::Commit)]==3u*(count-1)&&
+          host.sent_messages[size_t(Message::Reject)]==count-1,
+          "host sends no conflicting commit and rejects every peer");
+    for(uint8_t role=1;role<count;++role)
+        check(sessions[role].diagnostics().received_messages[size_t(Message::Commit)]==3,
+              "client receives only the valid prefix commits");
+}
+
+// An authenticated old/malicious host is modelled by a loopback packet relay.
+// Both endpoints remain actual production Sessions; only the returned commit's
+// marker tuple is changed and re-authenticated with this fixture's public key.
+namespace invalid_commit_fixture {
+#if defined(_WIN32)
+using Handle=SOCKET;using Length=int;constexpr Handle invalid=INVALID_SOCKET;
+struct Network {Network(){WSADATA data{};check(WSAStartup(MAKEWORD(2,2),&data)==0,"fixture sockets initialize");}~Network(){WSACleanup();}};
+void close(Handle handle){closesocket(handle);}
+#else
+using Handle=int;using Length=socklen_t;constexpr Handle invalid=-1;
+struct Network {};
+void close(Handle handle){::close(handle);}
+#endif
+struct Socket {
+    Handle handle=invalid;
+    explicit Socket(Handle value):handle(value) {
+        check(handle!=invalid,"fixture socket created");
+#if defined(_WIN32)
+        const DWORD timeout=3000;
+#else
+        const timeval timeout{3,0};
+#endif
+        check(setsockopt(handle,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&timeout),sizeof timeout)==0&&
+              setsockopt(handle,SOL_SOCKET,SO_SNDTIMEO,reinterpret_cast<const char*>(&timeout),sizeof timeout)==0,
+              "fixture socket waits bounded");
+    }
+    Socket(const Socket&)=delete;Socket& operator=(const Socket&)=delete;
+    ~Socket(){if(handle!=invalid)close(handle);}
+};
+void readable(Handle socket) {
+    fd_set read;FD_ZERO(&read);FD_SET(socket,&read);timeval timeout{3,0};
+#if defined(_WIN32)
+    const int count=select(0,&read,nullptr,nullptr,&timeout);
+#else
+    const int count=select(socket+1,&read,nullptr,nullptr,&timeout);
+#endif
+    check(count==1,"fixture receive/accept deadline");
+}
+void receive(Handle socket,std::span<uint8_t> bytes) {
+    while(!bytes.empty()) {
+        readable(socket);const int n=int(recv(socket,reinterpret_cast<char*>(bytes.data()),int(bytes.size()),0));
+        check(n>0,"fixture packet receive");bytes=bytes.subspan(size_t(n));
+    }
+}
+void send_packet(Handle socket,const nx::lan::Packet& packet,const nx::lan::Key& key) {
+    const auto bytes=nx::lan::encode_packet(packet,key);size_t sent=0;
+    while(sent<bytes.size()) {
+#if defined(MSG_NOSIGNAL)
+        constexpr int flags=MSG_NOSIGNAL;
+#else
+        constexpr int flags=0;
+#endif
+        const int n=int(send(socket,reinterpret_cast<const char*>(bytes.data()+sent),int(bytes.size()-sent),flags));
+        check(n>0,"fixture packet send");sent+=size_t(n);
+    }
+}
+nx::lan::Packet packet(Handle socket,const nx::lan::Key& key) {
+    using namespace nx::lan;
+    std::vector<uint8_t> bytes(kHeaderBytes);receive(socket,bytes);
+    const auto payload=packet_payload_size(bytes);bytes.resize(kHeaderBytes+payload+kMacBytes);
+    receive(socket,std::span<uint8_t>(bytes).subspan(kHeaderBytes));return decode_packet(bytes,key);
+}
+}
+static void received_conflicting_loading_commit() {
+    using namespace nx::lan;using namespace invalid_commit_fixture;
+    [[maybe_unused]] Network network;Session host,client;auto config=options(2);
+    std::promise<uint16_t> listening;auto host_port=listening.get_future();
+    bool host_returned=false,client_returned=false,client_rejected=false;
+    std::string reason;
+    std::thread server([&]{host.host(config,[&](uint16_t p){listening.set_value(p);});host.exchange({});host_returned=true;});
+    check(host_port.wait_for(std::chrono::seconds(5))==std::future_status::ready,"invalid-commit host starts");
+    const auto backend_port=host_port.get();
+    Socket listener(::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));
+    sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    check(bind(listener.handle,reinterpret_cast<const sockaddr*>(&address),sizeof address)==0&&listen(listener.handle,1)==0,"fixture loopback relay listens");
+    Length size=sizeof address;check(getsockname(listener.handle,reinterpret_cast<sockaddr*>(&address),&size)==0,"fixture relay port");
+    const auto relay_port=ntohs(address.sin_port);
+    std::thread relay([&] {
+        readable(listener.handle);Socket downstream(accept(listener.handle,nullptr,nullptr));
+        Socket upstream(::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP));
+        sockaddr_in backend{};backend.sin_family=AF_INET;backend.sin_addr.s_addr=htonl(INADDR_LOOPBACK);backend.sin_port=htons(backend_port);
+        check(connect(upstream.handle,reinterpret_cast<const sockaddr*>(&backend),sizeof backend)==0,"fixture connects only loopback host");
+        const auto forward=[&](Handle from,Handle to,Message expected,bool corrupt=false) {
+            auto next=packet(from,config.key);check(next.type==expected,"fixture handshake/commit sequence");
+            if(corrupt) {auto frame=decode_commit(next.payload);frame.loading_events[0]=42;frame.loading_events[1]=77;next.payload=encode_commit(frame);}
+            send_packet(to,next,config.key);
+        };
+        forward(downstream.handle,upstream.handle,Message::Hello);
+        forward(upstream.handle,downstream.handle,Message::Welcome);
+        forward(upstream.handle,downstream.handle,Message::Start);
+        forward(downstream.handle,upstream.handle,Message::Input);
+        forward(upstream.handle,downstream.handle,Message::Commit,true);
+    });
+    auto remote=config;remote.port=relay_port;client.join(remote);
+    try {client.exchange({});client_returned=true;}
+    catch(const std::exception& error){client_rejected=true;reason=error.what();}
+    relay.join();server.join();
+    check(host_returned&&!client_returned&&client_rejected&&
+          reason.find("host committed conflicting loading transitions")!=std::string::npos,
+          "actual client refuses an authenticated conflicting old-host commit before return");
+    const auto diagnostics=client.diagnostics();
+    check(diagnostics.received_messages[size_t(Message::Commit)]==1&&diagnostics.invalid_packets==0,
+          "semantic loading rejection is distinct from an invalid MAC/wire packet");
+}
+
 static void loading_event_deadline(bool slow_host) {
     using namespace nx::lan;
     Session host,client; auto config=options(2);
@@ -401,6 +555,7 @@ int main() {
     loading_deadline(true); loading_deadline(false);
     stalled_peer(true); stalled_peer(false);
     refused_connection(); unassociated_probe(); loading_events(); loading_event_deadline(true); loading_event_deadline(false);
+    conflicting_loading_events(2);conflicting_loading_events(4);received_conflicting_loading_commit();
     asymmetric_music_reopens(); diagnostic_snapshots();
     std::puts("native LAN TCP: serial/pipelined 2/4 peers, authentication, saves, shared inputs, divergence and cancellation passed");
 }

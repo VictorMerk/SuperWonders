@@ -341,9 +341,11 @@ establish guest consumption. Neither shortcut is shipped as a synchronization fi
 The application comparer now reports `commit_fate_mismatches` separately from
 payload differences on shared applied ticks. It compares only explicit retained
 publication/discard/loading-exchange events for the same committed tick; an
-exchange followed by final neutral publication is classified as published.
+exchange followed by final neutral publication is classified as published. A
+loading-exchange row without a later retained publication is incomplete, since
+the export might end before its final neutral event.
 Conflicting local dispositions are ambiguous, and absent rows remain unknown.
 The combined multiplayer report raises `legacy_commit_fate_mismatch` when this
 evidence differs. The actual pipeline and serial CPU reproductions both produce
-that warning-worthy mismatch; nineteen comparer tests and twenty combined-report
+that warning-worthy mismatch; twenty comparer tests and twenty combined-report
 tests cover the reporting path. This is diagnostic coverage, not a runtime fix.

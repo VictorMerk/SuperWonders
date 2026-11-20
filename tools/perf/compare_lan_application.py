@@ -178,7 +178,7 @@ def read(path, *, include_fates=False):
     return metadata, applied, stats
 
 
-def publication_fate(events):
+def publication_fate(events, later_publication=False):
     """LoadingExchange followed by final neutral publication is not a discard."""
     published = APPLICATIONS & events.keys()
     discarded = "loading_drain_discard" in events
@@ -189,6 +189,10 @@ def publication_fate(events):
         return "published", events[event]
     if discarded:
         return "discarded", events["loading_drain_discard"]
+    # A truncated export can stop between LoadingExchange and its final neutral
+    # publication. Require a later published tick before calling this pump-only.
+    if not later_publication:
+        return "incomplete", None
     return "loading_transport_only", events["loading_exchange"]
 
 
@@ -206,11 +210,16 @@ def compare(left, right):
             mismatch_count += 1
             if first is None:
                 first = {"tick": tick, "fields": different, "left_frame": a[0], "right_frame": b[0]}
-    fate_count, fate_first, compared_fates, ambiguous = 0, None, 0, 0
+    fate_count, fate_first, compared_fates, ambiguous, incomplete = 0, None, 0, 0, 0
+    last_left_publication, last_right_publication = max(li, default=-1), max(ri, default=-1)
     for tick in sorted(lf.keys() & rf.keys()):
-        a, b = publication_fate(lf[tick]), publication_fate(rf[tick])
+        a = publication_fate(lf[tick], last_left_publication > tick)
+        b = publication_fate(rf[tick], last_right_publication > tick)
         if "ambiguous" in (a[0], b[0]):
             ambiguous += 1
+            continue
+        if "incomplete" in (a[0], b[0]):
+            incomplete += 1
             continue
         compared_fates += 1
         if a[0] != b[0]:
@@ -224,6 +233,7 @@ def compare(left, right):
             "matched_commit_fate_ticks": compared_fates,
             "commit_fate_mismatches": fate_count, "first_commit_fate_mismatch": fate_first,
             "ambiguous_shared_fate_ticks": ambiguous,
+            "incomplete_shared_fate_ticks": incomplete,
             "left_only_retained_fate_ticks": len(lf.keys() - rf.keys()),
             "right_only_retained_fate_ticks": len(rf.keys() - lf.keys()),
             "commit_fate_scope": "Explicit retained HID-publication, loader-discard or loading-transport evidence only. Final loading-neutral publication supersedes its transport event. Ambiguous or missing evidence is not inferred; publication does not prove guest consumption, simulation advancement or world synchronization.",

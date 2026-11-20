@@ -47,7 +47,7 @@ class ReportTest(unittest.TestCase):
     def codes(self, result):
         return {note["code"] for note in result["diagnostics"]}
 
-    def application(self, name, role, button=0, omitted=0, seed=7, event="apply"):
+    def application(self, name, role, button=0, omitted=0, seed=7, event="apply", complete_loading=False):
         path = self.root / name
         row = dict(tick=1, frame=5, event=event, players=2)
         row.update({f"p{p}_{field}": button if p == 0 and field == "buttons" else 0
@@ -57,6 +57,8 @@ class ReportTest(unittest.TestCase):
             writer = csv.DictWriter(out, fieldnames=row)
             writer.writeheader()
             writer.writerow(row)
+            if complete_loading:
+                writer.writerow(dict(row, tick=2, frame=6, event="loading_neutral_apply"))
         return path
 
     def trace(self, name):
@@ -152,7 +154,7 @@ class ReportTest(unittest.TestCase):
     def test_commit_fate_mismatch_has_an_explicit_warning(self):
         for event in ("loading_drain_discard", "loading_exchange"):
             left = dict(session=self.session(mode="legacy_lan", seed=7, role=0),
-                        application_trace=self.application("left.csv", 0, event=event))
+                        application_trace=self.application("left.csv", 0, event=event, complete_loading=True))
             right = dict(session=self.session("right", mode="legacy_lan", seed=7, role=1),
                          application_trace=self.application("right.csv", 1))
             result = reporter.summarize(left, right)

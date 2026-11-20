@@ -69,7 +69,7 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(first["right"]["fate"], "published")
 
     def test_serial_loading_transport_and_reverse_roles(self):
-        loading = self.write("loading", 0, [row(1, "loading_exchange")])
+        loading = self.write("loading", 0, [row(1, "loading_exchange"), row(2, "loading_neutral_apply")])
         playing = self.write("playing", 1, [row(1)])
         result = module.compare(playing, loading)
         self.assertEqual(result["commit_fate_mismatches"], 1)
@@ -84,6 +84,14 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(result["commit_fate_mismatches"], 0)
         self.assertEqual(result["matched_commit_fate_ticks"], 1)
         self.assertIsNone(result["first_commit_fate_mismatch"])
+
+    def test_export_ending_before_possible_final_neutral_is_unknown(self):
+        left = self.write("left", 0, [row(1, "loading_exchange")])
+        right = self.write("right", 1, [row(1)])
+        result = module.compare(left, right)
+        self.assertEqual(result["commit_fate_mismatches"], 0)
+        self.assertEqual(result["matched_commit_fate_ticks"], 0)
+        self.assertEqual(result["incomplete_shared_fate_ticks"], 1)
 
     def test_missing_fate_is_not_assumed_discarded(self):
         left = self.write("left", 0, [row(1, "exchange_complete")])

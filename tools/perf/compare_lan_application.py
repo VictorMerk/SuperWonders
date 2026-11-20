@@ -11,12 +11,13 @@ COMPARE_FIELDS = ("event", "players") + tuple(
 APPLICATIONS = {"apply", "loading_neutral_apply"}
 
 
-def read(path):
+def read(path, *, include_fates=False):
     """Stream CSV; keep compact applied ticks and HID sample identities only."""
     metadata = {}
     observations = {}  # invocation -> retained enter/leave; local only
     files = []
     applied = {}
+    fates = {}  # tick -> event -> (frame, sequence); only explicit retained evidence
     duplicates = []
     hid = {}  # (player, sampling number) -> (pad, tick, frame, sequence, changed)
     stats = dict(retained_events=0, retained_framework_calls=0,
@@ -41,6 +42,12 @@ def read(path):
         for row in csv.DictReader(data_lines()):
             stats["retained_events"] += 1
             event = row["event"]
+            if include_fates and event in APPLICATIONS | {"loading_drain_discard", "loading_exchange"}:
+                tick = int(row["tick"])
+                if not 0 <= tick < 1 << 64:
+                    raise ValueError("Invalid committed tick in publication evidence")
+                fates.setdefault(tick, {}).setdefault(event, (
+                    int(row["frame"]), int(row["sequence"]) if row.get("sequence") else None))
             if event in {"framework_enter", "framework_exit", "framework_throw", "loading_file"} and metadata.get("observation_identity") == "local_invocation_v1":
                 def number(field, maximum=(1 << 64) - 1):
                     if row.get(field) in (None, ""):
@@ -166,12 +173,28 @@ def read(path):
                      ("This trace declares pad, committed tick, sampling identity and control metadata captured together. Sampling identity is exposed commit tick + 1; transport-only loading pumps do not publish samples. Presentation frame and log time are observed later. " if atomic_hid else
                       "Callback tick is observed after pad acquisition, not atomically paired; legacy/unknown traces cannot establish the new input snapshot contract. ") +
                      "Sampling-number offsets across PCs are not compared."))
+    if include_fates:
+        return metadata, applied, stats, fates
     return metadata, applied, stats
 
 
+def publication_fate(events):
+    """LoadingExchange followed by final neutral publication is not a discard."""
+    published = APPLICATIONS & events.keys()
+    discarded = "loading_drain_discard" in events
+    if len(published) > 1 or (published and discarded):
+        return "ambiguous", None
+    if published:
+        event = "apply" if "apply" in published else "loading_neutral_apply"
+        return "published", events[event]
+    if discarded:
+        return "discarded", events["loading_drain_discard"]
+    return "loading_transport_only", events["loading_exchange"]
+
+
 def compare(left, right):
-    lm, li, ls = read(left)
-    rm, ri, rs = read(right)
+    lm, li, ls, lf = read(left, include_fates=True)
+    rm, ri, rs, rf = read(right, include_fates=True)
     if lm["seed"] != rm["seed"] or lm["role"] == rm["role"]:
         raise ValueError("Expected opposite roles from the same session seed")
     shared = li.keys() & ri.keys()
@@ -183,8 +206,27 @@ def compare(left, right):
             mismatch_count += 1
             if first is None:
                 first = {"tick": tick, "fields": different, "left_frame": a[0], "right_frame": b[0]}
+    fate_count, fate_first, compared_fates, ambiguous = 0, None, 0, 0
+    for tick in sorted(lf.keys() & rf.keys()):
+        a, b = publication_fate(lf[tick]), publication_fate(rf[tick])
+        if "ambiguous" in (a[0], b[0]):
+            ambiguous += 1
+            continue
+        compared_fates += 1
+        if a[0] != b[0]:
+            fate_count += 1
+            if fate_first is None:
+                fate_first = dict(tick=tick,
+                                  left=dict(fate=a[0], frame=a[1][0], sequence=a[1][1]),
+                                  right=dict(fate=b[0], frame=b[1][0], sequence=b[1][1]))
     return {"schema": 1, "seed": lm["seed"], "matched_applied_ticks": len(shared),
             "application_mismatches": mismatch_count, "first_application_mismatch": first,
+            "matched_commit_fate_ticks": compared_fates,
+            "commit_fate_mismatches": fate_count, "first_commit_fate_mismatch": fate_first,
+            "ambiguous_shared_fate_ticks": ambiguous,
+            "left_only_retained_fate_ticks": len(lf.keys() - rf.keys()),
+            "right_only_retained_fate_ticks": len(rf.keys() - lf.keys()),
+            "commit_fate_scope": "Explicit retained HID-publication, loader-discard or loading-transport evidence only. Final loading-neutral publication supersedes its transport event. Ambiguous or missing evidence is not inferred; publication does not prove guest consumption, simulation advancement or world synchronization.",
             "left_only_retained_ticks": len(li.keys() - ri.keys()),
             "right_only_retained_ticks": len(ri.keys() - li.keys()),
             "hid_identity_contracts_match": (

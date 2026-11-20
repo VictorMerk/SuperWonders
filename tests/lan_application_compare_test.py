@@ -55,6 +55,60 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(result["left"]["omitted_events"], 20)
         self.assertEqual(result["right_only_retained_ticks"], 1)
 
+    def test_pipeline_discard_is_not_hidden_by_equal_final_application(self):
+        left = self.write("left", 0, [row(1, "loading_drain_discard", sequence=4),
+                                      row(3, "loading_neutral_apply")])
+        right = self.write("right", 1, [row(1, sequence=9), row(3, "loading_neutral_apply")])
+        result = module.compare(left, right)
+        self.assertEqual(result["application_mismatches"], 0)
+        self.assertEqual(result["matched_commit_fate_ticks"], 2)
+        self.assertEqual(result["commit_fate_mismatches"], 1)
+        first = result["first_commit_fate_mismatch"]
+        self.assertEqual(first["tick"], 1)
+        self.assertEqual(first["left"], dict(fate="discarded", frame=101, sequence=4))
+        self.assertEqual(first["right"]["fate"], "published")
+
+    def test_serial_loading_transport_and_reverse_roles(self):
+        loading = self.write("loading", 0, [row(1, "loading_exchange")])
+        playing = self.write("playing", 1, [row(1)])
+        result = module.compare(playing, loading)
+        self.assertEqual(result["commit_fate_mismatches"], 1)
+        first = result["first_commit_fate_mismatch"]
+        self.assertEqual(first["left"]["fate"], "published")
+        self.assertEqual(first["right"]["fate"], "loading_transport_only")
+
+    def test_final_loading_neutral_supersedes_transport(self):
+        left = self.write("left", 0, [row(1, "loading_exchange"), row(1, "loading_neutral_apply")])
+        right = self.write("right", 1, [row(1, "loading_neutral_apply")])
+        result = module.compare(left, right)
+        self.assertEqual(result["commit_fate_mismatches"], 0)
+        self.assertEqual(result["matched_commit_fate_ticks"], 1)
+        self.assertIsNone(result["first_commit_fate_mismatch"])
+
+    def test_missing_fate_is_not_assumed_discarded(self):
+        left = self.write("left", 0, [row(1, "exchange_complete")])
+        right = self.write("right", 1, [row(1)])
+        result = module.compare(left, right)
+        self.assertEqual(result["commit_fate_mismatches"], 0)
+        self.assertEqual(result["matched_commit_fate_ticks"], 0)
+        self.assertEqual(result["right_only_retained_fate_ticks"], 1)
+
+    def test_conflicting_local_fates_are_ambiguous(self):
+        for events in (("apply", "loading_drain_discard"), ("apply", "loading_neutral_apply")):
+            left = self.write("left", 0, [row(1, event) for event in events])
+            right = self.write("right", 1, [row(1)])
+            result = module.compare(left, right)
+            self.assertEqual(result["ambiguous_shared_fate_ticks"], 1)
+            self.assertEqual(result["matched_commit_fate_ticks"], 0)
+            self.assertEqual(result["commit_fate_mismatches"], 0)
+
+    def test_invalid_fate_tick_rejected(self):
+        for tick in (-1, 1 << 64):
+            left = self.write("left", 0, [row(tick, "loading_exchange")])
+            right = self.write("right", 1, [row(1)])
+            with self.assertRaises(ValueError):
+                module.compare(left, right)
+
     def test_different_session_and_same_role_rejected(self):
         left = self.write("left", 0, [row(1)])
         for role, seed in [(0, 123), (1, 456)]:

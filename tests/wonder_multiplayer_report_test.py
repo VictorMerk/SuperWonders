@@ -47,9 +47,9 @@ class ReportTest(unittest.TestCase):
     def codes(self, result):
         return {note["code"] for note in result["diagnostics"]}
 
-    def application(self, name, role, button=0, omitted=0, seed=7):
+    def application(self, name, role, button=0, omitted=0, seed=7, event="apply"):
         path = self.root / name
-        row = dict(tick=1, frame=5, event="apply", players=2)
+        row = dict(tick=1, frame=5, event=event, players=2)
         row.update({f"p{p}_{field}": button if p == 0 and field == "buttons" else 0
                     for p in range(4) for field in ("loading_event", "buttons", "lx", "ly", "rx", "ry")})
         with path.open("w", newline="") as out:
@@ -148,6 +148,16 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(result["comparisons"]["legacy_input"]["committed_pairs"], 1)
         self.assertEqual(result["comparisons"]["legacy_input"]["valid_position_pairs"], 0)
         self.assertIn("not verified", result["comparisons"]["legacy_input"]["limitation"])
+
+    def test_commit_fate_mismatch_has_an_explicit_warning(self):
+        for event in ("loading_drain_discard", "loading_exchange"):
+            left = dict(session=self.session(mode="legacy_lan", seed=7, role=0),
+                        application_trace=self.application("left.csv", 0, event=event))
+            right = dict(session=self.session("right", mode="legacy_lan", seed=7, role=1),
+                         application_trace=self.application("right.csv", 1))
+            result = reporter.summarize(left, right)
+            self.assertIn("legacy_commit_fate_mismatch", self.codes(result))
+            self.assertEqual(result["comparisons"]["legacy_application"]["commit_fate_mismatches"], 1)
 
     def test_legacy_source_metadata_conflict_blocks_pairing(self):
         left = dict(session=self.session(mode="legacy_lan", seed=7, role=0), application_trace=self.application("left.csv", 1))

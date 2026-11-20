@@ -427,6 +427,10 @@ def summarize(left, right=None):
                 for p, internal in ((lp, li), (rp, ri)):
                     _csv_unchanged(internal["paths"]["application_trace"], p["artifacts"]["application_trace"])
                 report["comparisons"]["legacy_application"] = compared
+                if compared["commit_fate_mismatches"]:
+                    _note(notes, "legacy_commit_fate_mismatch")
+                if compared["ambiguous_shared_fate_ticks"]:
+                    _note(notes, "legacy_commit_fate_ambiguous")
                 app_pair = True
             except (OSError, ValueError, KeyError, TypeError, csv.Error):
                 _note(notes, "legacy_application_pair_metadata_mismatch")

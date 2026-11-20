@@ -37,8 +37,9 @@ std::mutex connection_lock;
 std::atomic<bool> running{false};
 std::atomic<bool> stopping{false};
 constinit std::atomic<TickSeedFilter> tick_seed_filter{nullptr};
-std::mutex input_lock;
-FrameInputs inputs;
+InputPublication input_publication;
+std::mutex& input_lock=input_publication.mutex();
+const FrameInputs& inputs=input_publication.current_locked();
 LockstepTiming lockstep_timing;
 std::array<LockstepTiming,kPlayers> peer_work;
 FrameWorkClock frame_work_clock;
@@ -77,7 +78,7 @@ void dump_trace() noexcept {
         if (!out) log("lan: could not save the diagnostic input trace");
         if(apply_trace) {
             std::ofstream applied(data/"lan-application-trace.csv",std::ios::binary|std::ios::trunc);
-            apply_trace->write(applied,role,current_seed);
+            apply_trace->write(applied,role,current_seed,true);
             if(!applied)log("lan: could not save application diagnostics");
         }
         if(const auto* connection=session.load()) {
@@ -243,7 +244,9 @@ void exchange() {
     lockstep_timing.record(finished-started);
     frame_work_clock.finish(finished);  // the next simulation/render/pacing interval starts here
     if (!completed) { application_event(ApplyEvent::LeadIn); return; }  // explicit neutral lead-in
-    inputs=completed->inputs;
+    if(!input_publication.publish_locked(completed->inputs)) {
+        running=false;end_session("LAN input sampling identity is invalid or exhausted");
+    }
     application_event(ApplyEvent::Apply,&inputs,0,completed->sampled_ns);
     for(size_t player=0;player<count;++player)
         if(inputs.frame_work_ns[player]) peer_work[player].record(inputs.frame_work_ns[player]);
@@ -331,7 +334,8 @@ void connect_game(const LobbyRequest& request) {
     frame_work_clock.reset();
     // Every peer starts with a neutral frame. The UI's confirmation button is not
     // sampled on this background thread and cannot leak into the game's input.
-    inputs=connection->exchange({});
+    if(!input_publication.reset_locked(connection->exchange({})))
+        throw std::runtime_error("LAN initial input sampling identity is invalid");
     input_trace.reset(); trace_started=true;
     if(value("NX_LAN_APPLY_TRACE")=="1") {
         // Explicit opt-in only; hard ceiling prevents unbounded logging.
@@ -410,8 +414,12 @@ uint64_t guest_tick(uint64_t caller,uint64_t real_tick) {
 }
 bool connected(uint32_t player) { return active() && player<count; }
 plat::PadState pad(uint32_t player) {
-    std::lock_guard guard(input_lock);
-    return connected(player) ? inputs.pads[player] : plat::PadState{};
+    return input_snapshot(player).pad;
+}
+InputSnapshot input_snapshot(uint32_t player) {
+    return input_publication.read(player,[] {
+        return InputReadMetadata{running.load(),pending_loading_event.load()};
+    });
 }
 void trace_framework_frame(uint64_t frame_before,uint64_t frame_after) {
     if(!apply_trace)return;
@@ -424,16 +432,16 @@ void trace_framework_frame(uint64_t frame_before,uint64_t frame_after) {
     entry.local_loading_event=pending_loading_event.load();
     apply_trace->push(entry);
 }
-void trace_hid_delivery(uint32_t player,uint64_t sampling_number,const plat::PadState& pad,uint64_t caller) {
-    if(!apply_trace || player>=kPlayers)return;
-    // Caller has already released pad()'s lock. Tick is the currently exposed
-    // commit at this observation, not an assertion that no exchange intervened.
-    std::lock_guard guard(input_lock);
+void trace_hid_delivery(const InputSnapshot& captured,const plat::PadState& pad,uint64_t caller) {
+    if(!apply_trace || captured.player>=kPlayers || !captured.active)return;
+    // Identity and control metadata were captured together with the raw pad.
+    // The caller adds stick-direction bits before reporting actual delivery.
     ApplyTraceEntry entry;
     entry.event=ApplyEvent::HidDelivery; entry.ns=plat::monotonic_ns(); entry.frame=g_frame.load();
-    entry.tick=inputs.tick; entry.player=player; entry.sampling_number=sampling_number; entry.caller=caller;
-    entry.inputs.players=uint8_t(count); entry.inputs.pads[player]=pad;
-    entry.local_loading_event=pending_loading_event.load();
+    entry.tick=captured.committed_tick; entry.player=captured.player;
+    entry.sampling_number=captured.sampling_number; entry.caller=caller;
+    entry.inputs.players=captured.players; entry.inputs.pads[captured.player]=pad;
+    entry.local_loading_event=captured.local_loading_event;
     apply_trace->push(entry);
 }
 void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange(); } }
@@ -481,7 +489,9 @@ void loading_event(const char* path) {
                 all=all && agreed.loading_events[player]==event;
             }
             if(all) {
-                inputs={}; inputs.players=uint8_t(count); inputs.tick=agreed.tick;
+                FrameInputs neutral;neutral.players=uint8_t(count);neutral.tick=agreed.tick;
+                if(!input_publication.publish_locked(neutral))
+                    throw std::runtime_error("LAN loading input sampling identity is invalid or exhausted");
                 application_event(ApplyEvent::LoadingNeutralApply,&inputs,0,0,event);
                 break;
             }

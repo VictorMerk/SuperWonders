@@ -28,6 +28,10 @@ int main() {
     ApplyTrace hid(2); e.event=ApplyEvent::HidDelivery; e.player=1; e.sampling_number=123; e.caller=456;
     hid.push(e); text=csv(hid);
     check(text.find(",1,123,456,")!=text.npos,"delivered HID player/sample/caller retained");
+    check(text.find("hid_identity=")==text.npos,"legacy/unspecified trace export does not invent atomic HID identity");
+    std::ostringstream atomic_hid;hid.write(atomic_hid,1,42,true);
+    check(atomic_hid.str().find("hid_identity=exposed_commit_plus_one")!=text.npos,
+          "runtime can declare the atomic committed-input sampling contract without changing schema or columns");
     ApplyTrace framework(2); e={};e.event=ApplyEvent::FrameworkFrame;e.framework_sequence=77;e.frame_before=e.frame=99;
     framework.push(e);text=csv(framework);
     check(text.find("count_framework_frame=1")!=text.npos&&text.find(",77,99,")!=text.npos,

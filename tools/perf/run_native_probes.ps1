@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $runtimePath = (Resolve-Path -LiteralPath $Runtime).Path
 $dataPath = (Resolve-Path -LiteralPath $DataRoot).Path
-if (Get-Process wonder,wonder-launcher,mkw -ErrorAction SilentlyContinue) { throw 'A game is already running; no GPU probes started.' }
+if (Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue) { throw 'A game is already running; no GPU probes started.' }
 if (Test-Path -LiteralPath $Output) { throw 'Choose a new output directory to preserve previous evidence.' }
 $null = New-Item -ItemType Directory -Path $Output
 $outputPath = (Resolve-Path -LiteralPath $Output).Path
@@ -20,13 +20,13 @@ $cases = @(
     @{Name='counter-pipelined'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='pipelined'},
     @{Name='counter-async'; Kind='Counter'; Flag='NX_COUNTER_CLEAR_PROBE'; Count=12; Pattern='counter/clear GPU probe case \d+: PASS'; Mode='async'},
     @{Name='framegen'; Kind='Framegen'; Flag='NX_FRAMEGEN_PROBE'; Count=87; Pattern='framegen probe \d+x .*: PASS'; Mode='sync'},
-    @{Name='overlay'; Kind='Overlay'; Flag='NX_OVERLAY_INPUT_PROBE'; Count=4; Pattern='(?:overlay input probe: .*|controller bridge probe preset \d): PASS'; Mode='sync'},
+    @{Name='overlay'; Kind='Overlay'; Flag='NX_OVERLAY_INPUT_PROBE'; Count=5; Pattern='(?:overlay input probe: .*|overlay capture gate probe: .*|controller bridge probe preset \d): PASS'; Mode='sync'},
     @{Name='texture'; Kind='Texture'; Flag='NX_TEXTURE_CONVERSION_PROBE'; Count=8; Pattern='texture conversion probe .*: PASS'; Mode='sync'}
 )
 $results = @()
 foreach ($case in $cases) {
     if ($Probe -ne 'All' -and $Probe -ne $case.Kind) { continue }
-    if (Get-Process wonder,wonder-launcher,mkw -ErrorAction SilentlyContinue) { throw 'A game started between probes; remaining probes deferred.' }
+    if (Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue) { throw 'A game started between probes; remaining probes deferred.' }
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = $runtimePath
     $start.WorkingDirectory = Split-Path -Parent $runtimePath

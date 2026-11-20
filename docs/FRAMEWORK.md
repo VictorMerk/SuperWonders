@@ -1,5 +1,9 @@
 # SwitchGamesRecomp
 
+> Historical framework notes. Platform status, measurements and branches below
+> describe earlier work; see the [current project overview](../README.md) for
+> this fork's Wonder editions, validation limits and multiplayer status.
+
 Static recompilation of Nintendo Switch 1 games (AArch64) to native code, CPU and GPU. No emulator runs: the games'
 machine code becomes C++ that is compiled for the host, and their system and graphics calls are implemented
 natively.
@@ -14,11 +18,8 @@ legally dumped copy, keys and firmware.
 
 ## Super Mario Bros. Wonder
 
-| Title | Character select |
-|---|---|
-| ![title](docs/media/wonder/37-title.png) | ![select](docs/media/wonder/35-character-select-samplers.png) |
-| **World map** | **Course 1-1, 60 fps** |
-| ![map](docs/media/wonder/39-world-map-player.png) | ![course](docs/media/wonder/38-course-60fps-pipelined.png) |
+Earlier title, character-select, world-map and course screenshots are not included
+in this checkout.
 
 ### What works
 
@@ -44,9 +45,9 @@ The details are in the GitHub milestones.
 - **Windowed stretches at 35-40 fps (#51):** the GPU goes past the frame budget only when a window is visible.
 - **Windowed confirmation of the W7 glitch fixes (#43-#45, #47):** horizon band, silhouettes, present mode.
 - **Character-select blur:** needs a reference from a real console.
-- **Android port:** planned in [docs/nvn/ANDROID-PORT.md](docs/nvn/ANDROID-PORT.md), in progress on branch
+- **Android port:** planned in [docs/nvn/ANDROID-PORT.md](nvn/ANDROID-PORT.md), in progress on branch
   `feat/android-wonder`. See below.
-- **Windows port:** planned in [docs/nvn/WINDOWS-PORT.md](docs/nvn/WINDOWS-PORT.md), branch `feat/windows-wonder`.
+- **Windows port:** planned in [docs/nvn/WINDOWS-PORT.md](nvn/WINDOWS-PORT.md), branch `feat/windows-wonder`.
 
 ### Android (in progress, branch `feat/android-wonder`)
 
@@ -96,7 +97,7 @@ in `private/venv`.
    ```
 3. **Translate the shaders.** Extract the shader containers with `tools/maxwell/containers.py`, then translate them
    with the harness in `tools/maxwell/spirv_harness`. This writes `private/wonder/spirv/<hash>.spv`. See
-   [docs/nvn/TRANSLATOR.md](docs/nvn/TRANSLATOR.md).
+   [docs/nvn/TRANSLATOR.md](nvn/TRANSLATOR.md).
 4. **Build the button font.** It is local only and never committed:
    ```sh
    private/venv/bin/python tools/fonts/make_button_font.py
@@ -122,20 +123,20 @@ Useful switches:
 | `NX_HANDHELD=1` | handheld mode, 720p |
 | `NX_PIPELINED=0` | waits for every submit, as before 60 fps (diagnosis) |
 
-Every debug switch (draw traces, snapshots, bisecting toggles) is listed in [docs/nvn/SWITCHES.md](docs/nvn/SWITCHES.md).
+Every debug switch (draw traces, snapshots, bisecting toggles) is listed in [docs/nvn/SWITCHES.md](nvn/SWITCHES.md).
 
 ### How it works, and where it is written down
 
 | Document | What |
 |---|---|
-| [PROGRESS.md](PROGRESS.md) | living log, newest first, with screenshots |
-| [docs/NVN.md](docs/NVN.md) | the NVN → Vulkan plan: phases N0-N7, where to cut, ground rules |
-| [docs/nvn/WONDER.md](docs/nvn/WONDER.md) | facts about the game: modules, RomFS, recompilation numbers, the host GPU |
-| [docs/nvn/SHADERS.md](docs/nvn/SHADERS.md), [TRANSLATOR.md](docs/nvn/TRANSLATOR.md) | shader containers, and Maxwell → SPIR-V |
-| [docs/nvn/TILING.md](docs/nvn/TILING.md) | block-linear texture layouts |
-| [docs/nvn/DEBUG.md](docs/nvn/DEBUG.md), [DEBUG-2.md](docs/nvn/DEBUG-2.md) | every rendering bug found so far (67 entries): symptom, cause, fix, switch |
-| [docs/nvn/GLITCH-PLAN.md](docs/nvn/GLITCH-PLAN.md), [PERF-PLAN.md](docs/nvn/PERF-PLAN.md) | glitch and performance studies and plans |
-| [docs/nvn/ANDROID-PORT.md](docs/nvn/ANDROID-PORT.md) | study for the Android port: gaps, risks, milestones A0-A7 |
+| [PROGRESS.md](../PROGRESS.md) | living log, newest first, with screenshots |
+| [docs/NVN.md](NVN.md) | the NVN → Vulkan plan: phases N0-N7, where to cut, ground rules |
+| [docs/nvn/WONDER.md](nvn/WONDER.md) | facts about the game: modules, RomFS, recompilation numbers, the host GPU |
+| [docs/nvn/SHADERS.md](nvn/SHADERS.md), [TRANSLATOR.md](nvn/TRANSLATOR.md) | shader containers, and Maxwell → SPIR-V |
+| [docs/nvn/TILING.md](nvn/TILING.md) | block-linear texture layouts |
+| [docs/nvn/DEBUG.md](nvn/DEBUG.md), [DEBUG-2.md](nvn/DEBUG-2.md) | every rendering bug found so far (67 entries): symptom, cause, fix, switch |
+| [docs/nvn/GLITCH-PLAN.md](nvn/GLITCH-PLAN.md), [PERF-PLAN.md](nvn/PERF-PLAN.md) | glitch and performance studies and plans |
+| [docs/nvn/ANDROID-PORT.md](nvn/ANDROID-PORT.md) | study for the Android port: gaps, risks, milestones A0-A7 |
 
 Ground rules for this track:
 - only our own dumps, keys and firmware;
@@ -148,13 +149,9 @@ Ground rules for this track:
 **Hades runs natively on PC, from boot to gameplay**: the CPU code is recompiled (main + Nintendo's SDK, 3.0M AArch64
 instructions), the game's own Vulkan renderer (The Forge) runs on the host GPU through generated bridges, no
 emulation anywhere. RTX 3050 laptop, 1280x720, 143 fps (vsync). It also runs on Android phones: see
-[docs/ANDROID.md](docs/ANDROID.md).
+[docs/ANDROID.md](ANDROID.md).
 
-| Logo | Main menu |
-|---|---|
-| ![logo](docs/media/first-frame-logo.png) | ![menu](docs/media/main-menu.png) |
-| **Intro** | **Gameplay** |
-| ![intro](docs/media/intro.png) | ![gameplay](docs/media/gameplay.png) |
+Earlier Hades screenshots are not included in this checkout.
 
 ### Approach
 
@@ -166,8 +163,8 @@ Hades' `main` module imports everything it needs from the system by name: libc/l
    like ReXGlue does with Xbox 360 kernel exports.
 3. **GPU:** pass Vulkan calls through to the host driver. No Maxwell/NVN emulation.
 
-Both sides are little endian, so no byte swapping. Details in [docs/FINDINGS.md](docs/FINDINGS.md),
-[docs/RECOMP.md](docs/RECOMP.md) and [docs/RUNTIME.md](docs/RUNTIME.md).
+Both sides are little endian, so no byte swapping. Details in [docs/FINDINGS.md](FINDINGS.md),
+[docs/RECOMP.md](RECOMP.md) and [docs/RUNTIME.md](RUNTIME.md).
 
 ### Phases
 

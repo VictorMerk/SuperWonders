@@ -138,6 +138,9 @@ uint32_t vk_int_kind(VkFormat format);  // 0 float or normalized, 1 unsigned int
 bool note_int_texture(const ShaderInfo* s, uint32_t binding, uint32_t kind);
 uint32_t int_texture_kind(const ShaderInfo* s, uint32_t binding);  // 0 when none recorded
 uint32_t int_texture_generation(const ShaderInfo* s);              // changes with every new record of `s`
+uint64_t int_texture_variant_id(const ShaderInfo* s); // semantic complete-map identity, equal across private/runtime objects
+bool int_texture_patches_enabled();
+bool seed_private_int_texture_variant(const ShaderInfo*,const std::map<uint32_t,uint32_t>&); // fresh private warmup object only
 std::string int_texture_key(const ShaderInfo* s);                  // the records of `s`, for module caches
 std::map<uint32_t, uint32_t> int_texture_kinds(const ShaderInfo* s);  // binding -> kind
 bool patch_int_textures(const std::vector<uint32_t>& in, const std::map<uint32_t, uint32_t>& kinds,

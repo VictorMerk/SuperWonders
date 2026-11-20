@@ -13,6 +13,7 @@
 // Data: NX_DATA_ROOT or games/<game>'s pc_data_root ("private/<game>"): analysis/{main,sdk}.bin, extract/romfs, user/.
 // Settings: <data root>/pc-settings.ini through the overlay menu (F1, or Minus + Plus on a controller: overlay/), and
 // NX_<KEY> environment variables, as on Windows and macOS. Input and settings: platform_linux_input.cpp.
+#include "nvn/pipeline_miss_trace.h"
 #include "file_io.h"
 #include <dlfcn.h>
 #include <pthread.h>
@@ -178,6 +179,7 @@ void exit_process(int code) {
     static std::atomic_flag exiting=ATOMIC_FLAG_INIT;
     if (exiting.test_and_set()) for (;;) ::pause();
     nx::lan::flush_diagnostics();
+    nx::nvn::pipeline_trace::shutdown();
     nx::nvn::flush_shader_bundle();
     close_controllers();
     nx::nvn::flush_pipeline_cache();

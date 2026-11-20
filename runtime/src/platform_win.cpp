@@ -1,5 +1,6 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
+#include "nvn/pipeline_miss_trace.h"
 #include "file_io.h"
 #include "host_path.h"
 #include "keyboard_actions.h"
@@ -114,6 +115,7 @@ void exit_process(int code) {
     nx::native_net::shutdown();
     nx::native_lan::shutdown();
     nx::steam_dev::shutdown_current();
+    nx::nvn::pipeline_trace::shutdown();
     nx::log("shutdown: LAN transport stopped and diagnostic trace saved");
     nx::nvn::flush_shader_bundle();
     nx::log("shutdown: shader bundle flushed");

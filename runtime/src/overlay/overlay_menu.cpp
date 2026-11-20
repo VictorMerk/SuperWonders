@@ -5,6 +5,7 @@
 // (option_rows.cpp). Descriptions are English for now.
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <iterator>
 
 #include "imgui.h"
@@ -25,6 +26,7 @@
 #include "launcher/launcher.h"
 #endif
 #include "overlay/overlay_ui.h"
+#include "pc_menu_layout.h"
 
 namespace nx::overlay {
 
@@ -693,19 +695,35 @@ void audio(MenuContext& c, const Labels& l) {
 
 void controls(MenuContext& c, const Labels& l) {
     Settings& s = c.settings;
-    const int lang = std::clamp(s.language, 0, 12);
-    static int section=0;
+    // Developer tour selects only the initially visible page, never changes
+    // bindings/settings or starts a capture. Normal startup stays on Keyboard.
+    static int section=[] {
+        const char* requested=std::getenv("NX_CONTROLS_TOUR_SECTION");
+        return requested&&requested[0]>='0'&&requested[0]<='2'&&!requested[1]?requested[0]-'0':0;
+    }();
     const char* sections[]={"Keyboard remapping","Controller remapping","Players & devices"};
-    if(ImGui::Combo("##controls_section",&section,sections,3)) {c.capture_action=-1;cancel_controller_remapping();rows::focus_first();}
-    ImGui::TextDisabled("Controller artwork v3 | Keyboard and controller remapping");
+    float section_min=0;
+    for(const char* title:sections)section_min=std::max(section_min,ImGui::CalcTextSize(title).x+28);
+    const float gap=ImGui::GetStyle().ItemSpacing.x;
+    const int columns=plat::menu_layout::columns(ImGui::GetContentRegionAvail().x,section_min,3,gap);
+    const float width=(ImGui::GetContentRegionAvail().x-gap*(columns-1))/columns;
+    for(int i=0;i<3;++i) {
+        if(i%columns)ImGui::SameLine();
+        const bool changed=ui::navigation_button(sections[i],section==i,width);
+        if(changed&&section!=i) {
+            section=i;c.capture_action=-1;cancel_controller_remapping();rows::focus_first();
+        }
+    }
+    ImGui::Spacing();
     if(section==1){controller_remapping(c.settings,c.appearing,c.open);return;}
     rows::begin(section==0?"##keyboard_remapping":section==1?"##controller_remapping":"##control_devices", c.height);
-    const char* icon_names[] = {"Automatic at startup", "Keyboard", "Nintendo", "Xbox", "PlayStation"};
-    if (rows::choice("Button prompts", &s.button_icons, icon_names, 5, 0,
-        "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
-        settings_changed(true); ui::notify("Restart the game to update its button prompts.");
-    }
-    if(section==0) ImGui::TextWrapped("Select an action row, then press a key. Delete: unbind. Esc: cancel.");
+    auto button_prompts=[&] {
+        const char* icon_names[]={"Automatic at startup","Keyboard","Nintendo","Xbox","PlayStation"};
+        if(rows::choice("Button prompts",&s.button_icons,icon_names,5,0,
+            "Choose the button icons shown in the game. Automatic detects player 1's controller at startup. Icons follow your bindings. Restart the game after changing prompts or bindings.")) {
+            settings_changed(true);ui::notify("Restart the game to update its button prompts.");
+        }
+    };
     if(section==2) {
     rows::section("Players & devices");
     if(lan::active()) rows::disable_next();
@@ -721,9 +739,35 @@ void controls(MenuContext& c, const Labels& l) {
         if (rows::action(label, name.c_str(), network ? "Every PC contributes its primary gamepad or keyboard. Choose the matching number of players in Wonder. Select this PC's row to test local rumble." : "Connect up to four gamepads for local co-op. Player 1 also uses the keyboard. Select a connected controller to test its rumble. Unplugging one pad preserves the other player slots."))
             plat::rumble_player(network?0:player, 0.3f, 0.3f);
     }
+    button_prompts();
     }
     if(section==0) {
-    rows::section(kHeaders[lang][0]);
+    auto keyboard_row=[&](size_t action,const char* label) {
+        char id[96];std::snprintf(id,sizeof id,"%s###key%zu",label,action);
+        const bool waiting=c.capture_action==int(action);
+        const int binding=action==kControlCount?s.keyboard_standee_key:s.keyboard_bindings[action];
+        const char* name=waiting?"Press a key...":binding==0?"Unbound":c.host.key_name?c.host.key_name(binding):"?";
+        const char* help=action==kControlCount?
+            "Select and press a key. Standee briefly crouches then presses use; stand on the ground. Delete clears the binding; Esc cancels. Restart to update game prompts." :
+            "Select this action and press its new key. Delete clears the binding; Esc cancels. Changes apply immediately. Restart to refresh the game's key prompts.";
+        if(rows::action(id,name,help,true,waiting))c.capture_action=int(action);
+    };
+    if(s.keyboard_actions) {
+        constexpr size_t order[]={CtlLeft,CtlB,CtlY,CtlRight,CtlUp,CtlDown,CtlR,CtlZL,kControlCount,CtlA,CtlX,CtlPlus,CtlMinus};
+        for(size_t action:order)keyboard_row(action,action==kControlCount?"Place standee":input::keyboard_action_name(action));
+        static bool advanced=false;
+        if(rows::action("Advanced keyboard bindings",advanced?"Hide":"Show","Optional original shoulder/stick inputs. Duplicate spin and unused stick clicks are unbound in the PC defaults."))advanced=!advanced;
+        if(advanced)for(size_t action:{size_t(CtlL),size_t(CtlZR),size_t(CtlLStick),size_t(CtlRStick)})keyboard_row(action,kActions[action]);
+    } else {
+        constexpr size_t order[]={CtlLeft,CtlB,CtlY,CtlRight,CtlUp,CtlDown,CtlR,CtlZL,CtlA,CtlX,CtlPlus,CtlMinus,CtlL,CtlZR,CtlLStick,CtlRStick};
+        for(size_t action:order)keyboard_row(action,kActions[action]);
+    }
+    static bool options_open=false;
+    if(rows::action("Keyboard options",options_open?"Hide":"Show",
+        "Secondary keyboard options: change PC/legacy mode, restore defaults, match Wonder's jump/dash layout or choose game button prompts.")) {
+        options_open=!options_open;c.capture_action=-1;
+    }
+    if(options_open) {
     int keyboard_mode=s.keyboard_actions?0:1;
     const char* modes[]={"Dedicated PC actions","Legacy Switch buttons"};
     if(rows::choice("Keyboard controls",&keyboard_mode,modes,2,0,
@@ -738,27 +782,15 @@ void controls(MenuContext& c, const Labels& l) {
         s.keyboard_standee_key=input::default_standee_key();c.capture_action=-1;settings_changed(true);
         ui::notify("Keyboard layout reset. Restart to refresh the game's key prompts.");
     }
-    auto keyboard_row=[&](size_t action,const char* label) {
-        char id[96];std::snprintf(id,sizeof id,"%s###key%zu",label,action);
-        const bool waiting=c.capture_action==int(action);
-        const int binding=action==kControlCount?s.keyboard_standee_key:s.keyboard_bindings[action];
-        const char* name=waiting?"Press a key...":binding==0?"Unbound":c.host.key_name?c.host.key_name(binding):"?";
-        if(rows::action(id,name,"Select and press a key. Standee briefly crouches then presses use; stand on the ground. Delete clears the binding; Esc cancels. Keys apply immediately; restart to update game prompts.",true,waiting))c.capture_action=int(action);
-    };
-    if(s.keyboard_actions) {
+        if(s.keyboard_actions) {
         const char* schemes[]={"B jump / Y dash (standard)","A jump / B dash (alternate)"};
         if(rows::choice("Wonder's game layout",&s.keyboard_game_layout,schemes,2,0,
             "Match Wonder's own Settings > Dash and Jump Controls. This translates your PC action keys to either game setting; the PC keys stay the same. It does not change gamepad mappings or edit your game save."))settings_changed(true);
-        constexpr size_t order[]={CtlLeft,CtlRight,CtlUp,CtlDown,CtlB,CtlY,CtlR,CtlZL,kControlCount,CtlA,CtlX,CtlPlus,CtlMinus};
-        for(size_t action:order)keyboard_row(action,action==kControlCount?"Place standee":input::keyboard_action_name(action));
-        static bool advanced=false;
-        if(rows::action("Advanced keyboard bindings",advanced?"Hide":"Show","Optional original shoulder/stick inputs. Duplicate spin and unused stick clicks are unbound in the PC defaults."))advanced=!advanced;
-        if(advanced)for(size_t action:{size_t(CtlL),size_t(CtlZR),size_t(CtlLStick),size_t(CtlRStick)})keyboard_row(action,kActions[action]);
-    } else {
-        for(size_t action=0;action<kControlCount;++action)keyboard_row(action,kActions[action]);
+        }
+        button_prompts();
     }
     }
-    rows::page_note(s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
+    rows::page_note(section==0?"Select a binding and press a key. Delete: unbind. Esc: cancel. Restart to refresh game prompts." : s.controller_preset == 2 ? "Circle confirms; Cross backs out. Custom bindings take priority." : s.controller_preset == 1 ? l.nintendo_desc : l.standard_desc);
     rows::end();
 }
 
@@ -856,14 +888,14 @@ void system_tab(MenuContext& c, const Labels& l) {
 
 // The close X in the top-right corner (as Savage Wind's menu.mm: lit when hovered or selected).
 bool close_button(float k) {
-    const float bx = 44 * k;
+    const float bx = std::max(36.f,44 * k);
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - bx);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
     const bool close = ImGui::InvisibleButton("##close", ImVec2(bx, bx), ImGuiButtonFlags_EnableNav);
     ImGui::PopStyleColor();
     const bool hot = ImGui::IsItemHovered() || (ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible);
-    const float t = ui::eased(ImGui::GetItemID(), hot ? 1.0f : 0.0f, 22.0f);
+    const float t = hot ? 1.f : 0.f;
     const ImU32 col = ui::fade(ui::mix(ui::theme().text_dim, ui::theme().accent, t));
     const float m = bx * 0.3f, w = (2.4f + 0.6f * t) * 1.5f * k;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -886,7 +918,8 @@ void draw_menu(MenuContext& c) {
     auto& comfort=usability_preferences();
     const float margin=comfort.menu_fullscreen?0.f:16*k;
     const ImVec2 maximum{std::max(1.f,display.x-2*margin),std::max(1.f,display.y-2*margin)};
-    const ImVec2 minimum{std::min(maximum.x,760*k),std::min(maximum.y,620*k)};
+    const ImVec2 minimum{std::min(maximum.x,760*std::max(k,.85f)),
+                         std::min(maximum.y,620*std::max(k,.85f))};
     static bool previous_fullscreen=false;
     static ImVec2 floating_size{0,0};
     if(!comfort.menu_fullscreen && previous_fullscreen && floating_size.x>0)
@@ -896,7 +929,7 @@ void draw_menu(MenuContext& c) {
         ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize(display);
     } else {
         ImGui::SetNextWindowPos({display.x*.5f,display.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
-        ImGui::SetNextWindowSize({std::min(maximum.x,1440*k),std::min(maximum.y,900*k)},ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({std::min(maximum.x,1320*k),std::min(maximum.y,900*k)},ImGuiCond_FirstUseEver);
     }
     ImGui::SetNextWindowSizeConstraints(minimum,maximum);
     ImGui::SetNextWindowBgAlpha(comfort.menu_opacity/100.f);
@@ -922,14 +955,21 @@ void draw_menu(MenuContext& c) {
     ImGui::PushFont(ui::title());
     ImGui::SetWindowFontScale(0.74f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent));
+    ImGui::PushTextWrapPos(std::max(ImGui::GetCursorPosX()+1,
+        ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-std::max(36.f,44*k)-16*k));
     ImGui::TextUnformatted(l.title);
+    ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
     ImGui::SetWindowFontScale(1.0f);
     ImGui::PopFont();
     if (close_button(k)) c.open = false;
-    ImGui::TextDisabled("%s",comfort.menu_fullscreen ? "Esc / F1: resume  |  L / R: tabs" : "Drag the background to move  |  Drag a corner to resize  |  Esc: resume");
+    const bool compact_header=ImGui::GetWindowHeight()<560.f*plat::menu_layout::unit(ImGui::GetFontSize());
+    ImGui::PushTextWrapPos(0);
     if(!c.startup_settings) ImGui::TextDisabled("Launcher settings");
-    else ImGui::TextDisabled("%s",lan::active()?"LAN continues while settings are open.":"Settings do not pause gameplay. Use the game's pause button first.");
+    else ImGui::TextDisabled("%s",compact_header?
+        (lan::active()?"LAN stays live.":"Game keeps running.") :
+        (lan::active()?"LAN continues while settings are open.":"Settings do not pause gameplay. Use the game's pause button first."));
+    ImGui::PopTextWrapPos();
 
     if (c.startup_settings) {
         const uint32_t changes = restart_changes(*c.startup_settings, c.settings);
@@ -947,98 +987,89 @@ void draw_menu(MenuContext& c) {
             }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent));
             ImGui::PushTextWrapPos(0);
-            ImGui::TextUnformatted(pending.c_str());
+            ImGui::TextUnformatted(compact_header?(german?"Neustart ausstehend":"Restart pending"):pending.c_str());
+            if(compact_header&&ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))ImGui::SetTooltip("%s",pending.c_str());
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
         }
     }
 
-    if(ImGui::Button(c.startup_settings ? "Resume game" : "Back to launcher")) c.open=false;
-    ImGui::SameLine();
-    if(ImGui::Button(s.muted?"Unmute":"Mute audio")) {s.muted=!s.muted;settings_changed(true);}
-    ImGui::SameLine();
-    if(ImGui::Button(s.metrics_enabled?"Hide FPS":"Show FPS")) {s.metrics_enabled=!s.metrics_enabled;settings_changed(true);}
-    const char* names[kTabs] = {l.video, l.audio, l.controls, l.overlay, l.system};
-    int current = -1;
-    // Tabs follow the keyboard / controller focus: moving onto a tab with the arrows or the D-pad shows it (next
-    // frame), with no Enter or A needed. The mouse still selects by clicking. Only a change of focus moves the tab: L / R
-    // select a tab without moving the focus, which must not pull it back.
-    static int follow = -1, focused_before = -1, shown_tab = -1, hold_follow = 0;
-    // L / R: the controller's cursor goes to the new page's first row, and following the focus pauses a few frames.
-    // Otherwise the cursor, left on a row of the page that went away, fell back onto the first tab and the
-    // tabs-follow-focus rule switched straight back (seen as "tab 1, tab 0" in the logs, before this change too).
-    if (c.tab_request >= 0 && c.tab_request != shown_tab) rows::focus_first(), hold_follow = 4;
-    static float page_a = 1, page_dir = 0, line_x0 = -1, line_x1 = -1;
-    int follow_next = -1, focused = -1;
-    ImVec2 tab_min[kTabs], tab_max[kTabs];
-    const float footer = 64 * k;
-    // Down with the cursor on the tab bar: the page's first row (Savage Wind found ImGui's own pick across the nested
-    // panes unreliable, menu.mm tabs_body)
-    if (focused_before >= 0 && ImGui::GetCurrentContext()->NavCursorVisible &&
-        (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickDown) ||
-         ImGui::IsKeyPressed(ImGuiKey_DownArrow)))
-        rows::focus_first();
-    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the underline shows where the cursor is)
-    if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_NoTooltip | ImGuiTabBarFlags_NoTabListScrollingButtons)) {
-        for (int t = 0; t < kTabs; ++t) {
-            ImGuiTabItemFlags tf = c.tab_request == t || follow == t ? ImGuiTabItemFlags_SetSelected : 0;
-            char label[64];
-            std::snprintf(label, sizeof label, "  %s  ###tab%d", names[t], t);
-            const bool shown = ImGui::BeginTabItem(label, nullptr, tf);
-            tab_min[t] = ImGui::GetItemRectMin(), tab_max[t] = ImGui::GetItemRectMax();
-            if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible) focused = t;
-            if (!shown && focused == t && focused_before != t && hold_follow == 0) follow_next = t;
-            if (shown && c.appearing) ImGui::SetItemDefaultFocus();  // navigation starts on the open tab
-            if (!shown) continue;
-            current = t;
-            if (shown_tab != t) {  // another page: it slides in from the side it was asked from, and fades in
-                page_dir = shown_tab < 0 ? 0.0f : t > shown_tab ? 1.0f : -1.0f;
-                page_a = shown_tab < 0 ? 1.0f : 0.0f, shown_tab = t;
-            }
-            page_a = comfort.reduced_motion ? 1.f : ui::approach(page_a, 1.0f, 14.0f);
-            ImGui::PopStyleColor();  // (the rows want their own)
-            ImGui::Dummy(ImVec2(0, 4 * k));
-            const ImVec2 at = ImGui::GetCursorPos();
-            const float page_w = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPos(ImVec2(at.x + (1.0f - ui::smoothstep(page_a)) * 36 * k * page_dir, at.y));
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.15f + 0.85f * ui::smoothstep(page_a)));
-            ImGui::BeginChild("page", {page_w, -footer}, ImGuiChildFlags_NavFlattened);
-            switch (t) {
-                case 0: video(c, l); break;
-                case 1: audio(c, l); break;
-                case 2: controls(c, l); break;
-                case 3: overlay_tab(c); break;
-                default: system_tab(c, l); break;
-            }
-            ImGui::EndChild();
-            ImGui::PopStyleVar();
-            ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
-            ImGui::EndTabItem();
+    if(!compact_header) {
+    const char* actions[]={c.startup_settings ? "Resume game" : "Back to launcher",
+        s.muted?"Unmute":"Mute audio",s.metrics_enabled?"Hide FPS":"Show FPS"};
+    float action_min=0;
+    for(const char* text:actions)action_min=std::max(action_min,ImGui::CalcTextSize(text).x+32);
+    const int action_columns=plat::menu_layout::columns(ImGui::GetContentRegionAvail().x,action_min,3,ImGui::GetStyle().ItemSpacing.x);
+    const float action_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*(action_columns-1))/action_columns;
+    for(int i=0;i<3;++i) {
+        if(i%action_columns)ImGui::SameLine();
+        if(ui::navigation_button(actions[i],false,action_width)) {
+            if(i==0)c.open=false;
+            if(i==1)s.muted=!s.muted,settings_changed(true);
+            if(i==2)s.metrics_enabled=!s.metrics_enabled,settings_changed(true);
         }
-        ImGui::EndTabBar();
     }
-    ImGui::PopStyleColor();
-    // the underline glides to the selected tab; brighter and thicker while the cursor is on the tab bar
-    if (current >= 0) {
-        const float x0 = tab_min[current].x + 6 * k, x1 = tab_max[current].x - 6 * k;
-        if (line_x0 < 0 || c.appearing) line_x0 = x0, line_x1 = x1;
-        line_x0 = ui::approach(line_x0, x0, 18.0f), line_x1 = ui::approach(line_x1, x1, 18.0f);
-        const float on_bar = ui::eased(ImGui::GetID("##tabfocus"), focused >= 0 ? 1.0f : 0.0f, 18.0f);
-        const float th = (3.0f + 2.0f * on_bar) * k, y = tab_max[current].y;
-        wdl->AddRectFilled(ImVec2(line_x0, y - th), ImVec2(line_x1, y), ui::fade(ui::theme().accent, 0.75f + 0.25f * on_bar), th);
+    ImGui::Spacing();
     }
-    follow = follow_next;
-    focused_before = focused;
-    if (hold_follow > 0) hold_follow--;
-    c.tab_request = current;  // out: the tab shown, for the shoulder buttons
+    const char* names[kTabs] = {l.video, l.audio, l.controls, l.overlay, l.system};
+    static int shown_tab=-1,focused_before=-1,hold_follow=0;
+    int current=(c.tab_request>=0&&c.tab_request<kTabs)?c.tab_request:std::max(0,shown_tab);
+    if(shown_tab!=current) {
+        rows::focus_first();hold_follow=4;
+        c.capture_action=-1;cancel_controller_remapping();
+    }
+    const ui::Hint footer_hints[]={{"A","Select"},{"B","Back"},{"L",""},{"R","Tab"},{"Menu","Close"}};
+    const float footer_width=std::max(1.f,ImGui::GetWindowWidth()-2*ImGui::GetStyle().WindowPadding.x);
+    const float hint_height=std::max(24.f,30*k);
+    const float measured_footer=ui::hints_height(footer_width,hint_height,footer_hints,int(std::size(footer_hints)));
+    const float footer=measured_footer+20*k;
+    float min_tab=0;
+    for(const char* name:names)min_tab=std::max(min_tab,ImGui::CalcTextSize(name).x+32);
+    const int tab_columns=plat::menu_layout::columns(ImGui::GetContentRegionAvail().x,min_tab,kTabs,ImGui::GetStyle().ItemSpacing.x);
+    const float tab_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*(tab_columns-1))/tab_columns;
+    int focused=-1;
+    for(int tab=0;tab<kTabs;++tab) {
+        if(tab%tab_columns)ImGui::SameLine();
+        ImGui::PushID(tab);
+        const bool selected=current==tab;
+        const bool pressed=ui::navigation_button(names[tab],selected,tab_width);
+        if(ImGui::IsItemFocused()&&ImGui::GetCurrentContext()->NavCursorVisible)focused=tab;
+        if(pressed||(focused==tab&&focused_before!=tab&&hold_follow==0)) {
+            if(current!=tab) {
+                rows::focus_first();c.capture_action=-1;cancel_controller_remapping();
+            }
+            current=tab;
+        }
+        if(selected&&c.appearing)ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+    }
+    focused_before=focused;
+    if(hold_follow>0)--hold_follow;
+    shown_tab=current;
+    c.tab_request=current;
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    // Content owns a separate scrolling region. Header/navigation/footer never
+    // disappear while inspecting long settings or remapping lists.
+    ImGui::BeginChild("page",{0,std::max(1.f,ImGui::GetContentRegionAvail().y-footer)},ImGuiChildFlags_NavFlattened);
+    switch(current) {
+        case 0:video(c,l);break;
+        case 1:audio(c,l);break;
+        case 2:controls(c,l);break;
+        case 3:overlay_tab(c);break;
+        default:system_tab(c,l);break;
+    }
+    ImGui::EndChild();
 
     // the footer: what the buttons do, as Savage Wind's start screen shows them (badges)
     const ImVec2 wp = ImGui::GetWindowPos();
-    const float fy = wp.y + ImGui::GetWindowHeight() - footer * 0.5f - 4 * k;
-    wdl->AddLine(ImVec2(wp.x + 28 * k, fy - footer * 0.5f + 4 * k),
-                 ImVec2(wp.x + ImGui::GetWindowWidth() - 28 * k, fy - footer * 0.5f + 4 * k), ui::fade(IM_COL32(255, 255, 255, 26)));
-    const ui::Hint list[] = {{"A", "Select"}, {"B", "Back"}, {"L", ""}, {"R", "Tab"}, {"Menu", "Close"}};
-    ui::hints(wdl, wp.x + ImGui::GetWindowWidth() * 0.5f, fy, 30 * k, list, int(sizeof list / sizeof list[0]));
+    const float footer_top=wp.y+ImGui::GetWindowHeight()-footer;
+    wdl->AddLine(ImVec2(wp.x+ImGui::GetStyle().WindowPadding.x,footer_top),
+        ImVec2(wp.x+ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x,footer_top),
+        ui::fade(IM_COL32(255,255,255,26)));
+    ui::hints(wdl,wp.x+ImGui::GetWindowWidth()*.5f,footer_top+10*k+measured_footer*.5f,
+        hint_height,footer_hints,int(std::size(footer_hints)),1.f,footer_width);
     ImGui::End();
 }
 

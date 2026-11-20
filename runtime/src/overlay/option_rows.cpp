@@ -1,7 +1,8 @@
 // Two-pane settings pages (see option_rows.h). Ported from Savage Wind's runtime/ui/option_rows.mm (MIT, Copyright (c)
 // 2026 Revivedx and the Savage Wind Recomp contributors): row(), the arrows, the description pane and the left/right
-// key ownership follow it; the eased highlight and the description cross-fade are new here.
+// key ownership follow it; hover colours soften while keyboard focus and help update immediately.
 #include "overlay/option_rows.h"
+#include "overlay/layout_geometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,22 +23,13 @@ float g_k = 1;  // style scale (1 at 1080 p)
 std::string g_desc_hover, g_desc_focus, g_desc_shown, g_desc_first, g_note;
 std::string g_desc_retained;
 ImGuiID g_desc_id = 0, g_desc_hover_id = 0, g_desc_focus_id = 0, g_desc_first_id = 0;
-float g_desc_alpha = 1;
+
 bool g_next_disabled = false;
 int g_indent = 0;
 bool g_focus_req = false, g_take_first = false;
 bool g_compact=false;
-
-// Capitals for the Latin-1 letters the menu languages use (é -> É); ß and the rest stay.
-std::string upper(const char* s) {
-    std::string out;
-    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s); *p; ++p) {
-        if (*p >= 'a' && *p <= 'z') out += char(*p - 32);
-        else if (*p == 0xC3 && p[1] >= 0xA0 && p[1] <= 0xBE && p[1] != 0xB7) out += char(0xC3), out += char(*++p - 0x20);
-        else out += char(*p);
-    }
-    return out;
-}
+ui::layout::Panes g_panes;
+ImVec2 g_page_origin;
 
 bool pressed(ImGuiKey a, ImGuiKey b, ImGuiKey c) {
     return ImGui::IsKeyPressed(a) || ImGui::IsKeyPressed(b) || ImGui::IsKeyPressed(c);
@@ -46,88 +38,97 @@ bool pressed(ImGuiKey a, ImGuiKey b, ImGuiKey c) {
 // One row: draws it, handles A / click and left / right while selected. Returns 2 (A / click), -1 / +1 (left /
 // right) or 0. arrows: ◀ value ▶ (a choice of several, or a stepper), the arrows click too.
 int row(const char* label, const std::string& value, bool changed, const char* desc, bool up = true, bool arrows = false,
-        bool highlight = false) {
+        bool highlight = false, bool primary = false) {
     ImGui::PushID(label);
-    if (g_indent) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + g_indent * 28 * g_k);
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x;
-    std::string text = up ? upper(label) : std::string(label);
-    if (const size_t cut = text.find("##"); cut != std::string::npos) text.resize(cut);
-    const float text_width=std::max(1.f,w-32*g_k);
-    const bool stacked=!value.empty() && ImGui::CalcTextSize(text.c_str()).x+ImGui::CalcTextSize(value.c_str()).x+80*g_k>w;
-    const float label_height=ImGui::CalcTextSize(text.c_str(),nullptr,false,text_width).y;
-    const float h=std::max(ImGui::GetFontSize()*1.9f,label_height+16*g_k+(stacked?ImGui::GetFontSize()*1.25f:0));
-    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the row's own border shows the selection)
-    const bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
+    if(g_indent) {
+        const float inset=std::min(g_indent*28*g_k,std::max(0.f,ImGui::GetContentRegionAvail().x-160*g_k));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+inset);
+    }
+    const ImVec2 p=ImGui::GetCursorScreenPos();
+    const float w=std::max(1.f,ImGui::GetContentRegionAvail().x),fs=ImGui::GetFontSize();
+    // Sentence case makes the list scannable; IDs still use the original label.
+    std::string text(label);
+    (void)up;
+    if(const size_t cut=text.find("##");cut!=std::string::npos)text.resize(cut);
+    const auto columns=ui::layout::row_columns(w,g_k,fs,ImGui::CalcTextSize(text.c_str()).x,
+        ImGui::CalcTextSize(value.c_str()).x,!value.empty(),arrows);
+    const ImVec2 label_size=ImGui::CalcTextSize(text.c_str(),nullptr,false,columns.label_width);
+    const ImVec2 value_size=value.empty()?ImVec2():ImGui::CalcTextSize(value.c_str(),nullptr,false,columns.value_width);
+    const auto vertical=ui::layout::row_vertical(columns,g_k,fs,label_size.y,value_size.y,!value.empty());
+    const float h=std::max(vertical.height,primary?88*g_k:0.f);
+    const float offset_y=(h-vertical.height)*.5f;
+    ImGui::PushStyleColor(ImGuiCol_NavCursor,ImVec4(0,0,0,0));
+    const bool clicked=ImGui::InvisibleButton("##row",ImVec2(w,h),ImGuiButtonFlags_EnableNav);
     ImGui::PopStyleColor();
-    const ImGuiID id = ImGui::GetItemID();
-    if (g_take_first) {
-        g_take_first = false;
-        ImGui::SetFocusID(id, ImGui::GetCurrentWindow());
-        ImGui::SetNavCursorVisible(true);
-        ImGui::SetScrollHereY(0);
+    const ImGuiID id=ImGui::GetItemID();
+    if(g_take_first) {
+        g_take_first=false;ImGui::SetFocusID(id,ImGui::GetCurrentWindow());
+        ImGui::SetNavCursorVisible(true);ImGui::SetScrollHereY(0);
     }
-    const bool off = g_next_disabled;
-    g_next_disabled = false;
-    const bool hov = ImGui::IsItemHovered();
-    const bool foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
-    int step = clicked && !off ? 2 : 0;
-    if (foc && !off) {
-        if (pressed(ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft, ImGuiKey_LeftArrow)) step = -1;
-        if (pressed(ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight, ImGuiKey_RightArrow)) step = 1;
-        // left / right belong to the row (navigation would otherwise try to move sideways)
-        for (ImGuiKey k : {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight, ImGuiKey_LeftArrow, ImGuiKey_RightArrow})
-            ImGui::SetKeyOwner(k, id);
+    const bool off=g_next_disabled;g_next_disabled=false;
+    const bool hov=ImGui::IsItemHovered();
+    const bool foc=ImGui::IsItemFocused()&&ImGui::GetCurrentContext()->NavCursorVisible;
+    int step=clicked&&!off?2:0;
+    if(foc&&!off) {
+        if(pressed(ImGuiKey_GamepadDpadLeft,ImGuiKey_GamepadLStickLeft,ImGuiKey_LeftArrow))step=-1;
+        if(pressed(ImGuiKey_GamepadDpadRight,ImGuiKey_GamepadLStickRight,ImGuiKey_RightArrow))step=1;
+        for(ImGuiKey key:{ImGuiKey_GamepadDpadLeft,ImGuiKey_GamepadDpadRight,ImGuiKey_GamepadLStickLeft,
+                         ImGuiKey_GamepadLStickRight,ImGuiKey_LeftArrow,ImGuiKey_RightArrow})ImGui::SetKeyOwner(key,id);
     }
-    if (foc) g_desc_focus = desc ? desc : "", g_desc_focus_id = id;
-    if (hov) g_desc_hover = desc ? desc : "", g_desc_hover_id = id;
-    if (g_desc_first.empty() && desc) g_desc_first = desc, g_desc_first_id = id;
-    if (id == g_desc_id && desc) g_desc_retained = desc;
+    if(foc)g_desc_focus=desc?desc:"",g_desc_focus_id=id;
+    if(hov)g_desc_hover=desc?desc:"",g_desc_hover_id=id;
+    if(g_desc_first.empty()&&desc)g_desc_first=desc,g_desc_first_id=id;
+    if(id==g_desc_id&&desc)g_desc_retained=desc;
 
-    // the highlight eases in (and out) over about a tenth of a second
-    const float t = ui::eased(id + 1, hov || foc ? 1.0f : 0.0f, 22.0f);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float r = 9 * g_k, pad = 16 * g_k, fs = ImGui::GetFontSize();
-    const ImVec2 q(p.x + w, p.y + h);
-    dl->AddRectFilled(p, q, ui::fade(ui::mix(IM_COL32(0, 0, 0, 46), IM_COL32(255, 255, 255, 24), t)), r);
-    const ImU32 border = ui::mix(IM_COL32(255, 255, 255, off ? 18 : 34), off ? ((ui::theme().accent) & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 120) : ui::theme().accent, t);
-    dl->AddRect(p, q, ui::fade(border), r, 0, (1.0f + t) * std::max(1.0f, g_k));
-    if (highlight) {  // (a row waiting for something, e.g. a key press: a slow pulse in the accent colour)
-        const float a = usability_preferences().reduced_motion?.25f:0.25f + 0.2f * std::sin(float(ImGui::GetTime()) * 6.0f);
-        dl->AddRectFilled(p, q, ui::fade(ui::theme().accent, a), r);
+    // Mouse hover may soften; keyboard/controller focus responds immediately.
+    const float hover=ui::eased(id+1,hov?1.f:0.f,22.f),t=foc?1.f:hover;
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    const float radius=4*g_k;const ImVec2 q(p.x+w,p.y+h);
+    if(primary)dl->AddRectFilled(p,q,ui::fade(off?ui::theme().card:ui::mix(ui::theme().accent,ui::theme().text,t*.15f)),radius);
+    else {
+        if(t>.01f)dl->AddRectFilled(p,q,ui::fade(ui::theme().text,t*.065f),radius);
+        dl->AddLine({p.x+columns.padding,q.y},{q.x-columns.padding,q.y},ui::fade(ui::theme().text,.10f),1);
     }
-    const float label_y=p.y+(stacked?8*g_k:(h-label_height)*.5f);
-    const float ty=stacked?label_y+label_height+3*g_k:p.y+(h-fs)*.5f;
-    dl->AddText(ImGui::GetFont(),fs,ImVec2(p.x+pad,label_y),ui::fade(off?ui::theme().text_off:ui::theme().text),text.c_str(),nullptr,text_width);
-    const float reserve=arrows?fs*3.f:0.f;
-    const float value_width=ImGui::CalcTextSize(value.c_str()).x;
-    const float value_scale=value_width>0?std::min(1.f,std::max(1.f,text_width-reserve)/value_width):1.f;
-    float right = q.x - pad;
-    if (arrows && !value.empty()) {  // ◀ value ▶, drawn (no arrow glyphs needed); a click on one steps
-        const float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
-        const float rx = right - aw, lx = rx - gap - value_width*value_scale - gap - aw;
-        const ImU32 ac = off ? ui::theme().text_off : ui::mix(ui::mix(ui::theme().text_off, ui::theme().text_dim, 0.5f), ui::theme().accent, t);
-        dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ui::fade(ac));
-        dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ui::fade(ac));
-        if (clicked && !off) {
-            const float mx = ImGui::GetIO().MousePos.x;
-            if (mx >= lx - gap && mx <= lx + aw + gap) step = -1;
-            else if (mx >= rx - gap && mx <= rx + aw + gap) step = 1;
+    if(foc)dl->AddRect(p,q,ui::fade(ui::theme().accent),radius,0,2*std::max(1.f,g_k));
+    if(highlight) {
+        dl->AddRect(p,q,ui::fade(ui::theme().accent,.8f),radius,0,2*std::max(1.f,g_k));
+    }
+    dl->PushClipRect(p,q,true);
+    const ImU32 label_ink=off?ui::theme().text_off:primary?ui::theme().back_top:ui::theme().text;
+    dl->AddText(ImGui::GetFont(),fs,ImVec2(p.x+columns.padding,p.y+vertical.label_y+offset_y),
+        ui::fade(label_ink),text.c_str(),nullptr,columns.label_width);
+    if(!value.empty()) {
+        const float control_x=p.x+columns.control_x,control_y=p.y+vertical.control_y+offset_y;
+        float value_x=control_x;
+        if(arrows) {
+            const float target=columns.arrow_width,cy=control_y+vertical.control_height*.5f;
+            const float glyph=std::min(fs*.32f,target*.25f);
+            const float lx=control_x+target*.5f,rx=control_x+columns.control_width-target*.5f;
+            const ImU32 ink=ui::fade(off?ui::theme().text_off:ui::mix(ui::theme().text_dim,ui::theme().accent,t));
+            dl->AddTriangleFilled(ImVec2(lx-glyph,cy),ImVec2(lx+glyph,cy-glyph*.8f),ImVec2(lx+glyph,cy+glyph*.8f),ink);
+            dl->AddTriangleFilled(ImVec2(rx+glyph,cy),ImVec2(rx-glyph,cy-glyph*.8f),ImVec2(rx-glyph,cy+glyph*.8f),ink);
+            value_x+=target+columns.gap+std::max(0.f,(columns.value_width-value_size.x)*.5f);
+            // Nav activation has no mouse hit coordinate. In stacked rows only
+            // actual arrow cells, not the label above them, can step backwards.
+            if(clicked&&!off&&ImGui::GetCurrentContext()->NavActivateId!=id&&ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                const ImVec2 mouse=ImGui::GetIO().MousePos;
+                if(mouse.y>=control_y&&mouse.y<=control_y+vertical.control_height) {
+                    if(mouse.x>=control_x&&mouse.x<=control_x+target)step=-1;
+                    else if(mouse.x>=control_x+columns.control_width-target&&mouse.x<=control_x+columns.control_width)step=1;
+                }
+            }
         }
-        right = rx - gap;
+        const float value_y=control_y+(vertical.control_height-value_size.y)*.5f;
+        dl->AddText(ImGui::GetFont(),fs,ImVec2(value_x,value_y),
+            ui::fade(off?ui::theme().text_off:primary?ui::theme().back_top:changed?ui::theme().text:ui::theme().text_dim),value.c_str(),nullptr,columns.value_width);
     }
-    if (!value.empty()) {
-        const float vx = std::max(p.x+pad,right-value_width*value_scale);
-        dl->AddText(ImGui::GetFont(),fs*value_scale,ImVec2(vx, ty), ui::fade(off ? ui::theme().text_off : changed ? ui::theme().text : ui::theme().text_dim),
-                    value.c_str());
-    }
-    ImGui::PopID();
-    return step;
+    dl->PopClipRect();ImGui::PopID();return step;
 }
 
 }  // namespace
 
 void focus_first() { g_focus_req = true; }
+bool consume_focus_request() { const bool requested=g_focus_req;g_focus_req=false;return requested; }
 void disable_next() { g_next_disabled = true; }
 void indent(int step) { g_indent = std::max(0, g_indent + step); }
 void page_note(const char* text) { g_note = text ? text : ""; }
@@ -135,27 +136,28 @@ void page_note(const char* text) { g_note = text ? text : ""; }
 void begin(const char* id, float height) {
     g_k = std::clamp(height / 1080.0f, 0.5f, 3.0f);
     static std::string page;  // (another page: its first row's description, not the last page's)
-    if (page != id) page = id, g_desc_shown.clear(), g_desc_alpha = 1;
+    if (page != id) page = id, g_desc_shown.clear();
     g_take_first = g_focus_req;
     g_focus_req = false;
     if (g_take_first) ImGui::NavMoveRequestCancel();
-    g_indent = 0;
+    g_indent = 0;g_next_disabled=false;
     g_desc_hover.clear(), g_desc_focus.clear(), g_desc_first.clear(), g_note.clear();
     g_desc_retained.clear();
     g_desc_hover_id = g_desc_focus_id = g_desc_first_id = 0;
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::PushID(id);
-    g_compact=avail.x<850*g_k;
-    ImGui::BeginChild("##rows", ImVec2(g_compact?avail.x:avail.x*.60f,g_compact?std::max(60*g_k,avail.y*.68f):avail.y), ImGuiChildFlags_NavFlattened);
+    g_page_origin=ImGui::GetCursorScreenPos();
+    g_panes=ui::layout::panes(avail.x,avail.y,g_k,ImGui::GetFontSize());g_compact=g_panes.compact;
+    ImGui::BeginChild("##rows",ImVec2(g_panes.rows_width,g_panes.rows_height),ImGuiChildFlags_NavFlattened);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 5 * g_k));  // (rows close)
 }
 
 void section(const char* title) {
-    const std::string t = upper(title);
+    const std::string t(title);
     if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y + 1) ImGui::Dummy(ImVec2(0, 12 * g_k));
     ImGui::SetWindowFontScale(0.82f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent2));
-    ImGui::TextUnformatted(t.c_str());
+    ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(t.c_str());ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
     ImGui::SetWindowFontScale(1.0f);
 }
@@ -167,6 +169,7 @@ bool toggle(const char* label, bool* v, bool def, const char* desc) {
 }
 
 bool choice(const char* label, int* v, const char* const* names, int n, int def, const char* desc, bool wrap) {
+    if(!names || n<=0) {disable_next();row(label,"",false,desc);return false;}
     const int cur = *v >= 0 && *v < n ? *v : 0;
     const int step = row(label, names[cur], cur != def, desc, true, true);
     if (!step) return false;
@@ -193,6 +196,9 @@ bool integer(const char* label, int* v, int lo, int hi, int step, int def, const
 bool action(const char* label, const char* value, const char* desc, bool up, bool highlight) {
     return row(label, value ? value : "", false, desc, up, false, highlight) == 2;
 }
+bool primary_action(const char* label,const char* value,const char* desc) {
+    return row(label,value?value:"",false,desc,false,false,false,true)==2;
+}
 
 void end() {
     ImGui::PopStyleVar();
@@ -205,26 +211,17 @@ void end() {
     else if (!g_desc_focus.empty()) want = g_desc_focus, g_desc_id = g_desc_focus_id;
     else if (!g_desc_retained.empty()) want = g_desc_retained;
     else want = g_desc_first, g_desc_id = g_desc_first_id;
-    if (want != g_desc_shown) g_desc_shown = want, g_desc_alpha = 0;
-    g_desc_alpha = ui::approach(g_desc_alpha, 1.0f, 16.0f);
-    if(!g_compact) ImGui::SameLine(0, 0);
-    const ImVec2 p = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
-    const float gap = 26 * g_k;
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y), ImVec2(p.x + gap * 0.5f, p.y + avail.y),
-                                        ui::fade(ui::theme().accent, 0.45f), std::max(1.0f, g_k));
-    ImGui::SetCursorScreenPos(ImVec2(p.x + gap, p.y));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * g_k, 6 * g_k));
-    ImGui::BeginChild("##desc", ImVec2(0, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoNav);
+    g_desc_shown=want; // Instant help changes for high-frequency keyboard navigation.
+    const ImVec2 p(g_page_origin.x+(g_compact?0:g_panes.rows_width+g_panes.gap),
+                   g_page_origin.y+(g_compact?g_panes.rows_height+g_panes.gap:0));
+    auto* dl=ImGui::GetWindowDrawList();
+    if(g_compact)dl->AddLine(ImVec2(p.x,p.y-g_panes.gap*.5f),ImVec2(p.x+g_panes.help_width,p.y-g_panes.gap*.5f),ui::fade(ui::theme().accent,.35f),std::max(1.f,g_k));
+    else dl->AddLine(ImVec2(p.x-g_panes.gap*.5f,p.y),ImVec2(p.x-g_panes.gap*.5f,p.y+g_panes.help_height),ui::fade(ui::theme().accent,.35f),std::max(1.f,g_k));
+    ImGui::SetCursorScreenPos(p);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(10*g_k,6*g_k));
+    ImGui::BeginChild("##desc",ImVec2(g_panes.help_width,g_panes.help_height),ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoNav);
     ImGui::PopStyleVar();
-    // (the new text rises a few pixels as it fades in)
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (1.0f - ui::smoothstep(g_desc_alpha)) * 8 * g_k);
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * g_desc_alpha);
-    ImGui::SetWindowFontScale(1.12f);  // (the description reads at a glance)
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextUnformatted(g_desc_shown.c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleVar();
+    ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(g_desc_shown.c_str());ImGui::PopTextWrapPos();
     if (!g_note.empty()) {
         ImGui::Dummy(ImVec2(0, 10 * g_k));
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::theme().accent));

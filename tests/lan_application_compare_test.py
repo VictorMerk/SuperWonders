@@ -23,10 +23,11 @@ class ComparisonTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
 
-    def write(self, name, role, rows, seed=123, omitted=0):
+    def write(self, name, role, rows, seed=123, omitted=0, identity=None):
         path = Path(self.temp.name) / name
         with path.open("w", newline="", encoding="utf-8") as out:
-            out.write(f"# schema=1,role={role},seed={seed},capacity=8,total={len(rows)+omitted},retained={len(rows)},omitted={omitted}\n")
+            marker = '' if identity is None else ',hid_identity=' + identity
+            out.write(f"# schema=1,role={role},seed={seed},capacity=8,total={len(rows)+omitted},retained={len(rows)},omitted={omitted}{marker}\n")
             writer = csv.DictWriter(out, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
@@ -113,6 +114,36 @@ class ComparisonTest(unittest.TestCase):
         result = module.compare(left, right)
         self.assertEqual(result["matched_applied_ticks"], 1)
         self.assertEqual(result["left"]["retained_hid_reads"], 0)
+
+    def test_declared_atomic_commit_identity_ignores_presentation_offsets(self):
+        reads = [row(0, "hid_delivery", sampling_number=1, sequence=1, frame=100),
+                 row(0, "hid_delivery", sampling_number=1, sequence=2, frame=900),
+                 row(3, "hid_delivery", sampling_number=4, sequence=3, frame=900, p0_buttons=8)]
+        left = self.write("left", 0, reads, identity="exposed_commit_plus_one")
+        right = self.write("right", 1, reads, identity="exposed_commit_plus_one")
+        result = module.compare(left, right)
+        self.assertTrue(result["hid_identity_contracts_match"])
+        stats = result["left"]
+        self.assertEqual(stats["hid_commit_identity_mismatches"], 0)
+        self.assertEqual(stats["repeated_identical_hid_sample_reads"], 1)
+        self.assertEqual(stats["hid_identity_contract"], "exposed_commit_plus_one")
+        self.assertIn("captured together", stats["hid_observation_scope"])
+        self.assertIn("do not publish samples", stats["hid_observation_scope"])
+        self.assertNotIn("not atomically paired", stats["hid_observation_scope"])
+
+    def test_declared_atomic_identity_violation_and_mixed_legacy_remain_explicit(self):
+        left = self.write("left", 0, [row(0, "hid_delivery", sampling_number=0, sequence=1),
+                                     row((1 << 63) - 1, "hid_delivery", sampling_number=1 << 63, sequence=2)],
+                          identity="exposed_commit_plus_one")
+        right = self.write("right", 1, [row(1)])
+        result = module.compare(left, right)
+        self.assertFalse(result["hid_identity_contracts_match"])
+        self.assertEqual(result["left"]["hid_commit_identity_mismatches"], 2)
+        self.assertEqual(result["left"]["first_hid_commit_identity_mismatch"]["sequence"], 1)
+        self.assertIsNone(result["right"]["hid_commit_identity_mismatches"])
+        self.assertEqual(result["right"]["hid_identity_contract"], "legacy_or_unknown")
+        future = self.write("future", 0, [row(1)], identity="future-unrecognized")
+        self.assertIsNone(module.compare(future, right)["hid_identity_contracts_match"])
 
     def test_nonindexed_events_are_streamed_without_retaining_rows(self):
         path = Path(self.temp.name) / "large"

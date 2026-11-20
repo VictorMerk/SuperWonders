@@ -31,9 +31,19 @@ Configure a prepared runtime executable and a **separate data folder for each ed
 
 Let shader preparation finish. The runtime saves its Vulkan pipeline cache for later launches, but previously unseen shader variants may still cause first-use stutter.
 
+See [shader preparation and stutter](SHADER-PREPARATION.md) for what the caches
+prepare, why new variants can appear and which evidence helps investigate a hitch.
+
 The PC settings menu opens with **Esc**, **F1**, or the controller's **Minus+Plus** chord. It contains Video, Audio, Controls, Overlay and System settings. The game's own pause menu and gear icon are separate from this PC menu.
 
 Connect controllers before selecting the game's player count. In **F1 → Controls**, select a button-layout preset and check each player row. **Keyboard as player 1** reserves the keyboard for the first player and places gamepads into the remaining slots. Up to four local controller slots are available; physical controller combinations should be checked on your hardware.
+
+The launcher now has a dedicated **Controls** page. In the in-game menu, choose
+**Controls**, then **Keyboard remapping**, **Controller remapping**, or
+**Players & devices**. Keyboard bindings appear first; secondary choices are under
+**Keyboard options** below the binding list. Esc cancels an active remapping
+capture. Release the controller button before navigating after a new binding.
+See the [interface refresh](UI-REFRESH-2026-11-20.md) for the changes and test scope.
 
 ## Graphics and smoothness
 

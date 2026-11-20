@@ -23,6 +23,13 @@ try {
     $definitions=@(
         @{name='launcher-720';width=1280;height=720;hook='NX_LAUNCHER_TOUR';value='30'},
         @{name='launcher-360';width=640;height=360;hook='NX_LAUNCHER_TOUR';value='30'},
+        @{name='launcher-600';width=800;height=600;hook='NX_LAUNCHER_TOUR';value='30'},
+        @{name='launcher-1080';width=1920;height=1080;hook='NX_LAUNCHER_TOUR';value='30'},
+        @{name='controller-720';width=1280;height=720;hook='NX_LAUNCHER_TOUR';value='30';section='1'},
+        @{name='controller-360';width=640;height=360;hook='NX_LAUNCHER_TOUR';value='30';section='1'},
+        @{name='players-720';width=1280;height=720;hook='NX_LAUNCHER_TOUR';value='30';section='2'},
+        @{name='players-360';width=640;height=360;hook='NX_LAUNCHER_TOUR';value='30';section='2'},
+        @{name='german-600';width=800;height=600;hook='NX_LAUNCHER_TOUR';value='30';section='1';language=2},
         @{name='profiles-720';width=1280;height=720;hook='NX_PROFILE_MANAGER_TOUR';value='1'},
         @{name='profiles-360';width=640;height=360;hook='NX_PROFILE_MANAGER_TOUR';value='1'},
         @{name='coop-540';width=960;height=540;hook='NX_LAN_LOBBY_TOUR';value='1'},
@@ -33,11 +40,12 @@ try {
     foreach($caseName in $Cases) {
         $case=$definitions | Where-Object { $_.name -eq $caseName } | Select-Object -First 1
         if(!$case){throw ('Unknown UI case: '+$caseName)}
-        $foreign=Get-Process wonder,wonder-launcher,mkw,mkw-launcher -ErrorAction SilentlyContinue | Where-Object { !$_.HasExited }
+        $foreign=Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue | Where-Object { !$_.HasExited }
         if($foreign){throw 'A foreign game is running; native UI tests deferred.'}
         $data=Join-Path $outputPath $case.name
         New-Item -ItemType Directory -Path $data | Out-Null
         [IO.File]::WriteAllText((Join-Path $data 'pc-settings.ini'),"width=$($case.width)`nheight=$($case.height)`nvolume=0`ncontroller_preset=1",$utf8)
+        if($case.ContainsKey('language')){[IO.File]::AppendAllText((Join-Path $data 'pc-settings.ini'),"`nlanguage=$($case.language)`n",$utf8)}
         [IO.File]::WriteAllText((Join-Path $data 'profile-name.txt'),'Player One',$utf8)
         $other=Join-Path $data 'profiles/p-123'
         New-Item -ItemType Directory -Path $other | Out-Null
@@ -60,13 +68,14 @@ try {
         $start.EnvironmentVariables['NX_MUTE']='1'
         $start.EnvironmentVariables['NX_TEST_VIRTUAL_ONLY']='1'
         $start.EnvironmentVariables[$case.hook]=$case.value
+        if($case.ContainsKey('section')){$start.EnvironmentVariables['NX_CONTROLS_TOUR_SECTION']=$case.section}
         if($case.name -eq 'profile-controller'){$start.EnvironmentVariables['NX_TEST_PAD']='30:east:3;60:down:3;80:east:3'}
         $owned=New-Object Diagnostics.Process
         $owned.StartInfo=$start
         if(!$owned.Start()){throw 'Could not start owned UI test.'}
         $deadline=[DateTime]::UtcNow.AddSeconds(90)
         while(!$owned.HasExited -and [DateTime]::UtcNow -lt $deadline) {
-            $foreign=Get-Process wonder,wonder-launcher,mkw,mkw-launcher -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $owned.Id -and !$_.HasExited }
+            $foreign=Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $owned.Id -and !$_.HasExited }
             if($foreign){$owned.Kill();$owned.WaitForExit();throw 'Foreign game started; stopped only this owned UI test.'}
             Start-Sleep -Milliseconds 200
         }

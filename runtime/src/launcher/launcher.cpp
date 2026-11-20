@@ -343,8 +343,10 @@ bool set_mod(const Mod& m, bool on) {
 }
 
 // ---- the launcher's state (the screen runs on the presenting thread, run() on the game's) ----
-enum Page { PagePlay, PageFiles, PageSettings, PageMods, PageUpdates, PageQuit, kPages };
-const char* const kPageNames[kPages] = {"Play", "Game files", "Settings", "Mods", "Updates", "Quit"};
+enum Page { PagePlay, PageFiles, PageSettings, PageMods, PageUpdates, PageControls, PageQuit, kPages };
+const char* const kPageNames[kPages] = {"Play", "Game files", "Settings", "Mods", "Updates", "Controls", "Quit"};
+// Keep page identities independent from their presentation order.
+constexpr Page kNavigation[kPages] = {PagePlay, PageControls, PageSettings, PageMods, PageFiles, PageUpdates, PageQuit};
 
 enum LauncherText {
     LtPlay, LtGameFiles, LtSettings, LtMods, LtUpdates, LtQuit, LtSuperWonders, LtAbout, LtYourGameFiles, LtExeFS,
@@ -429,7 +431,8 @@ const char* const kLauncherText[10][LtTextCount] = {
 };
 
 const char* lt(LauncherText text) {
-    const int language = overlay::menu_language();
+    const int requested_language = overlay::menu_language();
+    const int language = requested_language >= 0 && requested_language < 13 ? requested_language : 0;
     if (language >= 10) {
         // Translate the launcher's main navigation for the newly added locales;
         // less common setup/help strings fall back to English for now.
@@ -441,8 +444,21 @@ const char* lt(LauncherText text) {
         if (text >= LtPlay && text <= LtQuit) return navigation[language - 10][text - LtPlay];
     }
     // The existing launcher help and setup text has no Dutch or Chinese translation yet.
-    const int safe_language = std::min(language, 9);
+    const int safe_language = language < 10 ? language : 0;
     return kLauncherText[safe_language][text];
+}
+
+
+const char* page_label(Page page) {
+    if (page == PageControls) {
+        static constexpr const char* names[] = {
+            "Controls", "Comandi", "Steuerung", "Commandes", "Controles", "\uc870\uc791", "\u64cd\u4f5c", "\u0627\u0644\u062a\u062d\u0643\u0645", "\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435", "Kontroller",
+            "Besturing", "\u64cd\u4f5c", "\u64cd\u4f5c"};
+        const int language = overlay::menu_language();
+        return names[language >= 0 && language < 13 ? language : 0];
+    }
+    const LauncherText names[] = {LtPlay, LtGameFiles, LtSettings, LtMods, LtUpdates};
+    return page == PageQuit ? lt(LtQuit) : lt(names[page]);
 }
 
 struct State {
@@ -472,6 +488,7 @@ struct State {
     bool demo_progress = false;  // NX_LAUNCHER_TOUR's last step: the setup card, not running anything
     // The controller (Savage Wind's launcher: the page list and the page are two places the cursor can be; A or right
     // goes into the page, B back to the list, L / R change the page, + plays). One request at a time, next frame.
+    bool focus_job_action = false; // Direct Cancel/Back controls do not use option rows.
     bool focus_list = true;   // the cursor to the selected page's name
     int follow_hold = 0;      // frames the page doesn't follow the cursor (L / R moved it; the cursor catches up)
     bool in_list = true;      // where it is now
@@ -569,30 +586,13 @@ float g_k = 1;
 
 void backdrop(ImDrawList* dl, ImVec2 ds) {
     const ui::Theme& th = ui::theme();
-    dl->AddRectFilledMultiColor({0, 0}, {ds.x, ds.y * 0.5f}, th.back_top, th.back_top, th.back_mid, th.back_mid);
-    dl->AddRectFilledMultiColor({0, ds.y * 0.5f}, ds, th.back_mid, th.back_mid, th.back_top, th.back_top);
-    // a slow glow drifting behind the pages (the compile screen's, overlay_progress.cpp)
-    const float t = overlay::usability_preferences().reduced_motion?0.f:float(ImGui::GetTime());
-    const float gx = ds.x * (0.62f + 0.18f * std::sin(t * 0.3f)), gy = ds.y * 0.42f, r = ds.y * 0.6f;
-    const ImU32 in = (th.accent2 & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 30), out = in & ~IM_COL32_A_MASK;
-    constexpr int kSeg = 64;
-    dl->PrimReserve(kSeg * 3, kSeg + 1);
-    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
-    const ImDrawIdx base = ImDrawIdx(dl->_VtxCurrentIdx);
-    dl->PrimWriteVtx({gx, gy}, uv, in);
-    for (int i = 0; i < kSeg; ++i) {
-        const float a = float(i) / kSeg * 6.2831853f;
-        dl->PrimWriteVtx({gx + std::cos(a) * r, gy + std::sin(a) * r}, uv, out);
-    }
-    for (int i = 0; i < kSeg; ++i) {
-        dl->PrimWriteIdx(base);
-        dl->PrimWriteIdx(ImDrawIdx(base + 1 + i));
-        dl->PrimWriteIdx(ImDrawIdx(base + 1 + (i + 1) % kSeg));
-    }
+    dl->AddRectFilled({0, 0}, ds, th.back_top);
+    // A quiet tonal field, with no moving glow competing with navigation.
+    dl->AddRectFilledMultiColor({ds.x*.24f, 0}, ds, th.back_mid, th.back_top, th.back_top, th.back_mid);
 }
 
 // The setup's progress: a card with the gliding bar and its sheen (the compile screen's look), in `area`.
-void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
+float progress_card(ImDrawList* dl, ImVec2 p0, float width) {
     const ui::Theme& th = ui::theme();
     const float k = g_k;
     static float shown = 0;
@@ -606,23 +606,27 @@ void progress_card(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
     ImFont* tf = ui::title();
     ImFont* bf = ui::body();
     const float tfs = 46 * k, sfs = 26 * k;
-    dl->AddRectFilled(p0, p1, th.card, 14 * k);
-    dl->AddRect(p0, p1, ui::fade(th.accent, 0.55f), 14 * k, 0, 1.5f * k);
+    const float padding = 24 * k, wrap = std::max(1.f, width - padding * 2);
     const char* title = g->cache_job ? "Optimizing shader loading" : "Setting up your game";
-    const ImVec2 ts = tf->CalcTextSizeA(tfs, FLT_MAX, 0, title);
-    dl->AddText(tf, tfs, {(p0.x + p1.x - ts.x) * 0.5f, p0.y + 36 * k}, th.accent, title);
-    const ImVec2 ba(p0.x + 48 * k, p0.y + 36 * k + ts.y + 30 * k), bb(p1.x - 48 * k, ba.y + 24 * k);
-    ui::progress_bar(dl, ba, bb, shown);
+    const ImVec2 ts = tf->CalcTextSizeA(tfs, FLT_MAX, wrap, title);
     char line[640];
     const double secs = double(plat::monotonic_ns() - g->job.started_ns) / 1e9;
     std::snprintf(line, sizeof line, "%s   %d%%   %d:%02d", what.c_str(), int(shown * 100 + 0.5f), int(secs) / 60,
                   int(secs) % 60);
-    const ImVec2 ls = bf->CalcTextSizeA(sfs, FLT_MAX, 0, line);
-    dl->AddText(bf, sfs, {(p0.x + p1.x - ls.x) * 0.5f, bb.y + 26 * k}, th.text_dim, line);
+    const ImVec2 ls = bf->CalcTextSizeA(sfs, FLT_MAX, wrap, line);
     const char* note = "Overall setup progress. A single stage can take several minutes; elapsed time continues above.";
-    const ImVec2 ns = bf->CalcTextSizeA(sfs * 0.9f, FLT_MAX, 0, note);
-    dl->AddText(bf, sfs * 0.9f, {(p0.x + p1.x - ns.x) * 0.5f, bb.y + 26 * k + ls.y + 16 * k},
-                ui::mix(th.text_off, th.text_dim, 0.4f), note);
+    const ImVec2 ns = bf->CalcTextSizeA(sfs * 0.9f, FLT_MAX, wrap, note);
+    const float height = padding * 2 + ts.y + ls.y + ns.y + 84 * k;
+    const ImVec2 p1(p0.x + width, p0.y + height);
+    dl->AddRectFilled(p0, p1, th.card, 14 * k);
+    dl->AddRect(p0, p1, ui::fade(th.accent, 0.55f), 14 * k, 0, 1.5f * k);
+    dl->AddText(tf, tfs, {p0.x + padding, p0.y + padding}, th.accent, title, nullptr, wrap);
+    const ImVec2 ba(p0.x + padding, p0.y + padding + ts.y + 20 * k), bb(p1.x - padding, ba.y + 24 * k);
+    ui::progress_bar(dl, ba, bb, shown);
+    dl->AddText(bf, sfs, {p0.x + padding, bb.y + 20 * k}, th.text_dim, line, nullptr, wrap);
+    dl->AddText(bf, sfs * 0.9f, {p0.x + padding, bb.y + 20 * k + ls.y + 20 * k},
+                ui::mix(th.text_off, th.text_dim, 0.4f), note, nullptr, wrap);
+    return height;
 }
 
 void open_lan() {
@@ -666,13 +670,11 @@ void draw_lan(float w,float h,float k) {
     } else {
         ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Host address",g->lan_address,sizeof g->lan_address);
     }
-    ImGui::SetNextItemWidth(270*k); ImGui::InputInt("Port",&g->lan_port);
+    ImGui::SetNextItemWidth(std::min(270*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputInt("Port",&g->lan_port);
     g->lan_port=std::clamp(g->lan_port,1,65535);
     ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
-    if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
+    if(g->lan_mode==0 && ui::action_button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
     if(g->lan_mode==0) {
-        ImGui::SameLine();
-        if(ImGui::Button("Copy code")) ImGui::SetClipboardText(g->lan_code);
         const char* rates[]={"60 Hz","30 Hz (slower PCs)"};
         int rate=g->lan_rate==30?1:0;
         ImGui::SetNextItemWidth(270*k);
@@ -685,7 +687,7 @@ void draw_lan(float w,float h,float k) {
     ImGui::TextWrapped("Joining uses a separate copy of the host's save. Each PC uses its primary controller or keyboard. Choose the matching player count in Wonder.");
     const bool valid=std::strlen(g->lan_code)>=4 && (g->lan_mode==0 || g->lan_address[0]);
     if(!valid) ImGui::BeginDisabled();
-    if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
+    if(ui::action_button(g->lan_mode==0?"Open room":"Connect",-1.f)) {
         g->lan_error.clear();
         if(g->lan_mode==0) {
             g->config.lan_rate=g->lan_rate; g->config.lan_pipeline=g->lan_pipeline;
@@ -701,50 +703,405 @@ void draw_lan(float w,float h,float k) {
     if(!g->lan_error.empty()) ImGui::TextWrapped("%s",g->lan_error.c_str());
     if(waiting) {
         ImGui::TextWrapped("Waiting for up to three minutes. You can cancel and create another room.");
-        if(ImGui::Button("Cancel connection")) lan::cancel_lobby();
+        if(ui::action_button("Cancel connection",-1.f)) lan::cancel_lobby();
     } else if(state.phase==lan::LobbyPhase::Ready) {
         g->play=true; g->lan_open=false; ImGui::CloseCurrentPopup();
-    } else if(ImGui::Button("Back to launcher")) {
+    } else if(ui::action_button("Back to launcher",-1.f)) {
         g->lan_open=false; ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
 }
 
 void page_play() {
-    rows::begin("##play", ImGui::GetContentRegionAvail().y);
-    rows::section(lt(LtSuperWonders));
-    const bool ready = g->status.ready == Ready::Yes;
-    if (!ready) rows::disable_next();
-    if (rows::action(lt(LtPlay), ready ? lt(LtStart) : lt(LtSetUpFirst),
-                     ready ? "Start Super Mario Bros. Wonder." : "Your game files aren't set up yet: open Game files.",
-                     true, ready))
-        g->play = true;
-    if (!ready && rows::action(lt(LtSetUpGameFiles), "", "Pick your ExeFS and RomFS folders and set the game up."))
-        g->page = PageFiles, rows::focus_first();
-    rows::section("Your adventure");
-    const auto profile = profiles::active(u8(plat::data_root()));
-    if (rows::action("Profiles & saves", profile.name.c_str(), "Choose a nickname and save profile, start a fresh adventure, back up progress or restore an earlier backup.")) open_profiles();
-    rows::section("Before you play");
-    if (rows::action("Graphics & performance", "Resolution & scaling", "Choose a graphics preset, resolution, scaling and frame pacing."))
-        overlay::open_settings(0);
-    if (rows::action("Controller setup", "Bindings & rumble", "Configure your controller before starting. Settings are shared with the in-game F1 menu."))
+    const bool ready=g->status.ready==Ready::Yes;
+    const auto& th=ui::theme();
+    const float font=ImGui::GetFontSize(),k=g_k;
+    const ImVec2 origin=ImGui::GetCursorScreenPos(),available=ImGui::GetContentRegionAvail();
+    const float width=std::max(1.f,available.x);
+    const float pad=std::max(18.f,30*k),inner=std::max(1.f,width-2*pad);
+    const auto profile=profiles::active(u8(plat::data_root()));
+    const std::string label=std::string(ready?lt(LtPlay):lt(LtSetUpGameFiles))+"###hub_primary";
+    const std::string detail=std::string(ready?lt(LtFilesReady):lt(LtSetUpFirst))+"  /  "+profile.name;
+    const float button_width=std::min(inner,std::max(210.f,300*k));
+    const float button_target=std::max(56.f,font*2.8f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(24*k,std::max(12.f,(button_target-font)*.5f)));
+    const ImVec2 button_size=ui::action_button_size(label.c_str(),button_width);
+    const float detail_height=ui::body()->CalcTextSizeA(font,FLT_MAX,inner,detail.c_str()).y;
+    // Reserve real wrapped status/action space, including at compact sizes.
+    // The page scrolls as one surface rather than shrinking the primary action.
+    const float minimum_hero=(2*pad+18*k+font*2.15f+detail_height+button_size.y)/.68f;
+    const float hero_height=std::max(minimum_hero,available.y*.64f);
+    auto* dl=ImGui::GetWindowDrawList();
+    const ImVec2 corner{origin.x+width,origin.y+hero_height};
+    dl->AddRectFilled(origin,corner,th.card,6*k);
+    dl->PushClipRect(origin,corner,true);
+    // A typographic cover, not a pretend gameplay screenshot. No game artwork
+    // is distributed with the runtime and no texture upload is needed here.
+    dl->AddRectFilledMultiColor({origin.x+width*.42f,origin.y},corner,
+        ui::fade(th.panel),ui::fade(th.back_top),ui::fade(th.back_top),ui::fade(th.card));
+    dl->AddText(ui::title(),hero_height*1.65f,{origin.x+width*.58f,origin.y-hero_height*.28f},
+        ui::fade(th.text,.035f),"W");
+    const ImVec2 disc{origin.x+width*.88f,origin.y+hero_height*.48f};
+    dl->AddCircle(disc,hero_height*.72f,ui::fade(th.text,.055f),80,1);
+    dl->AddCircle(disc,hero_height*.52f,ui::fade(th.text,.04f),80,1);
+    dl->AddRectFilled({origin.x+pad,origin.y+pad},{origin.x+pad+52*k,origin.y+pad+3*k},th.accent);
+    const float brand_y=origin.y+pad+18*k;
+    dl->AddText(ui::body(),font*1.10f,{origin.x+pad,brand_y},th.text_dim,"Super Mario Bros.");
+    float title_size=std::min(hero_height*.32f,inner*.25f);
+    const float natural=ui::title()->CalcTextSizeA(title_size,FLT_MAX,0,"WONDER").x;
+    if(natural>inner)title_size*=inner/natural;
+    dl->AddText(ui::title(),title_size,{origin.x+pad,brand_y+font*1.5f},th.text,"WONDER");
+    dl->PopClipRect();
+
+    const float button_y=corner.y-pad-button_size.y;
+    dl->PushClipRect(origin,corner,true);
+    dl->AddText(ui::body(),font,{origin.x+pad,button_y-detail_height-font*.65f},th.text_dim,detail.c_str(),nullptr,inner);
+    dl->PopClipRect();
+    ImGui::SetCursorScreenPos({origin.x+pad,button_y});
+    if(rows::consume_focus_request())ImGui::SetKeyboardFocusHere();
+    ImGui::PushStyleColor(ImGuiCol_Button,ImGui::ColorConvertU32ToFloat4(th.accent));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImGui::ColorConvertU32ToFloat4(ui::mix(th.accent,th.text,.22f)));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImGui::ColorConvertU32ToFloat4(ui::mix(th.accent,th.text,.35f)));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::ColorConvertU32ToFloat4(th.back_top));
+    ImGui::PushStyleColor(ImGuiCol_NavCursor,ImGui::ColorConvertU32ToFloat4(th.text));
+    if(ui::action_button(label.c_str(),button_width)) {
+        if(ready)g->play=true;
+        else {g->page=PageFiles;rows::focus_first();}
+    }
+    ImGui::PopStyleColor(5);ImGui::PopStyleVar();
+    ImGui::SetCursorScreenPos(origin);ImGui::Dummy({width,hero_height});
+    ImGui::Dummy({0,14*k});
+
+    // Quiet, purpose-specific routes instead of another settings table or a
+    // permanently empty help pane. Deep controls remain on their own pages.
+    const float gap=ImGui::GetStyle().ItemSpacing.x;
+    const char* tools[]={lt(LtSettings),page_label(PageControls),"Profiles & saves"};
+    float minimum=0;
+    for(const char* tool:tools)minimum=std::max(minimum,ImGui::CalcTextSize(tool).x+32*k);
+    int columns=3;
+    while(columns>1&&minimum*columns+gap*(columns-1)>width)--columns;
+    const float tool_width=std::max(1.f,(width-gap*(columns-1))/columns);
+    for(int tool=0;tool<3;++tool) {
+        if(tool%columns)ImGui::SameLine();
+        ImGui::PushID(tool);
+        if(ui::navigation_button(tools[tool],false,tool_width)) {
+            if(tool==0)overlay::open_settings(0);
+            else if(tool==1){g->page=PageControls;rows::focus_first();}
+            else open_profiles();
+        }
+        ImGui::PopID();
+    }
+    ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+    const char* local="Local co-op";
+    const char* network="LAN co-op  /  Experimental";
+    const bool inline_coop=width>ImGui::CalcTextSize(local).x+ImGui::CalcTextSize(network).x+80*k;
+    const float coop_width=inline_coop?(width-gap)*.5f:width;
+    if(ui::navigation_button(local,false,coop_width))overlay::open_settings(2);
+    if(inline_coop)ImGui::SameLine();
+    ImGui::BeginDisabled(!ready);
+    if(ui::navigation_button(network,false,coop_width))open_lan();
+    ImGui::EndDisabled();
+    unsigned devices=0;
+    for(uint32_t player=0;player<plat::kPlayerCount;++player)if(plat::player_connected(player))++devices;
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::ColorConvertU32ToFloat4(th.text_off));
+    ImGui::TextWrapped("%u player slots ready. LAN gameplay desyncs are still under repair.",devices);
+    ImGui::TextWrapped("SuperWonders %s",NX_VERSION_STRING);
+    ImGui::PopStyleColor();
+}
+
+// This page routes to the existing shared bindings, so launcher and in-game F1
+// settings always edit the same configuration.
+void page_controls() {
+    // Same language order as overlay::menu_language_names(); OS device/model
+    // names remain verbatim. All surrounding labels and help are localized.
+    struct Text {
+        const char *controls, *bindings, *configure, *slots, *player, *disconnected,
+            *ready, *connect, *keyboard, *together, *local, *devices, *local_help,
+            *lan, *one_per_pc, *lan_help, *shortcuts, *navigate, *arrows, *navigation;
+    };
+    static constexpr Text labels[13] = {
+        {"Controllers & keyboard",
+         "Bindings, layout & rumble",
+         "Remap keys or controller buttons and adjust rumble. These settings also apply in the game.",
+         "Player slots",
+         "Player",
+         "Not connected",
+         "Ready. Disconnecting another controller keeps this slot in place.",
+         "Connect a controller to use this slot for local co-op.",
+         "Keyboard",
+         "Playing together",
+         "Local co-op setup",
+         "Keyboard & gamepads",
+         "Use separate controllers, or reserve the keyboard for player 1 in Controls. Choose the player count inside Wonder.",
+         "LAN controls",
+         "One player per PC",
+         "Each PC uses its primary controller or keyboard. Set it up before opening an experimental LAN room from Play.",
+         "Launcher shortcuts",
+         "Navigate",
+         "Arrows / D-pad",
+         "Right enters the page. Esc / B returns to the sidebar. Page Up / Down or L / R changes pages. F5 / + starts the game when its files are ready."},
+        {"Controller e tastiera",
+         "Tasti, layout e vibrazione",
+         "Riassegna i tasti e regola la vibrazione. Le impostazioni valgono anche nel gioco.",
+         "Posti giocatore",
+         "Giocatore",
+         "Non collegato",
+         "Pronto. Scollegare un altro controller non sposta questo posto.",
+         "Collega un controller per usare questo posto in cooperativa locale.",
+         "Tastiera",
+         "Giocare insieme",
+         "Cooperativa locale",
+         "Tastiera e controller",
+         "Usa controller separati o riserva la tastiera al giocatore 1 nei Comandi. Scegli il numero di giocatori in Wonder.",
+         "Comandi LAN",
+         "Un giocatore per PC",
+         "Ogni PC usa il controller principale o la tastiera. Configuralo prima di aprire una stanza LAN sperimentale da Gioca.",
+         "Scorciatoie del launcher",
+         "Navigazione",
+         "Frecce / croce direzionale",
+         "Destra apre la pagina. Esc / B torna al menu laterale. Pag Su / Gi\u00f9 o L / R cambia pagina. F5 / + avvia il gioco se i file sono pronti."},
+        {"Controller & Tastatur",
+         "Belegung, Layout & Vibration",
+         "Tasten neu belegen und Vibration anpassen. Die Einstellungen gelten auch im Spiel.",
+         "Spielerpl\u00e4tze",
+         "Spieler",
+         "Nicht verbunden",
+         "Bereit. Dieser Platz bleibt gleich, wenn ein anderer Controller getrennt wird.",
+         "Verbinde einen Controller f\u00fcr diesen Platz im lokalen Koop.",
+         "Tastatur",
+         "Zusammen spielen",
+         "Lokalen Koop einrichten",
+         "Tastatur & Gamepads",
+         "Nutze getrennte Controller oder reserviere die Tastatur unter Steuerung f\u00fcr Spieler 1. W\u00e4hle die Spielerzahl in Wonder.",
+         "LAN-Steuerung",
+         "Ein Spieler pro PC",
+         "Jeder PC nutzt seinen Hauptcontroller oder die Tastatur. Richte das Ger\u00e4t ein, bevor du unter Spielen einen experimentellen LAN-Raum \u00f6ffnest.",
+         "Launcher-Tastenk\u00fcrzel",
+         "Navigieren",
+         "Pfeiltasten / Steuerkreuz",
+         "Rechts \u00f6ffnet die Seite. Esc / B f\u00fchrt zur Seitenleiste. Bild auf / ab oder L / R wechselt Seiten. F5 / + startet das Spiel, sobald die Dateien bereit sind."},
+        {"Manette et clavier",
+         "Touches, disposition et vibrations",
+         "R\u00e9attribuez les touches et r\u00e9glez les vibrations. Ces r\u00e9glages s'appliquent aussi dans le jeu.",
+         "Places des joueurs",
+         "Joueur",
+         "Non connect\u00e9",
+         "Pr\u00eat. Cette place reste la m\u00eame si une autre manette est d\u00e9connect\u00e9e.",
+         "Connectez une manette pour utiliser cette place en coop\u00e9ration locale.",
+         "Clavier",
+         "Jouer ensemble",
+         "Coop\u00e9ration locale",
+         "Clavier et manettes",
+         "Utilisez des manettes s\u00e9par\u00e9es ou r\u00e9servez le clavier au joueur 1 dans Commandes. Choisissez le nombre de joueurs dans Wonder.",
+         "Commandes LAN",
+         "Un joueur par PC",
+         "Chaque PC utilise sa manette principale ou son clavier. Configurez-les avant d'ouvrir un salon LAN exp\u00e9rimental depuis Jouer.",
+         "Raccourcis du lanceur",
+         "Navigation",
+         "Fl\u00e8ches / croix directionnelle",
+         "Droite ouvre la page. \u00c9chap / B revient au menu lat\u00e9ral. Page pr\u00e9c. / suiv. ou L / R change de page. F5 / + lance le jeu si les fichiers sont pr\u00eats."},
+        {"Mando y teclado",
+         "Botones, distribuci\u00f3n y vibraci\u00f3n",
+         "Reasigna teclas o botones y ajusta la vibraci\u00f3n. Los ajustes tambi\u00e9n se aplican en el juego.",
+         "Puestos de jugador",
+         "Jugador",
+         "Sin conexi\u00f3n",
+         "Listo. Este puesto no cambia al desconectar otro mando.",
+         "Conecta un mando para usar este puesto en cooperativo local.",
+         "Teclado",
+         "Jugar juntos",
+         "Cooperativo local",
+         "Teclado y mandos",
+         "Usa mandos separados o reserva el teclado al jugador 1 en Controles. Elige el n\u00famero de jugadores dentro de Wonder.",
+         "Controles LAN",
+         "Un jugador por PC",
+         "Cada PC usa su mando principal o teclado. Config\u00faralo antes de abrir una sala LAN experimental desde Jugar.",
+         "Atajos del lanzador",
+         "Navegar",
+         "Flechas / cruceta",
+         "Derecha abre la p\u00e1gina. Esc / B vuelve al men\u00fa lateral. Re P\u00e1g / Av P\u00e1g o L / R cambia de p\u00e1gina. F5 / + inicia el juego si los archivos est\u00e1n listos."},
+        {"\ucee8\ud2b8\ub864\ub7ec \ubc0f \ud0a4\ubcf4\ub4dc",
+         "\ubc84\ud2bc \ubc30\uce58 \ubc0f \uc9c4\ub3d9",
+         "\ud0a4\uc640 \ucee8\ud2b8\ub864\ub7ec \ubc84\ud2bc\uc744 \ubcc0\uacbd\ud558\uace0 \uc9c4\ub3d9\uc744 \uc870\uc808\ud569\ub2c8\ub2e4. \uac8c\uc784\uc5d0\ub3c4 \ub3d9\uc77c\ud558\uac8c \uc801\uc6a9\ub429\ub2c8\ub2e4.",
+         "\ud50c\ub808\uc774\uc5b4 \uc2ac\ub86f",
+         "\ud50c\ub808\uc774\uc5b4",
+         "\uc5f0\uacb0\ub418\uc9c0 \uc54a\uc74c",
+         "\uc900\ube44\ub428. \ub2e4\ub978 \ucee8\ud2b8\ub864\ub7ec\ub97c \ubd84\ub9ac\ud574\ub3c4 \uc774 \uc2ac\ub86f\uc740 \uc720\uc9c0\ub429\ub2c8\ub2e4.",
+         "\ub85c\uceec \ud611\ub3d9 \ud50c\ub808\uc774\uc5d0 \uc0ac\uc6a9\ud560 \ucee8\ud2b8\ub864\ub7ec\ub97c \uc5f0\uacb0\ud558\uc138\uc694.",
+         "\ud0a4\ubcf4\ub4dc",
+         "\ud568\uaed8 \ud50c\ub808\uc774",
+         "\ub85c\uceec \ud611\ub3d9 \uc124\uc815",
+         "\ud0a4\ubcf4\ub4dc \ubc0f \uac8c\uc784\ud328\ub4dc",
+         "\uac01\uc790 \ucee8\ud2b8\ub864\ub7ec\ub97c \uc0ac\uc6a9\ud558\uac70\ub098 \uc870\uc791\uc5d0\uc11c \ud0a4\ubcf4\ub4dc\ub97c \ud50c\ub808\uc774\uc5b4 1\ub85c \uc9c0\uc815\ud558\uc138\uc694. \ud50c\ub808\uc774\uc5b4 \uc218\ub294 Wonder \uc548\uc5d0\uc11c \uc120\ud0dd\ud558\uc138\uc694.",
+         "LAN \uc870\uc791",
+         "PC\ub2f9 \ud50c\ub808\uc774\uc5b4 1\uba85",
+         "\uac01 PC\ub294 \uae30\ubcf8 \ucee8\ud2b8\ub864\ub7ec\ub098 \ud0a4\ubcf4\ub4dc\ub97c \uc0ac\uc6a9\ud569\ub2c8\ub2e4. \ud50c\ub808\uc774\uc5d0\uc11c \uc2e4\ud5d8\uc801 LAN \ubc29\uc744 \uc5f4\uae30 \uc804\uc5d0 \uc124\uc815\ud558\uc138\uc694.",
+         "\ub7f0\ucc98 \ub2e8\ucd95\ud0a4",
+         "\ud0d0\uc0c9",
+         "\ubc29\ud5a5\ud0a4 / \uc2ed\uc790 \ubc84\ud2bc",
+         "\uc624\ub978\ucabd: \ud398\uc774\uc9c0 \uc5f4\uae30. Esc / B: \uc0ac\uc774\ub4dc\ubc14\ub85c \ub3cc\uc544\uac00\uae30. Page Up / Down \ub610\ub294 L / R: \ud398\uc774\uc9c0 \uc804\ud658. \ud30c\uc77c \uc900\ube44 \ud6c4 F5 / +: \uac8c\uc784 \uc2dc\uc791."},
+        {"\u30b3\u30f3\u30c8\u30ed\u30fc\u30e9\u30fc\u3068\u30ad\u30fc\u30dc\u30fc\u30c9",
+         "\u30dc\u30bf\u30f3\u914d\u7f6e\u30fb\u632f\u52d5",
+         "\u30ad\u30fc\u3084\u30dc\u30bf\u30f3\u306e\u5272\u308a\u5f53\u3066\u3001\u632f\u52d5\u3092\u8a2d\u5b9a\u3057\u307e\u3059\u3002\u30b2\u30fc\u30e0\u5185\u306b\u3082\u9069\u7528\u3055\u308c\u307e\u3059\u3002",
+         "\u30d7\u30ec\u30a4\u30e4\u30fc\u67a0",
+         "\u30d7\u30ec\u30a4\u30e4\u30fc",
+         "\u672a\u63a5\u7d9a",
+         "\u6e96\u5099\u5b8c\u4e86\u3002\u4ed6\u306e\u30b3\u30f3\u30c8\u30ed\u30fc\u30e9\u30fc\u3092\u5916\u3057\u3066\u3082\u3001\u3053\u306e\u67a0\u306f\u5909\u308f\u308a\u307e\u305b\u3093\u3002",
+         "\u30ed\u30fc\u30ab\u30eb\u5354\u529b\u30d7\u30ec\u30a4\u7528\u306e\u30b3\u30f3\u30c8\u30ed\u30fc\u30e9\u30fc\u3092\u63a5\u7d9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+         "\u30ad\u30fc\u30dc\u30fc\u30c9",
+         "\u307f\u3093\u306a\u3067\u904a\u3076",
+         "\u30ed\u30fc\u30ab\u30eb\u5354\u529b\u30d7\u30ec\u30a4",
+         "\u30ad\u30fc\u30dc\u30fc\u30c9\u3068\u30b2\u30fc\u30e0\u30d1\u30c3\u30c9",
+         "\u5225\u3005\u306e\u30b3\u30f3\u30c8\u30ed\u30fc\u30e9\u30fc\u3092\u4f7f\u3046\u304b\u3001\u64cd\u4f5c\u8a2d\u5b9a\u3067\u30ad\u30fc\u30dc\u30fc\u30c9\u3092\u30d7\u30ec\u30a4\u30e4\u30fc1\u306b\u6307\u5b9a\u3057\u307e\u3059\u3002\u4eba\u6570\u306fWonder\u5185\u3067\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002",
+         "LAN\u64cd\u4f5c",
+         "PC\u3054\u3068\u306b1\u4eba",
+         "\u5404PC\u306e\u30e1\u30a4\u30f3\u30b3\u30f3\u30c8\u30ed\u30fc\u30e9\u30fc\u304b\u30ad\u30fc\u30dc\u30fc\u30c9\u3092\u4f7f\u3044\u307e\u3059\u3002\u30d7\u30ec\u30a4\u304b\u3089\u5b9f\u9a13\u7684LAN\u30eb\u30fc\u30e0\u3092\u958b\u304f\u524d\u306b\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+         "\u30e9\u30f3\u30c1\u30e3\u30fc\u306e\u30b7\u30e7\u30fc\u30c8\u30ab\u30c3\u30c8",
+         "\u79fb\u52d5",
+         "\u65b9\u5411\u30ad\u30fc\u30fb\u5341\u5b57\u30dc\u30bf\u30f3",
+         "\u53f3\u3067\u30da\u30fc\u30b8\u3092\u958b\u304d\u307e\u3059\u3002Esc / B\u3067\u30b5\u30a4\u30c9\u30d0\u30fc\u3078\u3002Page Up / Down\u304bL / R\u3067\u30da\u30fc\u30b8\u5207\u308a\u66ff\u3048\u3002\u30d5\u30a1\u30a4\u30eb\u6e96\u5099\u5f8c\u3001F5 / +\u3067\u30b2\u30fc\u30e0\u958b\u59cb\u3002"},
+        {"\u0648\u062d\u062f\u0629 \u0627\u0644\u062a\u062d\u0643\u0645 \u0648\u0644\u0648\u062d\u0629 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d",
+         "\u0627\u0644\u0623\u0632\u0631\u0627\u0631 \u0648\u0627\u0644\u062a\u062e\u0637\u064a\u0637 \u0648\u0627\u0644\u0627\u0647\u062a\u0632\u0627\u0632",
+         "\u063a\u064a\u0651\u0631 \u062a\u0639\u064a\u064a\u0646 \u0627\u0644\u0623\u0632\u0631\u0627\u0631 \u0648\u0627\u0636\u0628\u0637 \u0627\u0644\u0627\u0647\u062a\u0632\u0627\u0632. \u062a\u0633\u0631\u064a \u0647\u0630\u0647 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a \u062f\u0627\u062e\u0644 \u0627\u0644\u0644\u0639\u0628\u0629 \u0623\u064a\u0636\u0627\u064b.",
+         "\u062e\u0627\u0646\u0627\u062a \u0627\u0644\u0644\u0627\u0639\u0628\u064a\u0646",
+         "\u0627\u0644\u0644\u0627\u0639\u0628",
+         "\u063a\u064a\u0631 \u0645\u062a\u0635\u0644",
+         "\u062c\u0627\u0647\u0632. \u062a\u0628\u0642\u0649 \u0647\u0630\u0647 \u0627\u0644\u062e\u0627\u0646\u0629 \u062b\u0627\u0628\u062a\u0629 \u0639\u0646\u062f \u0641\u0635\u0644 \u0648\u062d\u062f\u0629 \u062a\u062d\u0643\u0645 \u0623\u062e\u0631\u0649.",
+         "\u0635\u0644 \u0648\u062d\u062f\u0629 \u062a\u062d\u0643\u0645 \u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0647\u0630\u0647 \u0627\u0644\u062e\u0627\u0646\u0629 \u0641\u064a \u0627\u0644\u0644\u0639\u0628 \u0627\u0644\u062a\u0639\u0627\u0648\u0646\u064a \u0627\u0644\u0645\u062d\u0644\u064a.",
+         "\u0644\u0648\u062d\u0629 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d",
+         "\u0627\u0644\u0644\u0639\u0628 \u0645\u0639\u0627\u064b",
+         "\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u0644\u0639\u0628 \u0627\u0644\u0645\u062d\u0644\u064a",
+         "\u0644\u0648\u062d\u0629 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d \u0648\u0648\u062d\u062f\u0627\u062a \u0627\u0644\u062a\u062d\u0643\u0645",
+         "\u0627\u0633\u062a\u062e\u062f\u0645 \u0648\u062d\u062f\u0627\u062a \u062a\u062d\u0643\u0645 \u0645\u0646\u0641\u0635\u0644\u0629 \u0623\u0648 \u062e\u0635\u0635 \u0644\u0648\u062d\u0629 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d \u0644\u0644\u0627\u0639\u0628 1 \u0641\u064a \u0627\u0644\u062a\u062d\u0643\u0645. \u0627\u062e\u062a\u0631 \u0639\u062f\u062f \u0627\u0644\u0644\u0627\u0639\u0628\u064a\u0646 \u062f\u0627\u062e\u0644 Wonder.",
+         "\u062a\u062d\u0643\u0645 LAN",
+         "\u0644\u0627\u0639\u0628 \u0648\u0627\u062d\u062f \u0644\u0643\u0644 \u062d\u0627\u0633\u0648\u0628",
+         "\u064a\u0633\u062a\u062e\u062f\u0645 \u0643\u0644 \u062d\u0627\u0633\u0648\u0628 \u0648\u062d\u062f\u0629 \u0627\u0644\u062a\u062d\u0643\u0645 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629 \u0623\u0648 \u0644\u0648\u062d\u0629 \u0627\u0644\u0645\u0641\u0627\u062a\u064a\u062d. \u0627\u0636\u0628\u0637\u0647\u0627 \u0642\u0628\u0644 \u0641\u062a\u062d \u063a\u0631\u0641\u0629 LAN \u062a\u062c\u0631\u064a\u0628\u064a\u0629 \u0645\u0646 \u062a\u0634\u063a\u064a\u0644.",
+         "\u0627\u062e\u062a\u0635\u0627\u0631\u0627\u062a \u0627\u0644\u0645\u0634\u063a\u0644",
+         "\u0627\u0644\u062a\u0646\u0642\u0644",
+         "\u0627\u0644\u0623\u0633\u0647\u0645 / \u0623\u0632\u0631\u0627\u0631 \u0627\u0644\u0627\u062a\u062c\u0627\u0647\u0627\u062a",
+         "\u064a\u0645\u064a\u0646 \u064a\u0641\u062a\u062d \u0627\u0644\u0635\u0641\u062d\u0629. Esc / B \u064a\u0639\u0648\u062f \u0644\u0644\u0634\u0631\u064a\u0637 \u0627\u0644\u062c\u0627\u0646\u0628\u064a. Page Up / Down \u0623\u0648 L / R \u064a\u063a\u064a\u0651\u0631 \u0627\u0644\u0635\u0641\u062d\u0629. F5 / + \u064a\u0628\u062f\u0623 \u0627\u0644\u0644\u0639\u0628\u0629 \u0639\u0646\u062f \u062c\u0627\u0647\u0632\u064a\u0629 \u0627\u0644\u0645\u0644\u0641\u0627\u062a."},
+        {"\u0413\u0435\u0439\u043c\u043f\u0430\u0434 \u0438 \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0430",
+         "\u041a\u043d\u043e\u043f\u043a\u0438, \u0440\u0430\u0441\u043a\u043b\u0430\u0434\u043a\u0430 \u0438 \u0432\u0438\u0431\u0440\u0430\u0446\u0438\u044f",
+         "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u0435 \u043d\u0430\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043a\u043d\u043e\u043f\u043e\u043a \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u0442\u0435 \u0432\u0438\u0431\u0440\u0430\u0446\u0438\u044e. \u042d\u0442\u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0442 \u0438 \u0432 \u0438\u0433\u0440\u0435.",
+         "\u041c\u0435\u0441\u0442\u0430 \u0438\u0433\u0440\u043e\u043a\u043e\u0432",
+         "\u0418\u0433\u0440\u043e\u043a",
+         "\u041d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d",
+         "\u0413\u043e\u0442\u043e\u0432\u043e. \u041c\u0435\u0441\u0442\u043e \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442\u0441\u044f \u043f\u0440\u0438 \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0438 \u0434\u0440\u0443\u0433\u043e\u0433\u043e \u0433\u0435\u0439\u043c\u043f\u0430\u0434\u0430.",
+         "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u0433\u0435\u0439\u043c\u043f\u0430\u0434 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043c\u0435\u0441\u0442\u0430 \u0432 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0439 \u0441\u043e\u0432\u043c\u0435\u0441\u0442\u043d\u043e\u0439 \u0438\u0433\u0440\u0435.",
+         "\u041a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0430",
+         "\u0421\u043e\u0432\u043c\u0435\u0441\u0442\u043d\u0430\u044f \u0438\u0433\u0440\u0430",
+         "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u0430\u044f \u0438\u0433\u0440\u0430",
+         "\u041a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0430 \u0438 \u0433\u0435\u0439\u043c\u043f\u0430\u0434\u044b",
+         "\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0435 \u0433\u0435\u0439\u043c\u043f\u0430\u0434\u044b \u0438\u043b\u0438 \u0432\u044b\u0434\u0435\u043b\u0438\u0442\u0435 \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0443 \u0438\u0433\u0440\u043e\u043a\u0443 1 \u0432 \u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0438. \u0427\u0438\u0441\u043b\u043e \u0438\u0433\u0440\u043e\u043a\u043e\u0432 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0432 Wonder.",
+         "\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 LAN",
+         "\u041e\u0434\u0438\u043d \u0438\u0433\u0440\u043e\u043a \u043d\u0430 \u041f\u041a",
+         "\u041a\u0430\u0436\u0434\u044b\u0439 \u041f\u041a \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0433\u0435\u0439\u043c\u043f\u0430\u0434 \u0438\u043b\u0438 \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0443. \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u0442\u0435 \u0435\u0433\u043e \u0434\u043e \u043e\u0442\u043a\u0440\u044b\u0442\u0438\u044f \u044d\u043a\u0441\u043f\u0435\u0440\u0438\u043c\u0435\u043d\u0442\u0430\u043b\u044c\u043d\u043e\u0439 \u043a\u043e\u043c\u043d\u0430\u0442\u044b LAN \u043d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435 \u0418\u0433\u0440\u0430\u0442\u044c.",
+         "\u041a\u043b\u0430\u0432\u0438\u0448\u0438 \u0437\u0430\u043f\u0443\u0441\u043a\u0430",
+         "\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u044f",
+         "\u0421\u0442\u0440\u0435\u043b\u043a\u0438 / \u043a\u0440\u0435\u0441\u0442\u043e\u0432\u0438\u043d\u0430",
+         "\u0412\u043f\u0440\u0430\u0432\u043e \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443. Esc / B \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442 \u043a \u043c\u0435\u043d\u044e. Page Up / Down \u0438\u043b\u0438 L / R \u043c\u0435\u043d\u044f\u0435\u0442 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b. F5 / + \u0437\u0430\u043f\u0443\u0441\u043a\u0430\u0435\u0442 \u0438\u0433\u0440\u0443, \u043a\u043e\u0433\u0434\u0430 \u0444\u0430\u0439\u043b\u044b \u0433\u043e\u0442\u043e\u0432\u044b."},
+        {"Kontrolc\u00fc ve klavye",
+         "Tu\u015flar, d\u00fczen ve titre\u015fim",
+         "Tu\u015f atamalar\u0131n\u0131 ve titre\u015fimi ayarlay\u0131n. Bu ayarlar oyunda da ge\u00e7erlidir.",
+         "Oyuncu yuvalar\u0131",
+         "Oyuncu",
+         "Ba\u011fl\u0131 de\u011fil",
+         "Haz\u0131r. Ba\u015fka bir kontrolc\u00fc \u00e7\u0131kar\u0131ld\u0131\u011f\u0131nda bu yuva de\u011fi\u015fmez.",
+         "Yerel ortak oyun i\u00e7in bu yuvaya bir kontrolc\u00fc ba\u011flay\u0131n.",
+         "Klavye",
+         "Birlikte oynay\u0131n",
+         "Yerel ortak oyun",
+         "Klavye ve kontrolc\u00fcler",
+         "Ayr\u0131 kontrolc\u00fcler kullan\u0131n veya Kontroller'den klavyeyi oyuncu 1'e ay\u0131r\u0131n. Oyuncu say\u0131s\u0131n\u0131 Wonder i\u00e7inde se\u00e7in.",
+         "LAN kontrolleri",
+         "Her PC'de bir oyuncu",
+         "Her PC ana kontrolc\u00fcs\u00fcn\u00fc veya klavyesini kullan\u0131r. Oyna'dan deneysel LAN odas\u0131 a\u00e7madan \u00f6nce ayarlay\u0131n.",
+         "Ba\u015flat\u0131c\u0131 k\u0131sayollar\u0131",
+         "Gezinme",
+         "Oklar / y\u00f6n tu\u015flar\u0131",
+         "Sa\u011f sayfay\u0131 a\u00e7ar. Esc / B yan men\u00fcye d\u00f6ner. Page Up / Down veya L / R sayfa de\u011fi\u015ftirir. Dosyalar haz\u0131rsa F5 / + oyunu ba\u015flat\u0131r."},
+        {"Controller en toetsenbord",
+         "Toewijzing, indeling en trillen",
+         "Wijs toetsen of knoppen toe en pas trillen aan. Deze instellingen gelden ook in het spel.",
+         "Spelersplekken",
+         "Speler",
+         "Niet verbonden",
+         "Gereed. Deze plek blijft behouden als een andere controller losgaat.",
+         "Sluit een controller aan voor deze plek in lokale co-op.",
+         "Toetsenbord",
+         "Samen spelen",
+         "Lokale co-op instellen",
+         "Toetsenbord en controllers",
+         "Gebruik aparte controllers of reserveer het toetsenbord voor speler 1 onder Besturing. Kies het aantal spelers in Wonder.",
+         "LAN-besturing",
+         "E\u00e9n speler per pc",
+         "Elke pc gebruikt de hoofdcontroller of het toetsenbord. Stel dit in voordat je vanuit Spelen een experimentele LAN-kamer opent.",
+         "Sneltoetsen",
+         "Navigeren",
+         "Pijlen / D-pad",
+         "Rechts opent de pagina. Esc / B keert terug naar het zijmenu. Page Up / Down of L / R wisselt pagina's. F5 / + start het spel zodra de bestanden gereed zijn."},
+        {"\u624b\u67c4\u4e0e\u952e\u76d8",
+         "\u6309\u952e\u3001\u5e03\u5c40\u4e0e\u632f\u52a8",
+         "\u4fee\u6539\u952e\u76d8\u6216\u624b\u67c4\u6309\u952e\u5e76\u8c03\u6574\u632f\u52a8\u3002\u8fd9\u4e9b\u8bbe\u7f6e\u4e5f\u4f1a\u5e94\u7528\u4e8e\u6e38\u620f\u5185\u3002",
+         "\u73a9\u5bb6\u4f4d\u7f6e",
+         "\u73a9\u5bb6",
+         "\u672a\u8fde\u63a5",
+         "\u5df2\u5c31\u7eea\u3002\u65ad\u5f00\u5176\u4ed6\u624b\u67c4\u4e0d\u4f1a\u6539\u53d8\u6b64\u4f4d\u7f6e\u3002",
+         "\u8fde\u63a5\u624b\u67c4\uff0c\u5373\u53ef\u5c06\u6b64\u4f4d\u7f6e\u7528\u4e8e\u672c\u5730\u5408\u4f5c\u3002",
+         "\u952e\u76d8",
+         "\u4e00\u8d77\u6e38\u73a9",
+         "\u672c\u5730\u5408\u4f5c\u8bbe\u7f6e",
+         "\u952e\u76d8\u4e0e\u624b\u67c4",
+         "\u4f7f\u7528\u72ec\u7acb\u624b\u67c4\uff0c\u6216\u5728\u64cd\u4f5c\u8bbe\u7f6e\u4e2d\u5c06\u952e\u76d8\u4fdd\u7559\u7ed9\u73a9\u5bb61\u3002\u5728Wonder\u5185\u9009\u62e9\u73a9\u5bb6\u4eba\u6570\u3002",
+         "\u5c40\u57df\u7f51\u64cd\u4f5c",
+         "\u6bcf\u53f0\u7535\u8111\u4e00\u540d\u73a9\u5bb6",
+         "\u6bcf\u53f0\u7535\u8111\u4f7f\u7528\u4e3b\u624b\u67c4\u6216\u952e\u76d8\u3002\u8bf7\u5148\u8bbe\u7f6e\u8bbe\u5907\uff0c\u518d\u4ece\u5f00\u59cb\u6e38\u620f\u9875\u9762\u521b\u5efa\u5b9e\u9a8c\u6027\u5c40\u57df\u7f51\u623f\u95f4\u3002",
+         "\u542f\u52a8\u5668\u5feb\u6377\u952e",
+         "\u5bfc\u822a",
+         "\u65b9\u5411\u952e / \u5341\u5b57\u952e",
+         "\u53f3\u952e\u8fdb\u5165\u9875\u9762\u3002Esc / B\u8fd4\u56de\u4fa7\u680f\u3002Page Up / Down\u6216L / R\u5207\u6362\u9875\u9762\u3002\u6587\u4ef6\u5c31\u7eea\u540e\uff0cF5 / +\u542f\u52a8\u6e38\u620f\u3002"},
+        {"\u63a7\u5236\u5668\u8207\u9375\u76e4",
+         "\u6309\u9375\u3001\u914d\u7f6e\u8207\u9707\u52d5",
+         "\u4fee\u6539\u9375\u76e4\u6216\u63a7\u5236\u5668\u6309\u9375\u4e26\u8abf\u6574\u9707\u52d5\u3002\u9019\u4e9b\u8a2d\u5b9a\u4e5f\u6703\u5957\u7528\u65bc\u904a\u6232\u5167\u3002",
+         "\u73a9\u5bb6\u4f4d\u7f6e",
+         "\u73a9\u5bb6",
+         "\u672a\u9023\u63a5",
+         "\u5df2\u5c31\u7dd2\u3002\u62d4\u9664\u5176\u4ed6\u63a7\u5236\u5668\u4e0d\u6703\u6539\u8b8a\u6b64\u4f4d\u7f6e\u3002",
+         "\u9023\u63a5\u63a7\u5236\u5668\uff0c\u5373\u53ef\u5c07\u6b64\u4f4d\u7f6e\u7528\u65bc\u672c\u6a5f\u5408\u4f5c\u3002",
+         "\u9375\u76e4",
+         "\u4e00\u8d77\u904a\u73a9",
+         "\u672c\u6a5f\u5408\u4f5c\u8a2d\u5b9a",
+         "\u9375\u76e4\u8207\u63a7\u5236\u5668",
+         "\u4f7f\u7528\u7368\u7acb\u63a7\u5236\u5668\uff0c\u6216\u5728\u64cd\u4f5c\u8a2d\u5b9a\u4e2d\u5c07\u9375\u76e4\u4fdd\u7559\u7d66\u73a9\u5bb61\u3002\u5728Wonder\u5167\u9078\u64c7\u73a9\u5bb6\u4eba\u6578\u3002",
+         "\u5340\u57df\u7db2\u8def\u64cd\u4f5c",
+         "\u6bcf\u53f0\u96fb\u8166\u4e00\u540d\u73a9\u5bb6",
+         "\u6bcf\u53f0\u96fb\u8166\u4f7f\u7528\u4e3b\u8981\u63a7\u5236\u5668\u6216\u9375\u76e4\u3002\u8acb\u5148\u8a2d\u5b9a\u88dd\u7f6e\uff0c\u518d\u5f9e\u958b\u59cb\u904a\u6232\u9801\u9762\u5efa\u7acb\u5be6\u9a57\u6027\u5340\u57df\u7db2\u8def\u623f\u9593\u3002",
+         "\u555f\u52d5\u5668\u5feb\u6377\u9375",
+         "\u5c0e\u89bd",
+         "\u65b9\u5411\u9375 / \u5341\u5b57\u9375",
+         "\u53f3\u9375\u9032\u5165\u9801\u9762\u3002Esc / B\u8fd4\u56de\u5074\u6b04\u3002Page Up / Down\u6216L / R\u5207\u63db\u9801\u9762\u3002\u6a94\u6848\u5c31\u7dd2\u5f8c\uff0cF5 / +\u555f\u52d5\u904a\u6232\u3002"}
+    };
+    const int language = overlay::menu_language();
+    const Text& text = labels[language >= 0 && language < 13 ? language : 0];
+    rows::begin("##controls", ImGui::GetContentRegionAvail().y);
+    rows::section(page_label(PageControls));
+    if (rows::action(text.controls, text.bindings, text.configure, true))
         overlay::open_settings(2);
-    if (rows::action("Performance overlay", "FPS & frame times", "Show FPS, 1% lows, game speed and the frame-time graph."))
-        overlay::open_settings(3);
-    rows::section("Play together");
-    unsigned devices=0;for(uint32_t player=0;player<plat::kPlayerCount;++player)if(plat::player_connected(player))++devices;
-    const std::string device_summary=std::to_string(devices)+" player slots ready";
-    rows::action("Connected players",device_summary.c_str(),"Open Controller setup to inspect each player slot and test rumble. Use Keyboard as player 1 when combining a keyboard and gamepads. In LAN each PC supplies one player.",true);
-    if (rows::action("Local co-op", "2-4 players", "Connect independent controllers, or reserve the keyboard for player 1 in Controls. Choose the player count in the game for real local co-op characters."))
+    rows::section(text.slots);
+    for (uint32_t player = 0; player < plat::kPlayerCount; ++player) {
+        const bool connected = plat::player_connected(player);
+        const std::string name = std::string(text.player) + " " + std::to_string(player + 1);
+        const std::string device = connected ? plat::controller_name(player) : text.disconnected;
+        const std::string model = connected ? plat::controller_model_hint(player) : std::string{};
+        const std::string description = connected ? (model.empty() ? text.ready : model) : text.connect;
+        rows::action(name.c_str(), device.empty() ? text.keyboard : device.c_str(), description.c_str(), true);
+    }
+    rows::section(text.together);
+    if (rows::action(text.local, text.devices, text.local_help))
         overlay::open_settings(2);
-    if (!ready) rows::disable_next();
-    if (rows::action("LAN co-op", "Host or join | Experimental", "Run a native Wonder instance on each PC, with independent co-op characters. Pair on a private network. Joining preserves your normal save. Known gameplay desyncs are under repair."))
-        open_lan();
-    rows::section(lt(LtAbout));
-    rows::action(lt(LtVersion), NX_VERSION_STRING,
-                 "SuperWonders, a static recompilation of Super Mario Bros. Wonder (1.0.0) for PC. Nothing of the game "
-                 "ships with it: it's set up from your own copy.",
-                 true);
+    rows::action(text.lan, text.one_per_pc, text.lan_help, true);
+    rows::section(text.shortcuts);
+    rows::action(text.navigate, text.arrows, text.navigation, true);
     rows::end();
 }
 
@@ -1098,8 +1455,8 @@ void screen(float w, float h) {
 
     const ImVec2 ds{w, h};
     backdrop(ImGui::GetBackgroundDrawList(), ds);
-    // fades and rises in, as the menu does
-    const float reveal = overlay::usability_preferences().reduced_motion?1.f:ui::smoothstep(std::min(1.0f, float(double(plat::monotonic_ns() - g->shown_ns) / 0.35e9)));
+    // Instant layout and focus for frequent launcher/controller actions.
+    const float reveal = 1.f;
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, reveal);
     ImGui::SetNextWindowPos({0, (1 - reveal) * 20 * k});
     ImGui::SetNextWindowSize(ds);
@@ -1112,43 +1469,60 @@ void screen(float w, float h) {
     if (!menu_open && (menu_was_open || !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow))) ImGui::SetNextWindowFocus();
     if (menu_was_open && !menu_open) {
         if (g->in_list) g->focus_list = true;
-        else rows::focus_first();
+        else { rows::focus_first(); g->focus_job_action = true; }
     }
     menu_was_open = menu_open;
     ImGui::Begin("##launcher", nullptr, f);
     ImGui::BeginDisabled(menu_open || profiles_open() || g->lan_open);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float margin = 36 * k, nav_w = std::min(w*.24f,330*k);
+    const float margin = 28 * k;
+    const float gap = 28 * k;
+    const float nav_w = std::min(w * .22f, 260 * k);
+    const bool compact = w < 1000 || h < 620;
+    const ui::Hint hints[] = {{"A", lt(LtSelect)}, {"B", lt(LtBack)}, {"L", ""}, {"R", lt(LtPages)}, {"+", lt(LtPlayHint)}};
+    const float hint_height=std::max(22.f,34*k),hint_width=std::max(1.f,w-2*margin);
+    const float hints_h=ui::hints_height(hint_width,hint_height,hints,int(std::size(hints)));
+    const float footer_h=std::max(58*k,hints_h+28*k);
+    const float content_bottom = std::max(margin, h - margin - footer_h);
 
-    // the title
-    ImGui::SetCursorPos({margin, margin * 0.8f});
+    // The compact rail gives the selected game/page the large content canvas.
+    dl->AddRectFilled({0,0},{margin+nav_w+gap*.5f,h},th.panel);
+    dl->AddLine({margin+nav_w+gap*.5f,0},{margin+nav_w+gap*.5f,h},ui::fade(th.text,.06f));
+    ImGui::SetCursorPos({margin,margin});
     ImGui::PushFont(ui::title());
-    ImGui::SetWindowFontScale(1.25f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.accent));
+    const float brand_width=ImGui::CalcTextSize("SUPERWONDERS").x;
+    ImGui::SetWindowFontScale(std::min(.62f,std::max(.3f,nav_w/std::max(1.f,brand_width))));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::ColorConvertU32ToFloat4(th.text));
     ImGui::TextUnformatted("SUPERWONDERS");
     ImGui::PopStyleColor();
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopFont();
-    ImGui::SetCursorPosX(margin);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.text_dim));
-    ImGui::TextUnformatted(g->config_mode ? "Super Mario Bros. Wonder  -  Configuration" : "Super Mario Bros. Wonder");
+    ImGui::SetWindowFontScale(1.f);ImGui::PopFont();
+    ImGui::SetCursorPos({margin+nav_w+gap,margin});
+    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::ColorConvertU32ToFloat4(th.text_dim));
+    ImGui::TextUnformatted(page_label(static_cast<Page>(g->page.load())));
     ImGui::PopStyleColor();
-    const float top = ImGui::GetCursorPosY() + 40 * k;
+    const float top=margin+std::max(68*k,ImGui::GetTextLineHeight()*2.4f);
 
-    // the pages: a column on the left, the highlight easing in under the selected one
+    // Scroll instead of shrinking navigation targets as the window gets shorter.
     const bool busy = g->job.running || g->demo_progress;
     ImGui::SetCursorPos({margin, top});
-    ImGui::BeginGroup();
+    const float status_h = compact ? std::max(64 * k, ImGui::GetTextLineHeight() * 2.5f) : 112 * k;
+    const float nav_h = std::max(1.f, content_bottom - top - status_h - 16 * k);
+    ImGui::BeginChild("##navigation", {nav_w, nav_h}, ImGuiChildFlags_NavFlattened);
+    dl = ImGui::GetWindowDrawList();
     bool list_focused = false;
-    for (int i = 0; i < kPages; ++i) {
+    for (Page item : kNavigation) {
+        const int i = int(item);
         ImGui::PushID(i);
         const bool sel = g->page == i;
         const ImVec2 at = ImGui::GetCursorScreenPos();
-        const float row_h = std::min(64*k,(h-top-150*k)/float(kPages));
-        const float a = ui::eased(ImGui::GetID("hl"), sel ? 1.0f : 0.0f, 14.0f);
+        const float row_w = ImGui::GetContentRegionAvail().x;
+        const float text_w = std::max(1.f, row_w - 24 * k);
+        const ImVec2 text_size = ImGui::CalcTextSize(page_label(item), nullptr, false, text_w);
+        const float row_h = std::max(54 * k, text_size.y + 16 * k);
+        const float a = sel ? 1.f : 0.f;
         if (a > 0.01f) {
-            dl->AddRectFilled(at, {at.x + nav_w, at.y + row_h}, ui::fade(th.accent, 0.16f * a), 10 * k);
-            dl->AddRectFilled(at, {at.x + 5 * k, at.y + row_h}, ui::fade(th.accent, a), 3 * k);
+            dl->AddRectFilled(at, {at.x + row_w, at.y + row_h}, ui::fade(th.text, 0.055f * a), 3 * k);
+            dl->AddRectFilled(at, {at.x + 5 * k, at.y + row_h}, ui::fade(th.accent, a), 0);
         }
         // The selected page may change during navigation below. Balance this
         // scope using the entry snapshot, never a second read of the page.
@@ -1157,23 +1531,24 @@ void screen(float w, float h) {
         ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::fade(th.accent, 0.10f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ui::fade(th.accent, 0.20f));
-        ImGui::PushFont(ui::title());
-        ImGui::SetWindowFontScale(0.62f);
-        char label[64];
-        std::snprintf(label, sizeof label, "   %s", lt(static_cast<LauncherText>(LtPlay + i)));
-        for (char* c = label; *c; ++c) *c = char(std::toupper(static_cast<unsigned char>(*c)));
+        ImGui::PushFont(ui::body());
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(sel ? th.text : th.text_dim));
         ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));  // (in the middle of the highlight)
-        if (sel && g->focus_list && !menu_open) ImGui::SetKeyboardFocusHere(), g->focus_list = false;
-        const bool clicked = ImGui::Selectable(label, sel, ImGuiSelectableFlags_None, {nav_w, row_h});
+        const bool focus_requested = sel && g->focus_list && !menu_open;
+        if (focus_requested) ImGui::SetKeyboardFocusHere(), g->focus_list = false;
+        const bool clicked = ImGui::Selectable("##page-choice", sel, ImGuiSelectableFlags_None, {row_w, row_h});
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                    {at.x + 12 * k, at.y + (row_h - text_size.y) * .5f},
+                    sel ? th.text : th.text_dim, page_label(item), nullptr, text_w);
         ImGui::PopStyleVar();
         const bool focused = ImGui::IsItemFocused();
+        if (focus_requested) ImGui::SetScrollHereY(0.5f);
         list_focused |= focused;
         if (focused && !row_disabled && i != g->page && !g->follow_hold)  // (the page follows the cursor)
             g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
         if (clicked && !row_disabled) {  // A (or a click): into the page
             if (i != g->page) g->page = i, g->browse = 0, log("launcher: page %s", kPageNames[i]);
-            rows::focus_first();
+            rows::focus_first(); g->focus_job_action = true;
         }
         if (focused && !menu_open) {  // the cursor, always visible: an outline on the page's name
             const ImVec2 b0 = ImGui::GetItemRectMin(), b1 = ImGui::GetItemRectMax();
@@ -1186,7 +1561,8 @@ void screen(float w, float h) {
         ImGui::EndDisabled();
         ImGui::PopID();
     }
-    ImGui::EndGroup();
+    ImGui::EndChild();
+    dl = ImGui::GetWindowDrawList();
     g->in_list = list_focused;
 
     // the status, lower left
@@ -1194,57 +1570,62 @@ void screen(float w, float h) {
         const Ready r = g->status.ready;
         const ImU32 c = r == Ready::Yes ? th.good : r == Ready::Rebuild ? th.warn : th.bad;
         const char* s = r == Ready::Yes ? lt(LtFilesReady) : r == Ready::Rebuild ? lt(LtNeedsRebuild) : lt(LtFilesNotSetUp);
-        const float y = h - margin - 80 * k;
+        const float y = content_bottom - status_h + 8 * k;
         dl->AddCircleFilled({margin + 8 * k, y + 15 * k}, 7 * k, c);
         ImGui::SetCursorPos({margin + 26 * k, y});
+        ImGui::PushTextWrapPos(margin + nav_w);
         ImGui::TextUnformatted(s);
+        ImGui::PopTextWrapPos();
         ImGui::SetCursorPosX(margin + 26 * k);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.text_off));
         ImGui::PushTextWrapPos(margin + nav_w);
-        if(h>=540)ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
+        if(!compact)ImGui::TextUnformatted(!g->note.empty() ? g->note.c_str() : g->status.why.c_str());
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
     }
 
     // the page, on the right
-    const float px = margin + nav_w + 48 * k, pw = w - px - margin, ph = h - top - margin - 70 * k;
+    const float px = margin + nav_w + gap;
+    const float pw = std::max(1.f, w - px - margin), ph = std::max(1.f, content_bottom - top);
     ImGui::SetCursorPos({px, top});
     if (busy || (g->job.result > 0 && !g->job.was_cancelled() && g->page == PageFiles)) {
         ImGui::BeginChild("##job", {pw, ph}, ImGuiChildFlags_NavFlattened);
-        const ImVec2 p0 = ImGui::GetCursorScreenPos();
-        const float card_h = 300 * k;
+        // The log/progress scrolls independently; its action remains below it.
+        const float action_h = ui::action_button_size(busy ? "Cancel setup" : "Back", -1.f).y;
+        const float detail_h = std::max(1.f, ImGui::GetContentRegionAvail().y - action_h - ImGui::GetStyle().ItemSpacing.y);
+        ImGui::BeginChild("##job-details", {0, detail_h});
         if (busy) {
-            progress_card(dl, p0, {p0.x + pw, p0.y + card_h});
-            ImGui::SetCursorPosY(card_h + 30 * k);
-            rows::begin("##cancel", ph - card_h - 30 * k);
-            if (rows::action("Cancel", "", "Stop the setup. What it finished is kept, and it carries on from there "
-                                           "next time.", true))
-                g->job.cancel();
-            rows::end();
-        } else {  // the last setup failed: what it said
+            const ImVec2 p0 = ImGui::GetCursorScreenPos();
+            const float card_width = std::max(1.f, ImGui::GetContentRegionAvail().x);
+            const float card_h = progress_card(ImGui::GetWindowDrawList(), p0, card_width);
+            ImGui::Dummy({card_width, card_h});
+        } else {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(th.bad));
-            ImGui::TextUnformatted("The setup stopped with an error:");
+            ImGui::TextWrapped("The setup stopped with an error:");
             ImGui::PopStyleColor();
             std::vector<std::string> tail;
             {
                 std::lock_guard lk(g->job.lock);
                 tail = g->job.tail;
             }
-            ImGui::PushTextWrapPos(pw);
-            for (const std::string& l : tail) ImGui::TextUnformatted(l.c_str());
+            ImGui::PushTextWrapPos(0.f);
+            for (const std::string& line : tail) ImGui::TextUnformatted(line.c_str());
             ImGui::PopTextWrapPos();
-            ImGui::Dummy({0, 20 * k});
-            rows::begin("##failed", 200 * k);
-            if (rows::action("Back", "", "Check the folders and try again.", true)) g->job.result = -1;
-            rows::end();
         }
         ImGui::EndChild();
+        if (g->focus_job_action) { ImGui::SetKeyboardFocusHere(); g->focus_job_action = false; }
+        if (busy) {
+            if (ui::action_button("Cancel setup", -1.f)) g->job.cancel();
+        } else if (ui::action_button("Back", -1.f)) g->job.result = -1;
+        ImGui::EndChild();
     } else {
+        g->focus_job_action = false;
         ImGui::BeginChild("##page", {pw, ph}, ImGuiChildFlags_NavFlattened);
         if(!menu_open) switch (g->page.load()) {
             case PagePlay: page_play(); break;
             case PageFiles: page_files(); break;
             case PageSettings: page_settings(); break;
+            case PageControls: page_controls(); break;
             case PageMods: page_mods(); break;
             case PageUpdates: page_updates(g_k); break;
             default: page_quit(); break;
@@ -1253,8 +1634,8 @@ void screen(float w, float h) {
     }
 
     // the controls, along the bottom
-    const ui::Hint hints[] = {{"A", lt(LtSelect)}, {"B", lt(LtBack)}, {"L", ""}, {"R", lt(LtPages)}, {"+", lt(LtPlayHint)}};
-    if(!menu_open && !profiles_open() && !g->lan_open)ui::hints(dl, w * 0.5f, h - 46*k, 34 * k, hints, 5);
+    if(!menu_open && !profiles_open() && !g->lan_open)
+        ui::hints(dl,w*.5f,content_bottom+14*k+hints_h*.5f,hint_height,hints,int(std::size(hints)),1.f,hint_width);
     ImGui::EndDisabled();
     ImGui::End();
     ImGui::PopStyleColor();
@@ -1271,14 +1652,17 @@ void screen(float w, float h) {
                        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, false) || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false);
     const bool back = (pressed & plat::kB) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                       ImGui::IsKeyPressed(ImGuiKey_Backspace, false);
-    if (list_focused && right) rows::focus_first();  // right: into the page
+    if (list_focused && right) { rows::focus_first(); g->focus_job_action = true; }  // right: into the page
     else if (!list_focused && back) {                // B: the browser closes, else back to the page list
         if (g->browse) browse_close();
         else g->focus_list = true;
     }
     if (!busy && ((pressed & (plat::kL | plat::kR)) || ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))) {  // L / R: the page before / after
         const int step = ((pressed & plat::kR) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)) ? 1 : kPages - 1;
-        g->page = (g->page + step) % kPages, g->browse = 0, g->focus_list = true, g->follow_hold = 3;
+        int current = 0;
+        for (int i = 0; i < kPages; ++i) if (kNavigation[i] == g->page.load()) current = i;
+        g->page = kNavigation[(current + step) % kPages];
+        g->browse = 0, g->focus_list = true, g->follow_hold = 3;
         log("launcher: page %s", kPageNames[g->page.load()]);
     }
     if (!busy && g->status.ready == Ready::Yes && ((pressed & plat::kPlus) || ImGui::IsKeyPressed(ImGuiKey_F5, false)))
@@ -1426,12 +1810,16 @@ void run() {
         const char* e = std::getenv("NX_LAUNCHER_TOUR");
         return e ? std::max(0, std::atoi(e)) : 0;
     }();
-    if (const char* e = std::getenv("NX_LAUNCHER_SETUP"); e && *e == '1') start_setup();
-    // An update brought a kit that builds the game code differently, and the folders are known: build it again at
-    // once, as Savage Wind does after an update, instead of asking for the folders again.
-    else if (g->status.ready == Ready::Rebuild && folder_has(g->config.exefs, "main") &&
-             folder_has(g->config.romfs, "Shader"))
-        g->page = PageFiles, start_setup();
+    const bool ui_tour=tour>0 || std::getenv("NX_PROFILE_MANAGER_TOUR") ||
+        std::getenv("NX_QOL_RESIZE_TOUR") || std::getenv("NX_LAN_LOBBY_TOUR");
+    // UI tours must never start a real setup/recompile, even with an inherited
+    // setup switch or an older kit in the chosen fixture.
+    if (!ui_tour) {
+        if (const char* e = std::getenv("NX_LAUNCHER_SETUP"); e && *e == '1') start_setup();
+        else if (g->status.ready == Ready::Rebuild && folder_has(g->config.exefs, "main") &&
+                 folder_has(g->config.romfs, "Shader"))
+            g->page = PageFiles, start_setup();
+    }
     const bool lobby_tour=std::getenv("NX_LAN_LOBBY_TOUR")!=nullptr;
     if(lobby_tour) open_lan();
     // Isolated native QA only: show the real profile manager and quit after 120 UI frames.
@@ -1475,7 +1863,7 @@ void run() {
         if (tour) {
             g->follow_hold = 2;  // the tour owns the page even while a sidebar item has keyboard focus
             const int step = int(frames / uint64_t(tour));
-            if (step < kPages - 1) g->page = step;  // (not Quit)
+            if (step < kPages - 1) g->page = kNavigation[step];  // (not Quit)
             if (step >= kPages - 1 && step < kPages - 1 + 5)
                 g->page = PageSettings, overlay::open_settings(step - (kPages - 1));
             if (step == kPages - 1 + 5) {  // the setup card at 62%, its sheen sweeping

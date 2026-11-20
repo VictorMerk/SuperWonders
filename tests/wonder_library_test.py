@@ -57,7 +57,9 @@ class LibraryTests(unittest.TestCase):
     def test_debug_and_lan_session_overrides_do_not_leak_into_normal_launch(self):
         transient = {'NX_HEADLESS': '1', 'NX_INPUT_SCRIPT': '0:A:9', 'NX_LAN_LOBBY_AUTOSTART': 'host',
                      'NX_LAN_CODE': 'test', 'NX_PROFILE_MANAGER_TOUR': '1', 'NX_FRAMEGEN_PROBE': '1',
-                     'NX_FRAMETRACE': 'wrong.csv'}
+                     'NX_FRAMETRACE': 'wrong.csv', 'NX_NATIVE_LAN':'1', 'NX_NATIVE_NET_TRACE':'1',
+                     'NX_STEAM_DEV':'1', 'NX_STEAM_API_LIBRARY':'wrong.dll', 'SteamAppId':'480',
+                     'SteamGameId':'480', 'NX_CONTROLS_TOUR_SECTION':'1', 'NX_PIPELINE_MISS_TRACE':'wrong.csv'}
         with patch.dict(os.environ, transient | {'NX_FRAMEGEN': '1', 'NX_GPU': 'chosen'}):
             _, _, env = launch_spec(self.config, 'original')
         for name in transient:

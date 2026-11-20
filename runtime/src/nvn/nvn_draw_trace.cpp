@@ -18,9 +18,18 @@ namespace nx::nvn::replay {
 
 using namespace nx::vk;
 
-bool trace_capture() {
-    static const bool enabled = std::getenv("NX_TRACE_REQUEST") != nullptr;
-    if (!enabled) return false;
+namespace {
+bool trace_requests_enabled() {
+    static const bool enabled = std::getenv("NX_TRACE_REQUEST") != nullptr ||
+                                std::getenv("NX_TRACE_SHADOW_REQUEST") != nullptr;
+    return enabled;
+}
+// Replay-thread state, advanced only when a valid explicit request is consumed.
+uint64_t trace_request_serial = 0;
+}
+
+static bool trace_request_window() {
+    if (!trace_requests_enabled()) return false;
     static uint64_t checked = UINT64_MAX, until = 0;
     if (checked != g_frame) {
         checked = g_frame;
@@ -33,12 +42,20 @@ bool trace_capture() {
             std::filesystem::remove(std::filesystem::u8path(path), ec);
             if (valid && frames) {
                 until = g_frame + std::min(frames, 6u);
+                ++trace_request_serial;
                 log("nvn: bounded trace capture frames %llu..%llu", (unsigned long long)g_frame,
                     (unsigned long long)(until-1));
             }
         }
     }
     return g_frame < until;
+}
+
+bool trace_capture() {
+    // Shadow-only requests share the bounded trigger without enabling the much
+    // larger command/pass trace, which can obscure a motion-dependent defect.
+    static const bool commands = std::getenv("NX_TRACE_REQUEST") != nullptr;
+    return commands && trace_request_window();
 }
 
 namespace {
@@ -251,7 +268,7 @@ void frame_sig_draw(const Targets& t, bool indexed, uint32_t count, uint32_t ins
             if (img && img->rendered && watch.find('+') != std::string::npos) s += explain_texture_slot(handles[k]);
         }
         for (int n = 0; n < 18; n++)
-            if (const Range& r = g_state.uniforms[4][n]; r.address && r.size)
+            if (const Range& r = g_state.uniforms[1][n]; r.address && r.size)
                 if (const uint8_t* p = guest_bytes(r.address)) {
                     char b[64];
                     std::snprintf(b, sizeof b, " c%d=%llx:%08x", n, (unsigned long long)r.address,
@@ -267,7 +284,7 @@ void frame_sig_draw(const Targets& t, bool indexed, uint32_t count, uint32_t ins
     g_sig.keys[k]++;
     // Uniform blocks of the vertex and fragment stages: all zeros, or rewritten between their first use in the frame
     // and its present (a block caught while the game rewrites it).
-    for (int st : {0, 4})
+    for (int st : {0, 1})
         for (int n = 0; n < 18; n++)
             if (const Range& r = g_state.uniforms[st][n]; r.address && r.size >= 16 && !g_sig.blocks.count(r.address))
                 if (const uint8_t* p = guest_bytes(r.address)) {
@@ -282,7 +299,7 @@ void frame_sig_draw(const Targets& t, bool indexed, uint32_t count, uint32_t ins
     if (indexed || count > 6 || instances != 1 || g_sig.passes.size() > 2000) return;
     uint32_t u = 2166136261u;
     for (int n = 0; n < 18; n++)
-        if (const Range& r = g_state.uniforms[4][n]; r.address && r.size)
+        if (const Range& r = g_state.uniforms[1][n]; r.address && r.size)
             if (const uint8_t* p = guest_bytes(r.address)) u = fnv(u, p, std::min<uint64_t>(r.size, 4096));
     char b[64];
     std::snprintf(b, sizeof b, " %.6s>%llx:%08x", fs ? fs->hash.c_str() : "-",
@@ -406,7 +423,30 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
     static const bool trace_shadow_aux = std::getenv("NX_TRACE_SHADOW_AUX") != nullptr;
     static unsigned shadow_aux_logs = 0;
     static std::map<std::pair<uint64_t, uint64_t>, std::string> shadow_aux_writers;
-    if (trace_shadow_aux) {
+    static const bool trace_shadows = std::getenv("NX_TRACE_SHADOWS") != nullptr;
+    static const char* shadow_fs_filter = std::getenv("NX_TRACE_SHADOW_FS");
+    static const bool shadow_bindings = std::getenv("NX_TRACE_SHADOW_BINDINGS") != nullptr;
+    static std::set<std::string> shadow_seen;
+    static std::set<std::string> shadow_inputs_seen;
+    static unsigned shadow_logs = 0;
+    static unsigned shadow_input_logs = 0;
+    static const bool trace_shadow_writes = std::getenv("NX_TRACE_SHADOW_WRITES") != nullptr;
+    static std::set<std::string> shadow_write_seen;
+    static unsigned shadow_write_logs = 0;
+    // With NX_TRACE_REQUEST, preserve the first-use budgets until the actual
+    // scene is requested. Each accepted request gets fresh, bounded budgets.
+    // Without it, the historical environment-only diagnostic behavior remains.
+    const bool shadow_window = !trace_requests_enabled() || trace_request_window();
+    static uint64_t shadow_request_serial = 0;
+    if (trace_requests_enabled() && shadow_window && shadow_request_serial != trace_request_serial) {
+        shadow_request_serial = trace_request_serial;
+        shadow_aux_logs = shadow_logs = shadow_input_logs = shadow_write_logs = 0;
+        shadow_aux_writers.clear();
+        shadow_seen.clear();
+        shadow_inputs_seen.clear();
+        shadow_write_seen.clear();
+    }
+    if (trace_shadow_aux && shadow_window) {
         for (uint32_t k = 0; k < t.color_count && k < 8; ++k) {
             Texture* target_texture = t.colors[k] ? get<Texture>(t.colors[k]) : nullptr;
             GpuImage* target_image = t.colors[k] ? image_of(t.colors[k]) : nullptr;
@@ -423,7 +463,7 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
             shadow_aux_writers[{target_texture->pool, target_texture->offset}] = writer;
         }
     }
-    if (trace_shadow_aux && vs && fs && vs->hash == "f11da12dbf3ab8e2" &&
+    if (trace_shadow_aux && shadow_window && vs && fs && vs->hash == "f11da12dbf3ab8e2" &&
         fs->hash == "1872caa47df3cd7a" && shadow_aux_logs < 128) {
         shadow_aux_logs++;
         const Range& u = g_state.uniforms[1][0];
@@ -454,12 +494,9 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
     }
     // NX_TRACE_SHADOWS=1: log each distinct draw that samples a depth-compare texture. This is useful for
     // correlating shadow sampling with the internally scaled render target, without dumping every draw every frame.
-    static const bool trace_shadows = std::getenv("NX_TRACE_SHADOWS") != nullptr;
-    static std::set<std::string> shadow_seen;
-    static std::set<std::string> shadow_inputs_seen;
-    static unsigned shadow_logs = 0;
-    static unsigned shadow_input_logs = 0;
-    if (trace_shadows && vs && fs && shadow_logs < 512) {
+    const bool shadow_fs_matches = !shadow_fs_filter || !*shadow_fs_filter ||
+                                  (fs && std::strstr(shadow_fs_filter, fs->hash.c_str()));
+    if (trace_shadows && shadow_window && shadow_fs_matches && vs && fs && shadow_logs < 512) {
         GpuImage* target = t.color_count && t.colors[0] ? image_of(t.colors[0]) : nullptr;
         GpuImage* depth = t.depth ? image_of(t.depth) : nullptr;
         for (size_t k = 0; k < tex_bindings.size() && k < handles.size() && shadow_logs < 512; k++) {
@@ -500,6 +537,11 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
                 depth ? depth->height : 0, depth ? depth->render_scale : 1.0f, g_state.viewport[0], g_state.viewport[1],
                 g_state.viewport[2], g_state.viewport[3], g_state.depth.depth_test, g_state.depth.depth_write,
                 g_state.depth.depth_func, g_state.bias_factor, g_state.bias_units, g_state.bias_clamp);
+            if (shadow_bindings)
+                log("shadow-binding frame %llu draw %llu fs %s slot %u handle %llx image-rendered %u serial %llu epoch %s",
+                    (unsigned long long)g_frame.load(), (unsigned long long)g_stats.done, fs->hash.c_str(),
+                    binding->binding, (unsigned long long)handles[k], image && image->rendered ? 1u : 0u,
+                    (unsigned long long)(image ? image->rendered_at : 0), explain_texture_slot(handles[k]).c_str());
             // Include the other sampled images used by a shadow-receiving pass: screen-space data can be scaled
             // independently of the depth map, and a mismatched auxiliary texture can displace/flicker shadows.
             for (size_t j = 0; j < tex_bindings.size() && j < handles.size() && shadow_input_logs < 4096; j++) {
@@ -544,10 +586,7 @@ void trace_draw(const Targets& t, uint32_t mode, bool indexed, const Cmd& c, con
     }
     // NX_TRACE_SHADOW_WRITES=1: inspect the depth-only square targets that produce shadow maps.
     // Receiver traces alone cannot expose a bad viewport or scale while the maps are rendered.
-    static const bool trace_shadow_writes = std::getenv("NX_TRACE_SHADOW_WRITES") != nullptr;
-    static std::set<std::string> shadow_write_seen;
-    static unsigned shadow_write_logs = 0;
-    if (trace_shadow_writes && t.depth && shadow_write_logs < 256) {
+    if (trace_shadow_writes && shadow_window && t.depth && shadow_write_logs < 256) {
         GpuImage* depth = image_of(t.depth);
         Texture* depth_texture = get<Texture>(t.depth);
         if (depth && depth->logical_width >= 256 && depth->logical_height >= 256 &&

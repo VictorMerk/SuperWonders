@@ -1,5 +1,6 @@
 // A small native, translucent quick-settings panel owned by the game window.
 #include "pc_menu_win.h"
+#include "pc_menu_layout.h"
 
 #include <algorithm>
 #include <atomic>
@@ -12,15 +13,16 @@
 namespace nx::plat {
 namespace {
 
-constexpr int kWidth = 560;
-constexpr int kHeight = 620;
+constexpr int kWidth = menu_layout::width;
+constexpr int kHeight = menu_layout::height;
+constexpr int kContentOffset = (kWidth-560)/2;
 constexpr int kSliderLeft = 58;
 constexpr int kSliderRight = 502;
 constexpr int kSliderY = 218;
 constexpr int kTabTop = 83;
 constexpr int kTabBottom = 123;
-constexpr int kLanguageLeft = 382;
-constexpr int kLanguageRight = 526;
+constexpr int kLanguageLeft = kWidth-184;
+constexpr int kLanguageRight = kWidth-32;
 constexpr int kLanguageTop = 31;
 constexpr int kLanguageBottom = 66;
 constexpr int kLanguageItemHeight = 27;
@@ -44,7 +46,8 @@ constexpr const wchar_t* kLanguageNames[] = {L"English", L"Italiano", L"Deutsch"
 constexpr const wchar_t* kGameLanguageNames[] = {
     L"English", L"Italiano", L"Deutsch", L"Français", L"Português (Brasil)", L"Español", L"한국어", L"日本語",
     L"Nederlands", L"Русский", L"Simplified Chinese", L"Traditional Chinese"};
-constexpr int kGameLanguageItemHeight = 20;
+constexpr int kGameLanguageItemHeight = 30;
+constexpr int kGameLanguageListTop = 188;
 constexpr int kFrameCaps[] = {30, 60, 90, 120, 144};
 
 struct Labels {
@@ -176,6 +179,8 @@ bool g_game_language_dropdown = false;
 bool g_overlay_position_dropdown = false;
 CaptureDevice g_capture_device = CaptureDevice::None;
 int g_capture_action = -1;
+int g_controls_page = 0;
+int g_keyboard_focus = -1;
 constexpr UINT kCaptureControllerMessage = WM_APP + 41;
 
 const Labels& labels() { return kLabels[std::clamp(g_state.language, 0, 12)]; }
@@ -290,44 +295,51 @@ void paint_audio(HDC dc) {
 
 void paint_controls(HDC dc) {
     const wchar_t* presets[] = {L"Xbox / PS Cross", L"Nintendo", L"PS Circle"};
-    for (int i = 0; i < 3; ++i) {
-        const int left = 44+i*160;
-        const bool selected = g_state.controller_preset == i;
-        rounded(dc, RECT{left,143,left+152,173}, selected ? RGB(43,70,105) : RGB(35,43,61),
-                selected ? RGB(102,174,255) : RGB(68,81,105),8);
-        paint_text(dc,presets[i],RECT{left,143,left+152,173},RGB(238,243,252),12,DT_CENTER);
+    for(int i=0;i<3;++i) {
+        const int left=32+i*222;
+        const bool selected=g_state.controller_preset==i;
+        rounded(dc,RECT{left,144,left+212,186},selected?RGB(43,70,105):RGB(35,43,61),
+                selected?RGB(102,174,255):RGB(68,81,105),8);
+        paint_text(dc,presets[i],RECT{left+8,144,left+204,186},RGB(238,243,252),15,DT_CENTER);
     }
-    const int language = std::clamp(g_state.language, 0, 12);
-    paint_text(dc, kControlHeaders[language][0], RECT{155, 177, 327, 198}, RGB(177, 194, 218), 12, DT_CENTER);
-    paint_text(dc, kControlHeaders[language][1], RECT{331, 177, 515, 198}, RGB(177, 194, 218), 12, DT_CENTER);
-    for (size_t i = 0; i < kPcControlCount; ++i) {
-        const int top = 200 + int(i) * 22;
-        if (i & 1) fill(dc, RECT{38, top, 522, top + 21}, RGB(27, 34, 49));
-        paint_text(dc, kControlActions[i], RECT{46, top, 148, top + 21}, RGB(218, 227, 241), 13);
-
-        const bool capture_key = g_capture_device == CaptureDevice::Keyboard && g_capture_action == int(i);
-        rounded(dc, RECT{155, top + 1, 327, top + 20}, capture_key ? RGB(70, 55, 35) : RGB(35, 43, 61),
-                capture_key ? RGB(255, 190, 105) : RGB(68, 81, 105), 5);
-        wchar_t key_name[64] = L"Unbound";
-        if (capture_key) {
-            wcscpy_s(key_name, L"Press a key... (Esc cancels)");
-        } else if (g_state.keyboard_bindings[i] > 0) {
-            const UINT scan = MapVirtualKeyW(UINT(g_state.keyboard_bindings[i]), MAPVK_VK_TO_VSC);
-            if (!GetKeyNameTextW(LONG(scan << 16), key_name, int(std::size(key_name))))
-                std::swprintf(key_name, std::size(key_name), L"Key %d", g_state.keyboard_bindings[i]);
+    const int language=std::clamp(g_state.language,0,12);
+    paint_text(dc,kControlHeaders[language][0],RECT{210,199,434,225},RGB(177,194,218),14,DT_CENTER);
+    paint_text(dc,kControlHeaders[language][1],RECT{448,199,688,225},RGB(177,194,218),14,DT_CENTER);
+    for(int row=0;row<menu_layout::binding_rows;++row) {
+        const int i=g_controls_page*menu_layout::binding_rows+row;
+        const int top=menu_layout::binding_top+row*menu_layout::binding_stride;
+        const int bottom=top+menu_layout::binding_height;
+        if(row&1) fill(dc,RECT{28,top-2,692,bottom+2},RGB(27,34,49));
+        paint_text(dc,kControlActions[i],RECT{40,top,200,bottom},RGB(218,227,241),15);
+        const bool key=g_capture_device==CaptureDevice::Keyboard&&g_capture_action==i;
+        rounded(dc,RECT{210,top,434,bottom},key?RGB(70,55,35):RGB(35,43,61),
+                key?RGB(255,190,105):g_keyboard_focus==i*2?RGB(102,174,255):RGB(68,81,105),7);
+        wchar_t key_name[64]=L"Unbound";
+        if(key) wcscpy_s(key_name,L"Press a key...");
+        else if(g_state.keyboard_bindings[i]>0) {
+            const UINT scan=MapVirtualKeyW(UINT(g_state.keyboard_bindings[i]),MAPVK_VK_TO_VSC);
+            if(!GetKeyNameTextW(LONG(scan<<16),key_name,int(std::size(key_name))))
+                std::swprintf(key_name,std::size(key_name),L"Key %d",g_state.keyboard_bindings[i]);
         }
-        paint_text(dc, key_name, RECT{159, top + 1, 323, top + 20}, RGB(235, 241, 251), 12, DT_CENTER);
-
-        const bool capture_pad = g_capture_device == CaptureDevice::Controller && g_capture_action == int(i);
-        rounded(dc, RECT{331, top + 1, 515, top + 20}, capture_pad ? RGB(70, 55, 35) : RGB(35, 43, 61),
-                capture_pad ? RGB(255, 190, 105) : RGB(68, 81, 105), 5);
-        const int binding = (g_state.controller_custom_mask & (1u << i))
-                                ? g_state.controller_bindings[i]
-                                : pc_default_controller_binding(i, g_state.controller_preset);
-        const wchar_t* pad_name = capture_pad ? L"Press a button..." :
-                                  binding >= 0 && binding < int(kPcControlCount) ? kPhysicalNames[binding] : L"Unbound";
-        paint_text(dc, pad_name, RECT{335, top + 1, 511, top + 20}, RGB(235, 241, 251), 12, DT_CENTER);
+        paint_text(dc,key_name,RECT{220,top,424,bottom},RGB(235,241,251),14,DT_CENTER);
+        const bool pad=g_capture_device==CaptureDevice::Controller&&g_capture_action==i;
+        rounded(dc,RECT{448,top,688,bottom},pad?RGB(70,55,35):RGB(35,43,61),
+                pad?RGB(255,190,105):g_keyboard_focus==i*2+1?RGB(102,174,255):RGB(68,81,105),7);
+        const int binding=(g_state.controller_custom_mask&(1u<<i))?g_state.controller_bindings[i]:
+            pc_default_controller_binding(i,g_state.controller_preset);
+        const wchar_t* pad_name=pad?L"Press a button...":
+            binding>=0&&binding<int(kPcControlCount)?kPhysicalNames[binding]:L"Unbound";
+        paint_text(dc,pad_name,RECT{458,top,678,bottom},RGB(235,241,251),14,DT_CENTER);
     }
+    rounded(dc,RECT{32,564,212,604},RGB(35,43,61),RGB(68,81,105),8);
+    rounded(dc,RECT{508,564,688,604},RGB(35,43,61),RGB(68,81,105),8);
+    paint_text(dc,L"<",RECT{32,564,212,604},RGB(235,241,251),20,DT_CENTER);
+    paint_text(dc,L">",RECT{508,564,688,604},RGB(235,241,251),20,DT_CENTER);
+    wchar_t page[40];std::swprintf(page,std::size(page),L"%d / 2",g_controls_page+1);
+    paint_text(dc,page,RECT{230,564,490,604},RGB(177,194,218),15,DT_CENTER);
+    // Keep the existing localized close instruction visible during capture too.
+    paint_text(dc,g_capture_device==CaptureDevice::None?labels().control_preset:labels().close,
+               RECT{40,608,680,630},RGB(155,169,192),12,DT_CENTER);
 }
 
 void paint_overlay_toggle(HDC dc, RECT r, int label_index, bool active) {
@@ -403,12 +415,23 @@ void paint_system(HDC dc) {
 
 void paint(HWND h) {
     PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(h, &ps);
+    HDC output = BeginPaint(h, &ps);
+    RECT client{};GetClientRect(h,&client);
+    HDC dc=CreateCompatibleDC(output);
+    HBITMAP bitmap=CreateCompatibleBitmap(output,std::max(1L,client.right),std::max(1L,client.bottom));
+    if(!dc||!bitmap) {
+        if(dc)DeleteDC(dc);if(bitmap)DeleteObject(bitmap);
+        EndPaint(h,&ps);return;
+    }
+    const auto previous=SelectObject(dc,bitmap);
+    SetMapMode(dc,MM_ANISOTROPIC);
+    SetWindowExtEx(dc,kWidth,kHeight,nullptr);
+    SetViewportExtEx(dc,std::max(1L,client.right),std::max(1L,client.bottom),nullptr);
     fill(dc, RECT{0, 0, kWidth, kHeight}, RGB(20, 25, 38));
     rounded(dc, RECT{10, 10, kWidth - 10, kHeight - 10}, RGB(24, 30, 45), RGB(70, 82, 105), 18);
 
     const Labels& text = labels();
-    paint_text(dc, text.title, RECT{32, 26, 365, 68}, RGB(245, 247, 255), 24);
+    paint_text(dc, text.title, RECT{32, 26, kLanguageLeft-16, 68}, RGB(245, 247, 255), 24);
     rounded(dc, RECT{kLanguageLeft, kLanguageTop, kLanguageRight, kLanguageBottom}, RGB(35, 43, 61), RGB(92, 108, 136));
     paint_text(dc, kLanguageNames[std::clamp(g_state.language, 0, 12)],
                RECT{kLanguageLeft + 8, kLanguageTop, kLanguageRight - 28, kLanguageBottom}, RGB(238, 243, 252), 14,
@@ -416,19 +439,21 @@ void paint(HWND h) {
     paint_text(dc, g_language_dropdown ? L"▴" : L"▾", RECT{kLanguageRight - 28, kLanguageTop,
                kLanguageRight - 6, kLanguageBottom}, RGB(238, 243, 252), 14, DT_CENTER);
 
-    paint_tab(dc, RECT{12, kTabTop, 116, kTabBottom}, text.video, g_section == Section::Video);
-    paint_tab(dc, RECT{120, kTabTop, 224, kTabBottom}, text.audio, g_section == Section::Audio);
-    paint_tab(dc, RECT{228, kTabTop, 332, kTabBottom}, text.controls, g_section == Section::Controls);
-    paint_tab(dc, RECT{336, kTabTop, 440, kTabBottom}, text.overlay, g_section == Section::Overlay);
-    paint_tab(dc, RECT{444, kTabTop, 548, kTabBottom}, text.system, g_section == Section::System);
+    const wchar_t* tabs[]={text.video,text.audio,text.controls,text.overlay,text.system};
+    for(int tab=0;tab<5;++tab)
+        paint_tab(dc,RECT{12+tab*140,kTabTop,148+tab*140,kTabBottom},tabs[tab],int(g_section)==tab);
 
+    const int content_dc=SaveDC(dc);
+    if(g_section!=Section::Controls)SetWindowOrgEx(dc,-kContentOffset,0,nullptr);
     if (g_section == Section::Video) paint_video(dc);
     else if (g_section == Section::Audio) paint_audio(dc);
     else if (g_section == Section::Controls) paint_controls(dc);
     else if (g_section == Section::Overlay) paint_overlay(dc);
     else paint_system(dc);
+    RestoreDC(dc,content_dc);
 
-    paint_text(dc, text.close, RECT{35, 586, 525, 608}, RGB(140, 154, 177), 12, DT_CENTER);
+    rounded(dc,RECT{32,638,kWidth-32,666},RGB(35,43,61),RGB(68,81,105),8);
+    paint_text(dc,text.close,RECT{40,638,kWidth-40,666},RGB(180,194,216),14,DT_CENTER);
 
     if (g_language_dropdown) {
         for (int i = 0; i < int(std::size(kLanguageNames)); ++i) {
@@ -440,6 +465,7 @@ void paint(HWND h) {
         }
     }
     if (g_overlay_position_dropdown && g_section == Section::Overlay) {
+        const int saved=SaveDC(dc);SetWindowOrgEx(dc,-kContentOffset,0,nullptr);
         const int language = std::clamp(g_state.language, 0, 12);
         for (int i = 0; i < 4; ++i) {
             const int top = 472 + i * 27;
@@ -448,25 +474,51 @@ void paint(HWND h) {
             paint_text(dc, kOverlayPositions[language][i], RECT{52, top, 508, top + 27}, RGB(238, 243, 252), 13,
                        DT_CENTER);
         }
+        RestoreDC(dc,saved);
     }
     if (g_game_language_dropdown && g_section == Section::Audio) {
+        const int saved=SaveDC(dc);SetWindowOrgEx(dc,-kContentOffset,0,nullptr);
         for (int i = 0; i < int(std::size(kGameLanguageNames)); ++i) {
-            const int top = 386 + i * kGameLanguageItemHeight;
+            const int top = kGameLanguageListTop + i * kGameLanguageItemHeight;
             rounded(dc, RECT{44, top, 516, top + kGameLanguageItemHeight},
                     i == g_state.game_language ? RGB(52, 84, 126) : RGB(35, 43, 61), RGB(92, 108, 136), 6);
             paint_text(dc, kGameLanguageNames[i], RECT{52, top, 508, top + kGameLanguageItemHeight},
                        RGB(238, 243, 252), 14, DT_CENTER | DT_VCENTER);
         }
+        RestoreDC(dc,saved);
     }
+    SetMapMode(dc,MM_TEXT);
+    BitBlt(output,0,0,client.right,client.bottom,dc,0,0,SRCCOPY);
+    SelectObject(dc,previous);DeleteObject(bitmap);DeleteDC(dc);
     EndPaint(h, &ps);
 }
 
 void set_controller_preset(int preset) {
+    g_capture_device = CaptureDevice::None; g_capture_action = -1;
     g_state.controller_preset = std::clamp(preset, 0, 2);
     // Selecting a preset resets custom mappings; rows can be customized again afterward.
     g_state.controller_custom_mask = 0;
     g_controller_preset.store(g_state.controller_preset, std::memory_order_relaxed);
     notify(true);
+}
+
+POINT menu_point(HWND h,LPARAM l) {
+    RECT client{};GetClientRect(h,&client);
+    return {menu_layout::logical(GET_X_LPARAM(l),client.right,kWidth),
+            menu_layout::logical(GET_Y_LPARAM(l),client.bottom,kHeight)};
+}
+
+void position_menu() {
+    if(!g_menu||!g_owner)return;
+    RECT owner{};GetWindowRect(g_owner,&owner);
+    MONITORINFO monitor{sizeof(monitor)};
+    if(!GetMonitorInfoW(MonitorFromWindow(g_owner,MONITOR_DEFAULTTONEAREST),&monitor))return;
+    using Dpi=UINT(WINAPI*)(HWND);
+    static const auto dpi=reinterpret_cast<Dpi>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetDpiForWindow"));
+    const auto p=menu_layout::place({int(owner.left),int(owner.top),int(owner.right),int(owner.bottom)},
+        {int(monitor.rcWork.left),int(monitor.rcWork.top),int(monitor.rcWork.right),int(monitor.rcWork.bottom)},
+        dpi?dpi(g_owner):96);
+    SetWindowPos(g_menu,HWND_TOP,p.x,p.y,p.width,p.height,SWP_SHOWWINDOW);
 }
 
 void close_menu() {
@@ -476,6 +528,7 @@ void close_menu() {
     g_overlay_position_dropdown = false;
     g_capture_device = CaptureDevice::None;
     g_capture_action = -1;
+    if(g_dragging_volume)ReleaseCapture();
     if (g_menu) ShowWindow(g_menu, SW_HIDE);
     if (g_owner) SetForegroundWindow(g_owner);
 }
@@ -498,6 +551,10 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             return 0;
         case WM_ERASEBKGND:
             return 1;
+        case WM_SIZE:
+            InvalidateRect(h,nullptr,FALSE);return 0;
+        case WM_DPICHANGED:
+            position_menu();return 0;
         case WM_KEYDOWN:
             if (g_capture_device == CaptureDevice::Keyboard && g_capture_action >= 0) {
                 if (w == VK_ESCAPE) {
@@ -512,9 +569,34 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
                 }
                 return 0;
             }
+            if(w==VK_ESCAPE&&(g_capture_device!=CaptureDevice::None||g_language_dropdown||
+               g_game_language_dropdown||g_overlay_position_dropdown)) {
+                g_capture_device=CaptureDevice::None;g_capture_action=-1;
+                g_language_dropdown=g_game_language_dropdown=g_overlay_position_dropdown=false;
+                InvalidateRect(h,nullptr,FALSE);return 0;
+            }
             if (w == VK_F1 || w == VK_ESCAPE) {
                 close_menu();
                 return 0;
+            }
+            if(g_capture_device!=CaptureDevice::None)return 0;
+            if(w==VK_TAB&&(GetKeyState(VK_CONTROL)&0x8000)) {
+                g_section=Section((int(g_section)+((GetKeyState(VK_SHIFT)&0x8000)?4:1))%5);
+                g_language_dropdown=g_game_language_dropdown=g_overlay_position_dropdown=false;
+                g_keyboard_focus=-1;InvalidateRect(h,nullptr,FALSE);return 0;
+            }
+            if(g_section==Section::Controls) {
+                if(w==VK_PRIOR||w==VK_NEXT) {
+                    g_controls_page=1-g_controls_page;g_keyboard_focus=g_controls_page*16;
+                } else if(w==VK_TAB||w==VK_UP||w==VK_DOWN) {
+                    const int step=w==VK_UP?-2:w==VK_DOWN?2:(GetKeyState(VK_SHIFT)&0x8000)?-1:1;
+                    g_keyboard_focus=g_keyboard_focus<0?(step<0?31:0):(g_keyboard_focus+step+32)%32;
+                    g_controls_page=g_keyboard_focus/16;
+                } else if((w==VK_RETURN||w==VK_SPACE)&&g_keyboard_focus>=0) {
+                    g_capture_action=g_keyboard_focus/2;
+                    g_capture_device=g_keyboard_focus%2?CaptureDevice::Controller:CaptureDevice::Keyboard;
+                } else break;
+                InvalidateRect(h,nullptr,FALSE);return 0;
             }
             break;
         case WM_SYSKEYDOWN:
@@ -527,16 +609,18 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             }
             break;
         case WM_LBUTTONDOWN: {
-            const int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
-            if (g_overlay_position_dropdown && g_section == Section::Overlay && x >= 44 && x <= 516 && y >= 472 && y < 580) {
+            const auto point=menu_point(h,l);
+            int x=point.x;const int y=point.y;
+            g_keyboard_focus=-1;
+            if (g_overlay_position_dropdown && g_section == Section::Overlay && x >= 44+kContentOffset && x <= 516+kContentOffset && y >= 472 && y < 580) {
                 g_state.overlay_position = (y - 472) / 27;
                 g_overlay_position_dropdown = false;
                 notify(true);
                 return 0;
             }
-            if (g_game_language_dropdown && g_section == Section::Audio && x >= 44 && x <= 516 && y >= 386 &&
-                y < 386 + int(std::size(kGameLanguageNames)) * kGameLanguageItemHeight) {
-                g_state.game_language = (y - 386) / kGameLanguageItemHeight;
+            if (g_game_language_dropdown && g_section == Section::Audio && x >= 44+kContentOffset && x <= 516+kContentOffset && y >= kGameLanguageListTop &&
+                y < kGameLanguageListTop + int(std::size(kGameLanguageNames)) * kGameLanguageItemHeight) {
+                g_state.game_language = (y - kGameLanguageListTop) / kGameLanguageItemHeight;
                 g_game_language_dropdown = false;
                 notify(true);
                 return 0;
@@ -550,33 +634,53 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             }
             if (x >= kLanguageLeft && x <= kLanguageRight && y >= kLanguageTop && y <= kLanguageBottom) {
                 g_language_dropdown = !g_language_dropdown;
+                g_game_language_dropdown=g_overlay_position_dropdown=false;
                 InvalidateRect(h, nullptr, FALSE);
                 return 0;
             }
             if (g_language_dropdown) {
                 g_language_dropdown = false;
                 InvalidateRect(h, nullptr, FALSE);
+                return 0;
             }
-            if (g_game_language_dropdown && !(g_section == Section::Audio && y >= 340 && y <= 384)) {
+            if (g_game_language_dropdown && !(g_section == Section::Audio && y >= 340 && y <= 384 &&
+                x>=44+kContentOffset&&x<=516+kContentOffset)) {
                 g_game_language_dropdown = false;
                 InvalidateRect(h, nullptr, FALSE);
+                return 0;
             }
-            if (g_overlay_position_dropdown && !(g_section == Section::Overlay && y >= 426 && y <= 470)) {
+            if (g_overlay_position_dropdown && !(g_section == Section::Overlay && y >= 426 && y <= 470 &&
+                x>=44+kContentOffset&&x<=516+kContentOffset)) {
                 g_overlay_position_dropdown = false;
                 InvalidateRect(h, nullptr, FALSE);
+                return 0;
             }
             if (y >= kTabTop && y <= kTabBottom) {
-                if (x >= 12 && x <= 116) g_section = Section::Video;
-                else if (x >= 120 && x <= 224) g_section = Section::Audio;
-                else if (x >= 228 && x <= 332) g_section = Section::Controls;
-                else if (x >= 336 && x <= 440) g_section = Section::Overlay;
-                else if (x >= 444 && x <= 548) g_section = Section::System;
+                if(x>=12&&x<708&&(x-12)%140<136)g_section=Section((x-12)/140);
                 g_capture_device = CaptureDevice::None;
                 g_capture_action = -1;
                 g_game_language_dropdown = false;
                 InvalidateRect(h, nullptr, FALSE);
                 return 0;
             }
+            if(y>=638&&y<=666&&x>=32&&x<=kWidth-32){close_menu();return 0;}
+            if(g_section==Section::Controls) {
+                if(y>=144&&y<=186&&x>=32&&x<688&&(x-32)%222<212)
+                    set_controller_preset((x-32)/222);
+                else if(y>=564&&y<=604&&((x>=32&&x<=212)||(x>=508&&x<=688))) {
+                    g_controls_page=1-g_controls_page;
+                    g_capture_device=CaptureDevice::None;g_capture_action=-1;
+                } else {
+                    const int action=menu_layout::binding_at(y,g_controls_page);
+                    if(action>=0&&((x>=210&&x<=434)||(x>=448&&x<=688))) {
+                        g_capture_action=action;
+                        g_capture_device=x<448?CaptureDevice::Keyboard:CaptureDevice::Controller;
+                    }
+                }
+                InvalidateRect(h,nullptr,FALSE);return 0;
+            }
+            x-=kContentOffset;
+            if(x<44||x>516)return 0;
             if (g_section == Section::System && y >= 183 && y <= 215 && x >= 416 && x <= 504) {
                 g_state.memory_limit_gb = memory_limit_choice(g_state.memory_limit_gb, x < 460 ? -1 : 1);
                 notify(true);
@@ -639,27 +743,17 @@ LRESULT CALLBACK menu_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
             } else if (g_section == Section::Audio && y >= 340 && y <= 384) {
                 g_game_language_dropdown = !g_game_language_dropdown;
                 InvalidateRect(h, nullptr, FALSE);
-            } else if (g_section == Section::Controls && y >= 143 && y <= 173 && x >= 44 && x <= 516) {
-                const int preset = (x-44)/160;
-                if ((x-44)%160 <= 152) set_controller_preset(preset);
-            } else if (g_section == Section::Controls && y >= 200 && y < 552) {
-                const int action = (y - 200) / 22;
-                if (action >= 0 && action < int(kPcControlCount) && x >= 155 && x <= 327) {
-                    g_capture_action = action;
-                    g_capture_device = CaptureDevice::Keyboard;
-                    InvalidateRect(h, nullptr, FALSE);
-                } else if (action >= 0 && action < int(kPcControlCount) && x >= 331 && x <= 515) {
-                    g_capture_action = action;
-                    g_capture_device = CaptureDevice::Controller;
-                    InvalidateRect(h, nullptr, FALSE);
-                }
-            } else if (y >= 586) {
-                close_menu();
             }
             return 0;
         }
         case WM_MOUSEMOVE:
-            if (g_dragging_volume) set_volume_from_x(GET_X_LPARAM(l));
+            if (g_dragging_volume) set_volume_from_x(menu_point(h,l).x-kContentOffset);
+            return 0;
+        case WM_MOUSEWHEEL:
+            if(g_section==Section::Controls&&g_capture_device==CaptureDevice::None) {
+                g_controls_page=1-g_controls_page;g_keyboard_focus=-1;
+                InvalidateRect(h,nullptr,FALSE);
+            }
             return 0;
         case WM_LBUTTONUP:
             if (g_dragging_volume) {
@@ -709,11 +803,7 @@ void pc_menu_toggle() {
         close_menu();
         return;
     }
-    RECT owner{};
-    GetWindowRect(g_owner, &owner);
-    const int x = owner.left + ((owner.right - owner.left) - kWidth) / 2;
-    const int y = owner.top + ((owner.bottom - owner.top) - kHeight) / 2;
-    SetWindowPos(g_menu, HWND_TOP, x, y, kWidth, kHeight, SWP_SHOWWINDOW);
+    position_menu();
     g_open = true;
     SetForegroundWindow(g_menu);
     InvalidateRect(g_menu, nullptr, TRUE);

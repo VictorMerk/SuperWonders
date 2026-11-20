@@ -1,6 +1,8 @@
 // The overlay's look, shared by the menu, the metrics panel, notices and the shader-compile screen: colours, fonts,
 // style sizes and small animation helpers. Modelled on Savage Wind's menu (github.com/Revivedx/SavageWindRecomp,
-// MIT: runtime/ui/menu.mm style_init and load_fonts, runtime/ui/launcher.mm's progress card), with a sunflower and mint palette. Everything here runs on the presenting thread, inside an ImGui frame, unless it says otherwise.
+// MIT: runtime/ui/menu.mm style_init and load_fonts, runtime/ui/launcher.mm's progress card).
+// Dark Games Hub: charcoal surfaces, clear type and one cool action accent.
+// Everything here runs on the presenting thread, inside an ImGui frame, unless it says otherwise.
 #pragma once
 
 #include <cstdint>
@@ -20,7 +22,7 @@ struct Theme {
     ImU32 back_top, back_mid;  // the compile screen's backdrop
     ImU32 good, warn, bad;     // the metrics panel's numbers
 };
-const Theme& theme();  // "Flower Garden" (overlay_ui.cpp)
+const Theme& theme();  // "Dark Games Hub" (overlay_ui.cpp)
 
 // A colour with its alpha times `a` (0..1) and the style's Alpha (the menu's fade), for hand-drawn shapes.
 ImU32 fade(ImU32 c, float a = 1.0f);
@@ -34,6 +36,15 @@ ImFont* body();   // rows, text
 ImFont* title();  // headings
 // FontGlobalScale for an image `height` pixels tall: the body font at about 29 px at 1080 p.
 float font_scale(float height);
+
+// Responsive actions: width0 fits the label, negative fills available content.
+// Long labels wrap at the current font size; ##/### IDs and native ImGui
+// keyboard/controller activation are preserved. No press/focus animation.
+ImVec2 action_button_size(const char* label,float width=0.f);
+bool action_button(const char* label,float width=0.f);
+// Quiet text navigation with a selected underline; same wrapped sizing and
+// native keyboard/controller activation as action_button, no decorative motion.
+bool navigation_button(const char* label,bool selected,float width=0.f);
 
 // ---- animation ----
 // `current` moved toward `target`: about 1 - e^-1 of the way every 1/rate seconds (frame-rate independent).
@@ -61,6 +72,9 @@ struct Hint {
     const char* badge;  // null: text only
     const char* text;
 };
-void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* list, int n, float alpha = 1.0f);
+// Positive max_width wraps groups at normal font size. y is the vertical
+// center of the entire block; reserve hints_height() before positioning it.
+float hints_height(float max_width,float h,const Hint* list,int n);
+void hints(ImDrawList* dl, float centre_x, float y, float h, const Hint* list, int n, float alpha = 1.0f,float max_width=0.f);
 
 }  // namespace nx::overlay::ui

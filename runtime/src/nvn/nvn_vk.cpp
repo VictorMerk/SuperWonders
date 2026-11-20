@@ -34,6 +34,8 @@
 #include "frametrace.h"
 #include "nvn_draw_state.h"
 #include "controllers.h"
+#include "imgui.h"
+#include "overlay/controller_remapping.h"
 
 #include <nx/game.h>
 
@@ -953,6 +955,57 @@ bool overlay_input_probe() {
     }
     overlay::apply_settings(startup, false);
     if (!present_ui_frame()) return false;
+    // Exercise the real render-thread capture gate: a binding press must not
+    // also close settings or activate a focused navigation control.
+    overlay::open_settings(2);
+    if (!present_ui_frame()) return false;
+    auto& remap = overlay::controller_remap_state();
+    remap.capture = int(overlay::CtlB);
+    overlay::key_event(27, overlay::KeyEscape, true);
+    if (!present_ui_frame()) return false;
+    bool capture_ok = overlay::is_open() && remap.capture < 0;
+    overlay::key_event(27, overlay::KeyEscape, false);
+    for (uint64_t button : {plat::kB, plat::kL, plat::kR}) {
+        pad = {}; overlay::filter_pad(pad);
+        remap.capture = int(overlay::CtlB);
+        pad.buttons = button; overlay::filter_pad(pad);
+        if (!present_ui_frame()) return false;
+        capture_ok = overlay::is_open() && pad.buttons == 0 && capture_ok;
+    }
+    // Finishing a binding while B stays held must not turn that hold into a
+    // new navigation press on the next rendered frame.
+    remap.capture = int(overlay::CtlB);
+    pad = {}; overlay::filter_pad(pad);
+    pad.buttons = plat::kB; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    overlay::cancel_controller_remapping();
+    if (!present_ui_frame()) return false;
+    capture_ok = overlay::is_open() && capture_ok;
+    pad = {}; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    pad.buttons = plat::kB; overlay::filter_pad(pad);
+    if (!present_ui_frame()) return false;
+    capture_ok = !overlay::is_open() && capture_ok; // A genuinely new B may close.
+    pad = {}; overlay::filter_pad(pad);
+    overlay::open_settings(2);
+    if (!present_ui_frame()) return false;
+    overlay::cancel_controller_remapping();
+    pad = {}; overlay::filter_pad(pad);
+    remap.capture = int(overlay::CtlB);
+    overlay::toggle(); // Close and reopen without an intervening render.
+    overlay::toggle();
+    if (!present_ui_frame()) return false;
+    capture_ok = overlay::is_open() && remap.capture < 0 && capture_ok;
+    log("overlay capture gate probe: Esc cancels listening; B/L/R do not close settings: %s", capture_ok ? "PASS" : "FAIL");
+    ok = capture_ok && ok;
+    if (std::getenv("NX_OVERLAY_LAYOUT_TOUR")) {
+        for (int tab = 0; tab < 5; ++tab) {
+            overlay::open_settings(tab);
+            log("overlay layout tour: tab=%d begin", tab);
+            for (int frame = 0; frame < 24; ++frame) if (!present_ui_frame()) return false;
+        }
+    }
+    overlay::toggle();
     return ok;
 }
 

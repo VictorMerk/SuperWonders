@@ -24,7 +24,8 @@ def read(path):
                  retained_hid_reads=0, repeated_identical_hid_sample_reads=0,
                  hid_sample_payload_change_observations=0,
                  hid_samples_with_changed_payload=0,
-                 first_hid_sample_payload_change_observation=None)
+                 first_hid_sample_payload_change_observation=None,
+                 hid_commit_identity_mismatches=0, first_hid_commit_identity_mismatch=None)
 
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
         def data_lines():
@@ -66,6 +67,12 @@ def read(path):
                 previous = hid.get((player, sample))
                 sequence = int(row["sequence"]) if row.get("sequence") else None
                 tick, frame = int(row["tick"]), int(row["frame"])
+                if metadata.get("hid_identity") == "exposed_commit_plus_one" and (
+                        not 0 <= tick < (1 << 63) - 1 or sample != tick + 1):
+                    stats["hid_commit_identity_mismatches"] += 1
+                    if stats["first_hid_commit_identity_mismatch"] is None:
+                        stats["first_hid_commit_identity_mismatch"] = dict(
+                            sequence=sequence, player=player, sampling_number=sample, committed_tick=tick)
                 changed = previous[4] if previous else False
                 if previous:
                     if previous[0] == pad:
@@ -91,12 +98,20 @@ def read(path):
         raise ValueError("Application trace metadata must include seed, role and omitted")
     phase = [tick for tick, (_, values) in applied.items()
              if values[0] == "apply" and any(values[2 + p * 6] for p in range(4))]
+    atomic_hid = metadata.get("hid_identity") == "exposed_commit_plus_one"
+    if not atomic_hid:
+        stats["hid_commit_identity_mismatches"] = None
     stats.update(role=int(metadata["role"]), omitted_events=int(metadata["omitted"]),
                  applied_ticks=len(applied), duplicate_applied_ticks=duplicates,
                  gameplay_applies_with_peer_loading_marker=len(phase),
                  first_gameplay_apply_with_peer_loading_marker=min(phase, default=None),
                  retained_unique_hid_samples=len(hid),
-                 hid_observation_scope="Per-peer retained observations only. Same player/sample with changed delivered pad is a candidate inconsistency, not proof of desync. Gaps/eviction can hide changes. Callback tick is observed after pad acquisition, not atomically paired; sampling-number offsets across PCs are not compared.")
+                 hid_identity_contract="exposed_commit_plus_one" if atomic_hid else "legacy_or_unknown",
+                 hid_observation_scope=(
+                     "Per-peer retained observations only. Same player/sample with changed delivered pad is a candidate inconsistency, not proof of desync. Gaps/eviction can hide changes. " +
+                     ("This trace declares pad, committed tick, sampling identity and control metadata captured together. Sampling identity is exposed commit tick + 1; transport-only loading pumps do not publish samples. Presentation frame and log time are observed later. " if atomic_hid else
+                      "Callback tick is observed after pad acquisition, not atomically paired; legacy/unknown traces cannot establish the new input snapshot contract. ") +
+                     "Sampling-number offsets across PCs are not compared."))
     return metadata, applied, stats
 
 
@@ -118,8 +133,11 @@ def compare(left, right):
             "application_mismatches": mismatch_count, "first_application_mismatch": first,
             "left_only_retained_ticks": len(li.keys() - ri.keys()),
             "right_only_retained_ticks": len(ri.keys() - li.keys()),
+            "hid_identity_contracts_match": (
+                True if ls["hid_identity_contract"] == rs["hid_identity_contract"] == "exposed_commit_plus_one" else
+                False if "exposed_commit_plus_one" in (ls["hid_identity_contract"], rs["hid_identity_contract"]) else None),
             "left": ls, "right": rs,
-            "scope": "Retained input application evidence only. Missing ticks may be evicted. HID delivery tick is observed separately from pad sampling. Equal input application does not certify simulation or actor synchronization."}
+            "scope": "Retained input application evidence only. Missing ticks may be evicted. Each peer's HID identity contract is reported separately; legacy/unknown traces do not establish atomic snapshots. Equal input application does not certify simulation or actor synchronization."}
 
 
 def main():

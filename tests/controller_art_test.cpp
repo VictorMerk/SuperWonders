@@ -16,6 +16,10 @@ namespace nx::overlay {
 void settings_changed(bool){++changes;}
 uint64_t pad_buttons(){return 0;}
 namespace ui {
+// This artwork/remap unit uses native ImGui actions; shared visual layout is
+// checked by the separate geometry and real Vulkan UI probes.
+bool action_button(const char* label,float width){return ImGui::Button(label,{width<0?-1.f:width,36.f});}
+bool navigation_button(const char* label,bool,float width){return action_button(label,width);}
 const Theme& theme(){static Theme t={"Test",IM_COL32(255,204,72,255),IM_COL32(105,222,182,255),IM_COL32(251,247,230,255),IM_COL32(200,216,210,255)};return t;}
 ImU32 fade(ImU32 c,float alpha){return ImGui::GetColorU32(c,alpha);}
 }

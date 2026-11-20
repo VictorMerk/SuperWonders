@@ -46,11 +46,13 @@ public:
             retained=std::min(retained+1,entries.size());
         }
     }
-    void write(std::ostream& out,uint32_t role,uint64_t seed) const {
+    void write(std::ostream& out,uint32_t role,uint64_t seed,bool commit_hid_identity=false) const {
         std::lock_guard guard(lock);
         out.imbue(std::locale::classic());
         out << "# schema=1,role=" << role << ",seed=" << seed << ",capacity=" << entries.size()
-            << ",total=" << total << ",retained=" << retained << ",omitted=" << total-retained << '\n';
+            << ",total=" << total << ",retained=" << retained << ",omitted=" << total-retained;
+        if(commit_hid_identity)out << ",hid_identity=exposed_commit_plus_one";
+        out << '\n';
         out << "# scope=application events; monotonic clocks are local; sample precedes queue insertion; apply is exposure to HID, not proof of a guest read or world agreement\n";
         for(unsigned i=0;i<unsigned(ApplyEvent::Count);++i)
             out << "# count_" << apply_event_name(ApplyEvent(i)) << '=' << counts[i] << '\n';

@@ -62,10 +62,14 @@ std::vector<Scripted> input_script() {
     return v;
 }
 
-PadState read(uint32_t player = 0, bool* connected = nullptr) {
+PadState read(uint32_t player = 0, bool* connected = nullptr,lan::InputSnapshot* captured=nullptr) {
     PadState p;
     bool attached = true;
-    if (lan::active()) { attached=lan::connected(player); p=lan::pad(player); }
+    if (captured || lan::active()) {
+        const auto snapshot=lan::input_snapshot(player);
+        attached=snapshot.connected;p=snapshot.pad;
+        if(captured)*captured=snapshot;
+    }
     else if (player != 0) attached = read_player_pad(player, p);
     else {
     static const std::vector<Scripted> script = input_script();
@@ -92,22 +96,31 @@ PadState read(uint32_t player = 0, bool* connected = nullptr) {
 
 // NpadFullKeyState / NpadJoyDualState / NpadHandheldState:
 // {s64 sampling; u64 buttons; {s32 x, y} left; {s32 x, y} right; u32 attributes; pad}
-void GetNpadState(CPU& c) {
+void get_npad_state(CPU& c,bool* network_used=nullptr) {
     uint64_t out = c.x[0];
     uint32_t id = ld<uint32_t>(c.x[1]);
     std::memset(reinterpret_cast<void*>(out), 0, 0x28);
-    st<int64_t>(out, int64_t(lan::active() ? g_frame.load()+1 : ++g_sampling));
+    const bool network=lan::active();
+    if(network_used)*network_used=network;
+    if(!network)st<int64_t>(out,int64_t(++g_sampling)); // non-LAN behavior is unchanged
     {
         static std::set<std::pair<uint32_t, std::string>> seen;
         static std::mutex m;
         std::lock_guard lk(m);
         if (seen.insert({id, hle_current_name()}).second) log("hid: reads id %#x via %s", id, hle_current_name());
     }
-    if (id >= kPlayerCount) return;
+    if (id >= kPlayerCount) {
+        if(network)st<int64_t>(out,int64_t(lan::input_snapshot(id).sampling_number));
+        return;
+    }
     bool connected = false;
-    PadState p = read(id, &connected);
+    lan::InputSnapshot captured;
+    PadState p = read(id, &connected,network?&captured:nullptr);
+    if(network)st<int64_t>(out,int64_t(captured.sampling_number));
     if (!connected) return;
-    if (lan::active()) lan::trace_hid_delivery(id, ld<uint64_t>(out), p);
+    // read() has already included analog-stick direction bits in the delivered
+    // pad. Its sample identity/control metadata belong to the same locked read.
+    if(network)lan::trace_hid_delivery(captured,p);
     static bool pressed = false;
     if (p.buttons && !pressed) log("hid: first buttons %llx", (unsigned long long)p.buttons), pressed = true;
     st<uint64_t>(out + 8, p.buttons);
@@ -117,6 +130,7 @@ void GetNpadState(CPU& c) {
     st<int32_t>(out + 28, p.ry);
     st<uint32_t>(out + 32, 1);  // IsConnected
 }
+void GetNpadState(CPU& c) {get_npad_state(c);}
 
 // GetNpadStates(State* out, int count, const u32& id) -> number written: the newest first. One sample: the current
 // one for player 1's full-key style, a not-connected one otherwise.
@@ -142,9 +156,10 @@ void GetNpadStatesFullKey(CPU& c) {
     std::memset(reinterpret_cast<void*>(out), 0, size_t(n) * 0x28);
     c.x[0] = out;
     c.x[1] = id_ref;
-    GetNpadState(c);  // the new sample, into out[0]
+    bool network=false;
+    get_npad_state(c,&network);  // the new sample, into out[0]
     const uint32_t player = ld<uint32_t>(id_ref);
-    if (player >= kPlayerCount || !(lan::active() ? lan::connected(player) : player_connected(player))) {
+    if (player >= kPlayerCount || !(network ? (ld<uint32_t>(out+32)&1) : player_connected(player))) {
         if (player < kPlayerCount) histories[player].clear();
         c.x[0] = 1;
         return;
@@ -152,7 +167,7 @@ void GetNpadStatesFullKey(CPU& c) {
     auto& history = histories[player];
     std::array<uint8_t, 0x28> now;
     std::memcpy(now.data(), reinterpret_cast<const void*>(out), now.size());
-    if (!lan::active() || history.empty() || std::memcmp(history.front().data(),now.data(),8)) history.push_front(now);
+    if (!network || history.empty() || std::memcmp(history.front().data(),now.data(),8)) history.push_front(now);
     if (history.size() > 16) history.pop_back();
     int count = std::min<int>(n, int(history.size()));
     for (int k = 1; k < count; k++) std::memcpy(reinterpret_cast<void*>(out + 0x28ull * k), history[k].data(), 0x28);

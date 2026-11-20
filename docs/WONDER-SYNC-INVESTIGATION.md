@@ -18,9 +18,22 @@ drains, neutral resets and actual HID pad deliveries. It records the guest HID
 sampling number. Framework events also record their invocation sequence and
 present counter before/after the call, including calls skipped by the current
 present-based input exchange. A call without a present is not by itself proof
-that gameplay advanced. The delivered pad and sampling number are exact; the associated
-current commit tick is observed separately after the pad read, and may change
-between those operations on different threads. A pipeline sample timestamp is
+that gameplay advanced. The current HID path captures the delivered pad's source,
+exposed commit tick, player count/connectivity and local loading marker together
+under the existing input mutex. It adds analog-stick direction buttons before
+recording the actual delivery. LAN sample identity is exposed commit tick plus
+one: lobby tick zero is sample one, repeated reads retain their identity, and a
+new publication can change it without a present. Transport-only loading pumps
+do not publish samples; only the existing normal input application and final
+loading-neutral application do. Non-LAN sampling and ordinary clocks are unchanged.
+The signed HID identity bound is checked before publication; exhausted/regressing
+identities or reuse with different pads fail rather than silently wrap.
+
+Exports from this path declare `hid_identity=exposed_commit_plus_one` in the
+existing schema-one metadata. Older or unknown-contract traces retain their
+original limitation: the callback observed a commit tick separately after the
+pad read, so another publication could intervene. Presentation counters and log
+timestamps remain later observations in either version. A pipeline sample timestamp is
 before insertion, and a submit-return event is after insertion, not its exact time.
 
 Tracing is disabled by default. Enabled tracing retains a session prefix and
@@ -45,7 +58,18 @@ It also reports a changed delivered pad under the same player/HID sample number
 as a candidate inconsistency, while counting identical repeated reads separately.
 It streams the CSV and keeps compact indexes rather than retaining all event
 dictionaries. Gaps can hide changes; cross-PC sampling-number offsets are not
-treated as a desync verdict.
+treated as a desync verdict. Recognized atomic-contract traces additionally check
+the tick-plus-one identity and report contract mismatches explicitly. Absence of
+the declaration means legacy/unknown behavior, not an inferred atomic snapshot.
+
+The snapshot change fixes a source-proven inconsistency: the old path wrote
+`g_frame + 1` before acquiring the input lock, although a loading transition could
+publish a different neutral pad without a present. The retained physical failure
+traces do not contain the HID history needed to prove this was their first cause.
+CPU publication/read regressions cover repeated reads, loading publication,
+signed identity bounds and concurrent metadata/pad coherence. A fresh controlled
+gameplay reproduction is still required; this is not a world-synchronization fix
+certification.
 
 The next controlled gameplay experiment is the same save, character choices,
 route and settings with input pipeline enabled versus disabled. This tests a
@@ -175,12 +199,12 @@ transport or usable streamed multiplayer.
 
 ## Current validation boundary
 
-All 95 configured CPU tests passed, including transport/ABI loopback, guest VM
-pins, provider lifecycle/profile dispatch and Steam mocks. These checks do not
-certify native room creation, physical two-PC gameplay, synchronized actor/world
-state, latency, FPS or the reported graphics symptoms. The next native/streaming
-playtest and the reserved renderer/visual checks remain pending; no game/GPU or
-second-PC session is authorized while the user is playing another game.
+CPU regressions cover transport/ABI loopback, guest VM pins, provider
+lifecycle/profile dispatch and Steam mocks. These checks do not certify native
+room creation, physical two-PC gameplay, synchronized actor/world state, latency,
+FPS or the reported graphics symptoms. The next native/streaming playtest remains
+pending. Local renderer checks require the machine-wide reservation and an idle
+GPU; a second-PC session also requires that PC to be available.
 
 ## Renderer changes in the same follow-up
 

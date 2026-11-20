@@ -17,6 +17,7 @@
 
 #include "overlay/overlay_internal.h"
 #include "overlay/usability.h"
+#include "overlay/controller_remapping.h"
 #include "overlay/overlay_ui.h"
 #include "netplay_game.h"
 
@@ -42,6 +43,7 @@ Settings g_settings;  // the presenting thread's copy
 Settings g_startup_settings;
 bool g_game_started = false;  // protected by g_lock
 std::atomic<bool> g_open{false};
+std::atomic<uint64_t> g_menu_epoch{0};
 std::atomic<ScreenFn> g_screen{nullptr};  // a full-window screen under the menu (the launcher), or none
 // Input goes to the overlay: the menu is open, or a screen is shown.
 bool taking_input() { return g_open || g_screen.load(); }
@@ -51,6 +53,7 @@ std::atomic<bool> g_fading{false};   // the menu is still fading out
 
 // The pad as the player holds it (before filter_pad clears it), for navigation.
 std::atomic<uint64_t> g_pad_buttons{0};
+std::atomic<uint64_t> g_pad_pressed{0};
 std::atomic<int32_t> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<int> g_tab_request{-1};
 std::atomic<double> g_render_fps{0};
@@ -59,6 +62,7 @@ uint64_t g_previous_buttons = 0;
 
 int g_capture = -1;  // keyboard binding being captured
 int g_tab = 0;
+bool g_pad_wait_release = false; // Presenting thread only; held binding presses cannot become navigation.
 
 // Present intervals for the metrics panel (as platform_win.cpp's overlay).
 constexpr size_t kHistory = 300;
@@ -237,7 +241,9 @@ void draw_metrics(float height) {
 
 // Controller navigation: the pad (Nintendo button meanings) as ImGui's gamepad keys. A confirms, B cancels.
 void feed_pad(ImGuiIO& io) {
-    const bool open = taking_input();  // (closed and fading out: the menu takes no input)
+    // Physical button polling still reaches the remapper, but a binding press
+    // must not also activate a focused menu control or cancel a popup.
+    const bool open = taking_input() && !g_pad_wait_release && g_capture < 0 && controller_remap_state().capture < 0;
     uint64_t b = open ? g_pad_buttons.load() : 0;
     int32_t lx = open ? g_pad_lx.load() : 0, ly = open ? g_pad_ly.load() : 0;
     struct Map {
@@ -352,6 +358,8 @@ void text_input(uint32_t ch) {
 }
 void set_open(bool open, const char* why) {
     if (g_open.exchange(open) == open) return;
+    g_pad_pressed.store(0, std::memory_order_relaxed);
+    g_menu_epoch.fetch_add(1, std::memory_order_release);
     g_input_frames = 30;
     log("overlay: menu %s (%s)", open ? "opened" : "closed", why);
 }
@@ -377,11 +385,10 @@ void filter_pad(plat::PadState& p) {
     const uint64_t combo = plat::kPlus | plat::kMinus;
     bool combo_now = (p.buttons & combo) == combo, combo_before = (g_previous_buttons & combo) == combo;
     if (combo_now && !combo_before) toggle();
-    if (g_open) {  // L / R switch tabs
-        uint64_t pressed = p.buttons & ~g_previous_buttons;
-        if (pressed & plat::kL) g_tab_request = (g_tab + menu_tab_count() - 1) % menu_tab_count();
-        if (pressed & plat::kR) g_tab_request = (g_tab + 1) % menu_tab_count();
-    }
+    // Preserve short button edges for the presenting thread. Tab selection and
+    // remap state belong there, rather than reading g_tab on a guest input thread.
+    if (g_open) g_pad_pressed.fetch_or(p.buttons & ~g_previous_buttons, std::memory_order_relaxed);
+    else g_pad_pressed.store(0, std::memory_order_relaxed);
     g_previous_buttons = p.buttons;
     if (taking_input() || combo_now) p = plat::PadState{};
 }
@@ -480,6 +487,16 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
         startup_settings = g_startup_settings;
         game_started = g_game_started;
     }
+    const bool captured_before_events = g_capture >= 0 || controller_remap_state().capture >= 0;
+    static uint64_t seen_menu_epoch = 0;
+    const auto menu_epoch = g_menu_epoch.load(std::memory_order_acquire);
+    if (menu_epoch != seen_menu_epoch) {
+        seen_menu_epoch = menu_epoch;
+        g_capture = -1;
+        cancel_controller_remapping(); // Includes close/reopen between two frames.
+    }
+
+    if (!g_open) { g_capture = -1; cancel_controller_remapping(); }
     bool changed = false;
     for (const Event& e : events) {
         switch (e.kind) {
@@ -494,7 +511,12 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
                     g_capture = -1;
                     break;
                 }
-                if (g_open && e.down && (e.key == KeyPageUp || e.key == KeyPageDown)) {
+                if (g_open && e.down && e.key == KeyEscape && controller_remap_state().capture >= 0) {
+                    cancel_controller_remapping(); // Cancel listening; leave settings open.
+                    break;
+                }
+                if (controller_remap_state().capture >= 0 && e.down) break;
+                if (g_open && controller_remap_state().capture < 0 && e.down && (e.key == KeyPageUp || e.key == KeyPageDown)) {
                     g_tab_request = (g_tab + (e.key == KeyPageDown ? 1 : menu_tab_count()-1)) % menu_tab_count();
                     break;
                 }
@@ -513,12 +535,24 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     }
     if (changed) settings_changed(true);
     // B on a controller backs out: inside a dropdown or an edit ImGui handles it; at the top it closes the menu.
-    static uint64_t previous_pad = 0;
-    const uint64_t pad = g_pad_buttons.load();
-    if (g_open && (pad & ~previous_pad & plat::kB) && g_capture < 0 && !ImGui::IsAnyItemActive() &&
-        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup))
-        set_open(false, "B");
-    previous_pad = pad;
+    const uint64_t pressed = g_pad_pressed.exchange(0, std::memory_order_relaxed);
+    const bool capturing = g_capture >= 0 || controller_remap_state().capture >= 0;
+    if (captured_before_events || capturing) g_pad_wait_release = true;
+    // A changed mapping can change the logical bit while the physical button
+    // stays held. Wait for the whole pad to be neutral, not just the old bit.
+    if (!capturing && g_pad_buttons.load() == 0 &&
+        std::abs(g_pad_lx.load()) <= plat::kStickMax * .3f &&
+        std::abs(g_pad_ly.load()) <= plat::kStickMax * .3f)
+        g_pad_wait_release = false;
+
+    const bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup);
+    if (g_open && !capturing && !g_pad_wait_release && !popup) {
+        if ((pressed & plat::kB) && !ImGui::IsAnyItemActive()) set_open(false, "B");
+        else {
+            if (pressed & plat::kL) g_tab_request = (g_tab + menu_tab_count() - 1) % menu_tab_count();
+            if (pressed & plat::kR) g_tab_request = (g_tab + 1) % menu_tab_count();
+        }
+    }
     feed_pad(io);
     if (g_input_frames > 0) g_input_frames--;
 
@@ -527,11 +561,10 @@ ImDrawData* build_frame(uint32_t w, uint32_t h) {
     static bool was_open = false;
     const bool appearing = open && !was_open;
     was_open = open;
-    // the menu fades in over about 0.15 s and out a little faster (drawn, without input, until it's gone)
-    static float reveal = 0;
-    if (appearing) reveal = std::max(reveal, 0.04f);
-    reveal = usability_preferences().reduced_motion ? (open?1.f:0.f) : ui::approach(reveal, open ? 1.0f : 0.0f, open ? 18.0f : 26.0f);
-    g_fading = !open && reveal > 0.0f;
+    // Quick settings is a frequent keyboard/controller action: show its final
+    // layout immediately rather than delaying input feedback behind a fade.
+    const float reveal = open ? 1.f : 0.f;
+    g_fading = false;
     const ScreenFn screen = g_screen.load();
     if (screen) screen(float(w), float(h));  // under the menu, which the screen can open (its Settings)
     if (progress_wanted()) draw_progress(float(h));

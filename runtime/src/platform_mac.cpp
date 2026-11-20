@@ -7,6 +7,7 @@
 //
 // Data: NX_DATA_ROOT or games/<game>'s pc_data_root ("private/<game>"): analysis/{main,sdk}.bin, extract/romfs, user/.
 // Settings: NX_<KEY> environment variables, as on Windows.
+#include "nvn/pipeline_miss_trace.h"
 #include "file_io.h"
 #include <dlfcn.h>
 #include <pthread.h>
@@ -158,7 +159,7 @@ void start_thread(ThreadFn fn, void* arg, size_t stack_size) {
 }
 
 void exit_thread() { pthread_exit(nullptr); }
-void exit_process(int code) { nx::nvn::flush_shader_bundle(); close_controllers(); std::fflush(nullptr); _exit(code); }
+void exit_process(int code) { nx::nvn::pipeline_trace::shutdown(); nx::nvn::flush_shader_bundle(); close_controllers(); std::fflush(nullptr); _exit(code); }
 
 void sleep_ns(int64_t ns) {
     timespec ts{time_t(ns / 1000000000), long(ns % 1000000000)};

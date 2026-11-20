@@ -10,6 +10,7 @@ param(
     [ValidateRange(1,10000)][int]$CaptureEvery=300,
     [string]$ValidationLayer='',
     [switch]$TraceTextureSources,
+    [switch]$TracePipelineMisses,
     [switch]$RequireAudio,
     [ValidateRange(0,3600)][int]$ThreadDumpAtSeconds=0,
     [switch]$TraceFiles,
@@ -49,7 +50,7 @@ if($claim.state -ne 'acquired'){Write-Output ($claim|ConvertTo-Json -Compress -D
 $game=$null;$started=$false
 try {
     $null=New-Item -ItemType Directory -Path $outputPath
-    if(Get-Process wonder,wonder-launcher,mkw,mkw-launcher -ErrorAction SilentlyContinue){throw 'A foreign game started; smoke deferred.'}
+    if(Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue){throw 'A foreign game started; smoke deferred.'}
     $info=New-Object Diagnostics.ProcessStartInfo
     $info.FileName=$runtimePath
     $info.WorkingDirectory=Split-Path -Parent $runtimePath
@@ -82,6 +83,7 @@ try {
         $options['VK_INSTANCE_LAYERS']='VK_LAYER_KHRONOS_validation'
         $options['VK_LAYER_VALIDATE_SYNC']='1'
     }
+    if($TracePipelineMisses){$options['NX_PIPELINE_MISS_TRACE']=Join-Path $outputPath 'pipeline-miss-trace.csv'}
     foreach($key in $options.Keys){$info.EnvironmentVariables[$key]=$options[$key]}
     $game=New-Object Diagnostics.Process;$game.StartInfo=$info
     $began=[DateTime]::UtcNow
@@ -89,7 +91,7 @@ try {
     $stdout=$game.StandardOutput.ReadToEndAsync();$stderr=$game.StandardError.ReadToEndAsync()
     $reason='exited';$deadline=$began.AddSeconds($TimeoutSeconds)
     while(!$game.HasExited) {
-        $foreign=@(Get-Process wonder,wonder-launcher,mkw,mkw-launcher -ErrorAction SilentlyContinue | Where-Object {$_.Id -ne $game.Id})
+        $foreign=@(Get-Process wonder,wonder-launcher,mkw,mkw-launcher,longshot -ErrorAction SilentlyContinue | Where-Object {$_.Id -ne $game.Id})
         if($foreign.Count){$reason='foreign game started';$game.Kill();break}
         if([DateTime]::UtcNow -gt $deadline){$reason='timeout';$game.Kill();break}
         Start-Sleep -Milliseconds 500

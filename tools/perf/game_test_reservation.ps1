@@ -5,7 +5,7 @@ param(
     [int]$OwnerPid=$PID,
     [string]$LeaseId='',
     [string]$LeaseDirectory=(Join-Path $env:USERPROFILE '.t3/shared/game-tests'),
-    [string[]]$GameProcessNames=@('wonder','wonder-launcher','mkw','mkw-launcher')
+    [string[]]$GameProcessNames=@('wonder','wonder-launcher','mkw','mkw-launcher','longshot')
 )
 $ErrorActionPreference='Stop'
 $directory=[IO.Path]::GetFullPath($LeaseDirectory)

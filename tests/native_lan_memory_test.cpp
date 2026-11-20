@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <memory>
 #include <thread>
+#include <future>
 #include <limits>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -56,7 +57,19 @@ int main() {
     RuntimeGuestMemory memory;check(!memory.validate(0x1000,4,MemoryAccess::Read),"unsupported mapper rejects memory");
     std::puts("Native memory: non-Windows fail-closed passed");
 #else
-    check(SetPriorityClass(GetCurrentProcess(),BELOW_NORMAL_PRIORITY_CLASS)!=0,"BelowNormal CPU test");
+    // Correctness synchronization must inherit the test runner's priority;
+    // self-demotion can starve these workers behind unrelated shader builds.
+    constexpr auto wait_timeout=std::chrono::seconds(5);
+    const auto launch_started=[&](auto action) {
+        std::promise<void> started;
+        auto entered=started.get_future();
+        std::thread worker([started=std::move(started),action=std::move(action)]() mutable {
+            started.set_value();
+            action();
+        });
+        check(entered.wait_for(wait_timeout)==std::future_status::ready,"mutation worker entered within bounded deadline");
+        return worker;
+    };
     constexpr uint64_t arena=kAliasBase+0x10000000, page=0x1000;
     check(nx::plat::reserve(arena,0x10000),"reserve private guest alias arena");
     check(nx::plat::reserve(kKernelBase,0x10000),"reserve private kernel allocation arena");
@@ -102,26 +115,30 @@ int main() {
     // Establish a live pin, launch a mutation, then observe its pending gate by
     // rejection of new conflicting pins. No timing-only proof of blocking.
     const auto wait_pending=[&](uint64_t address) {
-        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        const auto deadline=std::chrono::steady_clock::now()+wait_timeout;
         for(;;) {
-            RuntimeGuestMemory probe;
-            if(!probe.validate(address,4,MemoryAccess::ReadWrite))break;
+            // Release every temporary lease before yielding the CPU. A tight
+            // create/pin/destroy loop repeatedly contests the VM mutex with the
+            // mutation worker whose publication this test is waiting to see.
+            {
+                RuntimeGuestMemory probe;
+                if(!probe.validate(address,4,MemoryAccess::ReadWrite))break;
+            }
             check(std::chrono::steady_clock::now()<deadline,"mutation publishes pending gate");
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     };
     auto live=std::make_unique<RuntimeGuestMemory>();
     check(live->validate(arena,8,MemoryAccess::ReadWrite),"lease for concurrent decommit test");
     const auto before=os_decommits.load();std::atomic<bool> finished{false};
-    std::thread unmap([&] { nx::decommit(arena,page);finished=true; });
+    auto unmap=launch_started([&] { nx::decommit(arena,page);finished=true; });
     wait_pending(arena);
     check(!finished && os_decommits.load()==before,"decommit blocked BEFORE any OS unmapping call");
     check(live->write(arena,value),"existing lease stays accessible while unmap waits");
-    std::atomic<bool> query_done{false};
-    std::thread query([&] { (void)vm_query(arena+page);query_done=true; });
-    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
-    while(!query_done && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
-    check(query_done,"global VM mutex is not held while waiting for lease release");query.join();
+    std::promise<void> query_done;
+    auto queried=query_done.get_future();
+    std::thread query([&] { (void)vm_query(arena+page);query_done.set_value(); });
+    check(queried.wait_for(wait_timeout)==std::future_status::ready,"global VM mutex is not held while waiting for lease release");query.join();
     check(nx::commit(arena+6*page,page),"unrelated host mapping proceeds while overlapping unmap waits");
     vm_set(arena+6*page,page,kMemHeap,3);
     live.reset();unmap.join();
@@ -132,14 +149,14 @@ int main() {
     // Guest permission changes also wait without mutating the old permission
     // while the lease is still active. New callers see the changed permission.
     live=std::make_unique<RuntimeGuestMemory>();check(live->validate(arena,8,MemoryAccess::ReadWrite),"lease before permission revoke");
-    finished=false;std::thread protect([&] { vm_set(arena,page,kMemHeap,1);finished=true; });
+    finished=false;auto protect=launch_started([&] { vm_set(arena,page,kMemHeap,1);finished=true; });
     wait_pending(arena);check(!finished,"permission publication waits for active writer lease");
     live.reset();protect.join();
     { RuntimeGuestMemory memory;check(memory.validate(arena,4,MemoryAccess::Read) && !memory.validate(arena,4,MemoryAccess::Write),"revoked writer permission enforced after release"); }
     vm_set(arena,page,kMemHeap,3);
     live=std::make_unique<RuntimeGuestMemory>();check(live->validate(arena,8,MemoryAccess::ReadWrite),"lease before recommit");
     const auto commits_before=os_commits.load();finished=false;
-    std::thread recommit([&] { check(nx::commit(arena,page),"recommit after pin");finished=true; });
+    auto recommit=launch_started([&] { check(nx::commit(arena,page),"recommit after pin");finished=true; });
     wait_pending(arena);check(!finished && os_commits.load()==commits_before,"recommit also gates before OS operation");
     live.reset();recommit.join();
     // Windows decommits the whole containing page even for an unaligned one-
@@ -147,7 +164,7 @@ int main() {
     live=std::make_unique<RuntimeGuestMemory>();
     check(live->validate(arena+8,8,MemoryAccess::ReadWrite),"pin away from one-byte decommit range on same OS page");
     const auto unaligned_before=os_decommits.load();finished=false;
-    std::thread one_byte([&] { nx::decommit(arena+page-1,1);finished=true; });
+    auto one_byte=launch_started([&] { nx::decommit(arena+page-1,1);finished=true; });
     wait_pending(arena);
     check(!finished && os_decommits.load()==unaligned_before,"one-byte decommit waits for pin anywhere in containing host page");
     check(live->write(arena+8,value),"pinned bytes outside requested one-byte interval remain accessible until release");

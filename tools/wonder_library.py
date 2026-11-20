@@ -14,8 +14,8 @@ import shutil
 import sys
 
 SLOTS = {
-    'original': ('Super Mario Bros. Wonder', 'Original edition'),
-    'switch2': ('Super Mario Bros. Wonder', 'Switch 2 package · verification build'),
+    'original': ('Super Mario Bros. Wonder', 'Nintendo Switch · Original edition'),
+    'switch2': ('Super Mario Bros. Wonder', 'Nintendo Switch 2 Edition'),
 }
 
 
@@ -171,10 +171,11 @@ def launch_spec(config, key, *, configure=False):
     def inherited(name):
         name = name.upper()
         transient = ('NX_TEST_', 'NX_INPUT', 'NX_PROBE', 'NX_DUMP', 'NX_TRACE',
-                     'NX_LAN_', 'NX_PLAY_', 'NX_FRAMEGEN_PROBE')
+                     'NX_LAN_', 'NX_NATIVE_', 'NX_STEAM_', 'NX_PLAY_', 'NX_FRAMEGEN_PROBE')
         return not (name.startswith(transient) or
                     name in ('NX_GAMELIB', 'NX_DATA_ROOT', 'NX_HEADLESS', 'NX_HEADLESS_PRESENT',
-                             'NX_NO_LAUNCHER', 'NX_LOG', 'NX_FRAMETRACE', 'NX_AUDIO_DUMP') or
+                             'NX_NO_LAUNCHER', 'NX_LOG', 'NX_FRAMETRACE', 'NX_AUDIO_DUMP',
+                             'NX_CONTROLS_TOUR_SECTION', 'NX_PIPELINE_MISS_TRACE', 'STEAMAPPID', 'STEAMGAMEID') or
                     (name.startswith('NX_') and name.endswith('_TOUR')))
     env = {k: v for k, v in os.environ.items() if inherited(k)}
     env['NX_DATA_ROOT'] = str(root)
@@ -183,6 +184,26 @@ def launch_spec(config, key, *, configure=False):
         if os.name == 'nt' and launcher.is_file():
             executable = launcher
     return [str(executable)] + (['--config'] if configure else []), str(executable.parent), env
+
+
+def library_window_geometry(work_area):
+    """Client geometry and bounded minimum for this library's own Tk window.
+
+    Leave room for window decorations and desktop panels. Coordinates may be
+    negative on desktops with monitors left of or above the primary monitor.
+    """
+    left, top, right, bottom = work_area
+    available_w = max(1, right - left - 32)
+    available_h = max(1, bottom - top - 64)
+    width, height = min(960, available_w), min(740, available_h)
+    x = left + max(0, (right - left - width) // 2)
+    y = top + max(0, (bottom - top - height - 40) // 2)
+    return width, height, x, y, min(520, available_w), min(420, available_h)
+
+
+def library_card_stacked(available_width, actions_width, font_size):
+    """Reserve a readable text column; measure actions in the actual Tk font."""
+    return available_width < max(300, font_size * 26) + actions_width + 18
 
 
 def main():
@@ -206,13 +227,39 @@ def main():
             print('Cannot check Wonder library: '+str(error), file=sys.stderr)
             return 2
     import tkinter as tk
-    from tkinter import filedialog, messagebox
+    from tkinter import filedialog, messagebox, font as tkfont
 
     window = tk.Tk()
+    window.withdraw()
     window.title('SuperWonders • Library')
-    window.geometry('960x740')
-    window.minsize(760, 560)
-    bg, panel, text, quiet, accent = '#132822', '#203c32', '#f6f0dc', '#b4c5b5', '#f3bd54'
+    window.update_idletasks()
+    work_area = (window.winfo_vrootx(), window.winfo_vrooty(),
+                 window.winfo_vrootx() + window.winfo_vrootwidth(),
+                 window.winfo_vrooty() + window.winfo_vrootheight())
+    if os.name == 'nt':
+        # Query only this app's monitor. No other windows are moved or inspected.
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [('size', wintypes.DWORD), ('monitor', wintypes.RECT),
+                            ('work', wintypes.RECT), ('flags', wintypes.DWORD)]
+            user32 = ctypes.windll.user32
+            user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+            user32.MonitorFromWindow.restype = wintypes.HANDLE
+            user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+            user32.GetMonitorInfoW.restype = wintypes.BOOL
+            monitor = user32.MonitorFromWindow(window.winfo_id(), 2)
+            info = MonitorInfo()
+            info.size = ctypes.sizeof(info)
+            if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                work_area = (info.work.left, info.work.top, info.work.right, info.work.bottom)
+        except (AttributeError, OSError):
+            pass  # Tk's own desktop geometry remains a usable fallback.
+    width, height, x, y, minimum_w, minimum_h = library_window_geometry(work_area)
+    window.geometry(f'{width}x{height}+{x}+{y}')
+    window.minsize(minimum_w, minimum_h)
+    bg, panel, text, quiet, accent = '#0d0f13', '#171a20', '#f1f3f7', '#adb6c6', '#81bbff'
     window.configure(bg=bg)
     try:
         config = load_config(args.config)
@@ -222,20 +269,105 @@ def main():
         return 2
     running, status, buttons, manage_buttons = {}, {}, {}, {}
     choose_buttons, folder_buttons, results, health = {}, {}, {}, {}
-    canvas = tk.Canvas(window, bg=bg, highlightthickness=0)
+    canvas = tk.Canvas(window, bg=bg, highlightthickness=0, yscrollincrement=24)
     scrollbar = tk.Scrollbar(window, orient='vertical', command=canvas.yview)
     scrollbar.pack(side='right', fill='y')
     canvas.configure(yscrollcommand=scrollbar.set)
     canvas.pack(fill='both', expand=True)
-    body = tk.Frame(canvas, bg=bg, padx=24, pady=24)
+    body = tk.Frame(canvas, bg=bg, padx=20, pady=20)
     content = canvas.create_window((0,0), window=body, anchor='nw')
     body.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
-    canvas.bind('<Configure>', lambda event: canvas.itemconfigure(content, width=event.width))
-    window.bind('<MouseWheel>', lambda event: canvas.yview_scroll(-1 if event.delta>0 else 1, 'units'))
+    responsive_labels, card_layouts, utility_buttons = [], [], []
+    pending_layout = None
+    text_em = tkfont.Font(root=window, font=('Segoe UI', 10)).measure('M')
+
+    def wrap_label(parent, **options):
+        options.setdefault('wraplength', 480)
+        label = tk.Label(parent, justify='left', anchor='w', **options)
+        responsive_labels.append((label, parent))
+        return label
+
+    def action_button(parent, label, command, primary=False):
+        return tk.Button(parent, text=label, command=command, bg=accent if primary else parent.cget('bg'),
+                         fg=bg if primary else quiet, activebackground='#acd3ff' if primary else '#20252e',
+                         activeforeground=bg if primary else text, relief='flat', borderwidth=0,
+                         highlightthickness=2, highlightbackground=parent.cget('bg'), highlightcolor=accent,
+                         font=('Segoe UI', 13, 'bold') if primary else ('Segoe UI', 10),
+                         padx=16, pady=11 if primary else 8, takefocus=True)
+
+    def reflow():
+        nonlocal pending_layout
+        pending_layout = None
+        for card, info, actions in card_layouts:
+            available = max(1, card.winfo_width())
+            stacked = library_card_stacked(available, actions.winfo_reqwidth(), text_em)
+            previous = getattr(card, '_stacked', None)
+            if previous != stacked:
+                card._stacked = stacked
+                actions.grid_forget()
+                if stacked:
+                    actions.grid(row=1, column=0, sticky='ew', pady=(14, 0))
+                else:
+                    actions.grid(row=0, column=1, sticky='ne', padx=(18, 0))
+        for label, parent in responsive_labels:
+            # Width follows the actual text column, not the whole card/window.
+            wrap = max(1, parent.winfo_width() - 2 * int(parent.cget('padx')) - 4)
+            if int(float(label.cget('wraplength'))) != wrap:
+                label.configure(wraplength=wrap)
+        if utility_buttons:
+            available = max(1, utilities.winfo_width())
+            minimum = sum(button.winfo_reqwidth() for button in utility_buttons) + 12
+            columns = 2 if available >= minimum else 1
+            if getattr(utilities, '_columns', None) != columns:
+                utilities._columns = columns
+                for column in range(2):
+                    utilities.grid_columnconfigure(column, weight=1 if column < columns else 0)
+                for index, button in enumerate(utility_buttons):
+                    button.grid(row=index // columns, column=index % columns, sticky='ew',
+                                padx=(0, 12 if index % columns < columns - 1 else 0), pady=(0, 8))
+        canvas.configure(scrollregion=canvas.bbox('all'))
+
+    def schedule_layout(event=None):
+        nonlocal pending_layout
+        if pending_layout is None:
+            # A Configure event can result from wrapping itself. Debounce to a
+            # bounded later turn instead of recursively draining idle callbacks.
+            pending_layout = window.after(16, reflow)
+
+    def resize_canvas(event):
+        canvas.itemconfigure(content, width=max(1, event.width))
+        schedule_layout()
+
+    canvas.bind('<Configure>', resize_canvas)
+    body.bind('<Configure>', schedule_layout, add='+')
+    window.bind('<MouseWheel>', lambda event: canvas.yview_scroll(
+        -max(1, abs(event.delta) // 120) if event.delta > 0 else max(1, abs(event.delta) // 120), 'units') if event.delta else None)
+    window.bind('<Button-4>', lambda event: canvas.yview_scroll(-1, 'units'))
+    window.bind('<Button-5>', lambda event: canvas.yview_scroll(1, 'units'))
+    window.bind('<Prior>', lambda event: canvas.yview_scroll(-1, 'pages'))
+    window.bind('<Next>', lambda event: canvas.yview_scroll(1, 'pages'))
+
+    def reveal_focus(event):
+        widget = event.widget
+        if widget is window or widget.winfo_toplevel() is not window:
+            return
+        region = canvas.bbox('all')
+        if not region or region[3] <= 0:
+            return
+        top = widget.winfo_rooty() - body.winfo_rooty()
+        bottom = top + widget.winfo_height()
+        view_top = canvas.canvasy(0)
+        view_bottom = view_top + canvas.winfo_height()
+        if top < view_top:
+            canvas.yview_moveto(max(0, top - 12) / region[3])
+        elif bottom > view_bottom:
+            canvas.yview_moveto(max(0, bottom + 12 - canvas.winfo_height()) / region[3])
+
+    window.bind('<FocusIn>', reveal_focus, add='+')
     tk.Label(body, text='SUPERWONDERS', font=('Segoe UI', 11, 'bold'), fg=accent, bg=bg).pack(anchor='w')
-    tk.Label(body, text='Your Flower Kingdom', font=('Georgia', 29), fg=text, bg=bg).pack(anchor='w', pady=(7, 5))
-    tk.Label(body, text='Two editions. A place for each adventure.', font=('Segoe UI', 12),
-             fg=quiet, bg=bg).pack(anchor='w', pady=(0, 22))
+    wrap_label(body, text='Your library', font=('Bahnschrift', 30), fg=text, bg=bg).pack(fill='x', pady=(7, 5))
+    wrap_label(body, text='Choose an edition. Continue your adventure.', font=('Segoe UI', 12),
+               fg=quiet, bg=bg).pack(fill='x', pady=(0, 22))
 
     def refresh(key):
         item = config['editions'][key]
@@ -321,49 +453,52 @@ def main():
                 messagebox.showerror('Cannot export report', str(error), parent=window)
 
     for key, (title, edition) in SLOTS.items():
-        card = tk.Frame(body, bg=panel, padx=20, pady=17)
+        tk.Frame(body, bg='#2a303a', height=1).pack(fill='x', pady=(0, 12))
+        card = tk.Frame(body, bg=bg, padx=0, pady=14)
         card.pack(fill='x', pady=(0, 12))
-        actions = tk.Frame(card, bg=panel)
-        actions.pack(side='right', padx=(18, 0))
-        tk.Label(card, text=edition.upper(), fg=accent, bg=panel, font=('Segoe UI', 9, 'bold')).pack(anchor='w')
-        tk.Label(card, text=title, fg=text, bg=panel, font=('Segoe UI', 15, 'bold')).pack(anchor='w', pady=(5, 4))
+        card.grid_columnconfigure(0, weight=1)
+        info = tk.Frame(card, bg=bg)
+        info.grid(row=0, column=0, sticky='nsew')
+        actions = tk.Frame(card, bg=bg)
+        actions.grid(row=0, column=1, sticky='ne', padx=(18, 0))
+        actions.grid_columnconfigure(0, weight=1)
+        card_layouts.append((card, info, actions))
+        card.bind('<Configure>', schedule_layout)
+        info.bind('<Configure>', schedule_layout)
+        wrap_label(info, text=edition, fg=quiet, bg=bg, font=('Segoe UI', 11, 'bold')).pack(fill='x')
+        wrap_label(info, text=title, fg=text, bg=bg, font=('Bahnschrift', 25)).pack(fill='x', pady=(5, 4))
         status[key] = tk.StringVar()
-        tk.Label(card, textvariable=status[key], fg=quiet, bg=panel, font=('Segoe UI', 10),
-                 wraplength=430, justify='left').pack(anchor='w')
-        buttons[key] = tk.Button(actions, text='Play', command=lambda k=key: play(k), bg=accent, fg=bg,
-            activebackground='#ffd582', relief='flat', width=12, pady=5, font=('Segoe UI', 11, 'bold'))
-        buttons[key].pack()
-        manage_buttons[key] = tk.Button(actions, text='LAN, mods & settings',
-            command=lambda k=key: play(k, configure=True), relief='flat', bg=panel, fg=text,
-            activebackground=panel, activeforeground=accent, font=('Segoe UI', 9), pady=5)
-        manage_buttons[key].pack(pady=(4, 0))
-        choose_buttons[key] = tk.Button(actions, text='Choose installation', command=lambda k=key: configure(k), relief='flat',
-            bg=panel, fg=quiet, activebackground=panel, activeforeground=text, font=('Segoe UI', 9))
-        choose_buttons[key].pack(pady=(6, 0))
-        folders = tk.Frame(card, bg=panel)
+        wrap_label(info, textvariable=status[key], fg=quiet, bg=bg, font=('Segoe UI', 11)).pack(fill='x')
+        buttons[key] = action_button(actions, 'Play', lambda k=key: play(k), primary=True)
+        buttons[key].grid(row=0, column=0, sticky='ew')
+        manage_buttons[key] = action_button(actions, 'LAN, mods & settings', lambda k=key: play(k, configure=True))
+        manage_buttons[key].grid(row=1, column=0, sticky='ew', pady=(5, 0))
+        choose_buttons[key] = action_button(actions, 'Choose installation', lambda k=key: configure(k))
+        choose_buttons[key].grid(row=2, column=0, sticky='ew', pady=(5, 0))
+        folders = tk.Frame(info, bg=bg)
         folders.pack(anchor='w', pady=(8, 0))
         folder_buttons[key] = []
         for label, name in (('Open mods', 'mods'), ('Open saves', 'user')):
-            button = tk.Button(folders, text=label, command=lambda k=key, n=name: folder(k,n),
-                               bg=panel, fg=quiet, relief='flat', font=('Segoe UI', 9))
+            button = action_button(folders, label, lambda k=key, n=name: folder(k,n))
             button.pack(side='left', padx=(0,8))
             folder_buttons[key].append(button)
         health[key] = installation_health(config['editions'][key])
         refresh(key)
     utilities = tk.Frame(body, bg=bg)
-    utilities.pack(anchor='w', pady=(8,4))
+    utilities.pack(fill='x', pady=(8,4))
     for label, action in (('Reload library', reload_config), ('Export preparation report', export_diagnostics)):
-        tk.Button(utilities, text=label, command=action, bg=panel, fg=text, relief='flat',
-                  font=('Segoe UI',10), padx=12, pady=6).pack(side='left', padx=(0,12))
-    tk.Label(body, text='Each edition uses its own game files, saves and settings.\n'
+        utility_buttons.append(action_button(utilities, label, action))
+    wrap_label(body, text='Each edition uses its own game files, saves and settings.\n'
              'Switch 2 play requires a compatible prepared runtime; importing a NUP alone is not enough.',
-             fg=quiet, bg=bg, justify='left', font=('Segoe UI', 10)).pack(anchor='w', pady=(8, 0))
+               fg=quiet, bg=bg, font=('Segoe UI', 10)).pack(fill='x', pady=(8, 0))
 
     def poll():
         for key in SLOTS:
             refresh(key)
         window.after(1000, poll)
     window.after(1000, poll)
+    schedule_layout()
+    window.deiconify()
     window.mainloop()
     return 0
 

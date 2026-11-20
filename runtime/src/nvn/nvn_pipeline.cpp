@@ -26,8 +26,12 @@
 #include "cache_file.h"
 #include "shader_bundle.h"
 #include "nvn_pipeline_async.h"
+#include "pipeline_miss_trace.h"
+#include "pipeline_typed_variants.h"
+#include "pipeline_graphics_identity.h"
 #include "nvn_ultrawide.h"
 #include "platform.h"
+#include "frametrace.h"
 #include "shadow_coord_debug_spv.h"
 
 namespace nx::nvn {
@@ -55,6 +59,8 @@ struct PipelineKeysRecord {
     PipelineKey key{};  // vs/fs pointers are always null on disk
 };
 static_assert(std::is_trivially_copyable_v<PipelineKeysHeader> && std::is_trivially_copyable_v<PipelineKeysRecord>);
+static_assert(sizeof(PipelineKeysHeader)==32 && sizeof(PipelineKeysRecord)==776,
+              "Legacy v1 pipeline recipes must remain byte-layout compatible");
 
 std::vector<PipelineKeysRecord> g_pipeline_key_records;
 std::set<std::string> g_pipeline_key_ids;
@@ -63,6 +69,44 @@ std::string g_pipeline_keys_path;
 uint32_t g_pipeline_vendor = 0, g_pipeline_device = 0;
 bool g_pipeline_keys_loaded = false;
 std::atomic<bool> g_pipeline_keys_dirty{false};
+typed_pipeline::Catalog g_typed_variants;
+bool g_typed_loaded=false,g_typed_dirty=false;
+std::string g_typed_path;
+
+typed_pipeline::Bytes recipe_bytes(const PipelineKeysRecord& rec) {
+    const auto* bytes=reinterpret_cast<const uint8_t*>(&rec);
+    return {bytes,bytes+sizeof rec};
+}
+typed_pipeline::ShaderVariant typed_shader(const ShaderInfo* s,bool cache_checksum=true) {
+    typed_pipeline::ShaderVariant out;if(!s)return out;
+    out.stage=uint32_t(s->stage);out.shared=s->control.shared_size;
+    std::copy(std::begin(s->local_size),std::end(s->local_size),out.local.begin());
+    static std::map<const ShaderInfo*,std::array<char,40>> checksums;
+    if(auto it=checksums.find(s);cache_checksum && it!=checksums.end())out.spirv_sha1=it->second;
+    else {
+        const auto checksum=sha1_hex(s->spirv.data(),s->spirv.size()*sizeof(uint32_t));
+        std::copy_n(checksum.data(),40,out.spirv_sha1.begin());
+        if(cache_checksum)checksums.emplace(s,out.spirv_sha1);
+    }
+    out.kinds=int_texture_kinds(s);return out;
+}
+
+void load_typed_variants() {
+    if(g_typed_loaded)return;g_typed_loaded=true;
+    if(!int_texture_patches_enabled())return;
+    g_typed_path=g_pipeline_keys_path+".typed-v1";
+    FILE* f=plat::fopen_utf8(g_typed_path,"rb");if(!f)return;
+    plat::fseek64(f,0,SEEK_END);const auto length=plat::ftell64(f);plat::fseek64(f,0,SEEK_SET);
+    typed_pipeline::Bytes bytes;
+    try {if(length>0 && uint64_t(length)<=typed_pipeline::kMaxBytes)bytes.resize(size_t(length));}
+    catch(...) {std::fclose(f);return;}
+    const bool read=!bytes.empty() && std::fread(bytes.data(),1,bytes.size(),f)==bytes.size();std::fclose(f);
+    try {
+        if(!read || !typed_pipeline::decode(bytes,{g_pipeline_vendor,g_pipeline_device,sizeof(PipelineKeysRecord)},g_typed_variants))
+            log("nvn/vk: typed pipeline sidecar unavailable/invalid; legacy warmup retained");
+        else log("nvn/vk: loaded %zu observed typed pipeline variants",g_typed_variants.size());
+    } catch(...) {log("nvn/vk: typed pipeline sidecar load failed; legacy warmup retained");}
+}
 
 std::string pipeline_record_id(const PipelineKeysRecord& rec) {
     std::string id(rec.vs_hash, sizeof rec.vs_hash);
@@ -134,15 +178,28 @@ void load_pipeline_keys() {
     }
     log("nvn/vk: loaded %llu recorded pipeline recipes from %s", (unsigned long long)g_pipeline_key_records.size(),
         g_pipeline_keys_path.c_str());
+    load_typed_variants();
 }
 
-ShaderInfo* load_pipeline_shader(const char hash[16], uint32_t shared, const uint32_t local[3]) {
+ShaderInfo* load_pipeline_shader(const char hash[16], uint32_t shared, const uint32_t local[3],
+                                 const typed_pipeline::ShaderVariant* variant=nullptr) {
+    if(variant && variant->kinds.empty()) {
+        auto* base=load_pipeline_shader(hash,shared,local,nullptr);
+        return base && typed_pipeline::same_source(typed_shader(base),*variant)?base:nullptr;
+    }
     if (!valid_pipeline_hash(hash)) return nullptr;
     const std::string h(hash, 16);
     if (h == std::string(16, '\0')) return nullptr;
     std::string identity = h;
     identity.append(reinterpret_cast<const char*>(&shared), sizeof shared);
     identity.append(reinterpret_cast<const char*>(local), sizeof(uint32_t) * 3);
+    if(variant) {
+        identity.append(variant->spirv_sha1.data(),variant->spirv_sha1.size());
+        for(auto [binding,kind]:variant->kinds) {
+            identity.append(reinterpret_cast<const char*>(&binding),sizeof binding);
+            identity.append(reinterpret_cast<const char*>(&kind),sizeof kind);
+        }
+    }
     if (auto it = g_pipeline_warm_shaders.find(identity); it != g_pipeline_warm_shaders.end()) return it->second.get();
     const auto code = shader_bundle().load(h);
     const auto bytes = code.size();
@@ -156,9 +213,21 @@ ShaderInfo* load_pipeline_shader(const char hash[16], uint32_t shared, const uin
     info->control.valid = true;
     info->control.shared_size = shared;
     for (int i = 0; i < 3; ++i) info->control.local_size[i] = info->local_size[i] = local[i] ? local[i] : 1;
-    ShaderInfo* result = info.get();
-    g_pipeline_warm_shaders.emplace(std::move(identity), std::move(info));
-    return result;
+    if(variant) {
+        const auto source=typed_shader(info.get(),false);
+        if(!typed_pipeline::same_source(source,*variant))return nullptr;
+    }
+    // Establish process-lifetime ownership before registering pointer-keyed type
+    // observations. No map allocation may destroy a successfully seeded object.
+    auto [slot,inserted]=g_pipeline_warm_shaders.emplace(std::move(identity),std::move(info));
+    if(!inserted)return slot->second.get();
+    if(variant && !variant->kinds.empty()) {
+        try {
+            if(seed_private_int_texture_variant(slot->second.get(),variant->kinds))return slot->second.get();
+        } catch(...) {} // Complete-map publication is transactional; base warmup remains available.
+        slot->second.reset();return nullptr;
+    }
+    return slot->second.get();
 }
 
 }  // namespace
@@ -408,7 +477,6 @@ bool ufloat_raw() {
 void record_pipeline_key(const PipelineKey& key) {
     if (!key.vs || key.vs->hash.size() != 16 || (key.fs && key.fs->hash.size() != 16)) return;
     load_pipeline_keys();
-    if (g_pipeline_key_records.size() >= kMaxPipelineRecords) return;
     PipelineKeysRecord rec{};
     std::memcpy(rec.vs_hash, key.vs->hash.data(), 16);
     if (key.fs) std::memcpy(rec.fs_hash, key.fs->hash.data(), 16);
@@ -419,6 +487,18 @@ void record_pipeline_key(const PipelineKey& key) {
     std::memcpy(&rec.key, &key, sizeof key);
     rec.key.vs = rec.key.fs = nullptr;
     canonicalize_pipeline_key(rec.key);
+    // Optional acceleration metadata is separate from, and never changes, v1.
+    // Actual runtime shaders continue learning only from their bound views.
+    if(int_texture_patches_enabled())try {
+        load_typed_variants();
+        const auto vs_kinds=int_texture_kinds(key.vs),fs_kinds=int_texture_kinds(key.fs);
+        if(!vs_kinds.empty() || !fs_kinds.empty()) {
+            typed_pipeline::Variant variant{typed_shader(key.vs),typed_shader(key.fs)};
+            const auto before=g_typed_variants.size();
+            if(g_typed_variants.add(recipe_bytes(rec),variant) && g_typed_variants.size()!=before)g_typed_dirty=true;
+        }
+    } catch(...) {} // A cache write failure must not replace the selected pipeline.
+    if (g_pipeline_key_records.size() >= kMaxPipelineRecords) return;
     const std::string id = pipeline_record_id(rec);
     if (g_pipeline_key_ids.insert(id).second) {
         g_pipeline_key_records.push_back(rec);
@@ -448,7 +528,26 @@ void write_pipeline_keys(const std::string& path, const PipelineKeysHeader& h,
 
 }  // namespace
 
+namespace {
+void save_typed_variants(bool force) {
+    if(!g_typed_loaded || !g_typed_dirty || g_typed_path.empty())return;
+    try {
+        typed_pipeline::Bytes bytes;
+        if(!typed_pipeline::encode(g_typed_variants,{g_pipeline_vendor,g_pipeline_device,sizeof(PipelineKeysRecord)},bytes))return;
+        const auto path=g_typed_path;
+        auto write=[path,bytes=std::move(bytes)] {
+            CacheFile pending(path);FILE* f=plat::fopen_utf8(pending.path(),"wb");if(!f)return;
+            const bool ok=std::fwrite(bytes.data(),1,bytes.size(),f)==bytes.size();const bool closed=std::fclose(f)==0;
+            if(!ok || !closed || !pending.commit())log("nvn/vk: typed pipeline sidecar save failed; legacy recipes retained");
+        };
+        if(force){wait_background_writes();write();}else background_write(std::move(write));
+        g_typed_dirty=false;
+    } catch(...) {} // Optional sidecar cannot make a normal cache flush fatal.
+}
+}
+
 void save_pipeline_keys(bool force) {
+    save_typed_variants(force);
     // The standalone launcher also initializes Vulkan. It can shut down before
     // the game loads its recorded keys; never replace the player's cache with
     // that launcher's empty in-memory list. Wait for any earlier async write.
@@ -479,11 +578,14 @@ void prepare_recorded_pipelines() {
     const uint64_t total = g_pipeline_key_records.size();
     if (!total) return;
     const uint64_t start = plat::monotonic_ns();
-    uint64_t ready = 0, skipped = 0;
+    uint64_t ready = 0, skipped = 0, typed_ready=0,typed_rejected=0;
     prep_progress(0, total, true, 1);
     log("nvn/vk: prewarming %llu previously seen graphics pipelines", (unsigned long long)total);
     for (uint64_t i = 0; i < total; ++i) {
         const PipelineKeysRecord& rec = g_pipeline_key_records[size_t(i)];
+        // Copy: recording successful warm variants may append catalog entries.
+        std::vector<typed_pipeline::Variant> observed;
+        if(int_texture_patches_enabled())if(const auto* variants=g_typed_variants.find(recipe_bytes(rec)))observed=*variants;
         ShaderInfo* vs = load_pipeline_shader(rec.vs_hash, rec.vs_shared, rec.vs_local);
         ShaderInfo* fs = load_pipeline_shader(rec.fs_hash, rec.fs_shared, rec.fs_local);
         const bool has_fragment = std::any_of(std::begin(rec.fs_hash), std::end(rec.fs_hash), [](char c) { return c != 0; });
@@ -496,12 +598,24 @@ void prepare_recorded_pipelines() {
             if (fs) stages.push_back(fs);
             if (graphics_pipeline(key, program_layout(stages))) ++ready; else ++skipped;
         }
+        for(const auto& variant:observed) {
+            if(variant.fs.stage!=(has_fragment?uint32_t(ShaderStage::Fragment):0u)){++typed_rejected;continue;}
+            ShaderInfo* typed_vs=load_pipeline_shader(rec.vs_hash,rec.vs_shared,rec.vs_local,&variant.vs);
+            ShaderInfo* typed_fs=has_fragment?load_pipeline_shader(rec.fs_hash,rec.fs_shared,rec.fs_local,&variant.fs):nullptr;
+            if(!typed_vs || typed_vs->stage!=ShaderStage::Vertex ||
+               (has_fragment && (!typed_fs || typed_fs->stage!=ShaderStage::Fragment))) {++typed_rejected;continue;}
+            PipelineKey key=rec.key;key.vs=typed_vs;key.fs=typed_fs;
+            std::vector<const ShaderInfo*> stages{typed_vs};if(typed_fs)stages.push_back(typed_fs);
+            if(graphics_pipeline(key,program_layout(stages)))++typed_ready;else ++typed_rejected;
+        }
         if ((i & 15u) == 15u || i + 1 == total) prep_progress(i + 1, total, true, 1);
     }
     prep_progress(total, total, false, 1);
     log("nvn/vk: pipeline prewarm finished: %llu/%llu ready, %llu skipped in %.1f ms",
         (unsigned long long)ready, (unsigned long long)total, (unsigned long long)skipped,
         double(plat::monotonic_ns() - start) / 1e6);
+    if(typed_ready || typed_rejected)log("nvn/vk: observed typed variants prewarmed %llu, rejected %llu; actual bindings remain authoritative",
+        (unsigned long long)typed_ready,(unsigned long long)typed_rejected);
 }
 
 // ---- layouts ----------------------------------------------------------------------------------------------------------
@@ -1069,6 +1183,7 @@ void gpl_log() {
 }
 
 VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& layout, bool may_skip) {
+    const bool caller_may_skip = may_skip;
     // A recurring render target does not prove an individual draw is safe to lose. Keep the
     // complete image by default; background startup preparation and GPL optimization stay enabled.
     may_skip = may_skip && pipeline_skip_draws();
@@ -1081,7 +1196,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     const PipelineKey& key = dynamic ? normalized : draw_key;
     // By the key's bytes, as before, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and
     // compared down a tree per draw; and the last entry first: consecutive draws mostly share their state.
-    using Key = ByteKey<sizeof(PipelineKey) + 40>;
+    using Key = GraphicsPipelineIdentity;
     // A pipeline, and with GPL its optimised replacement while that compiles (swapped in by the first draw after).
     struct Entry {
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -1106,19 +1221,33 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
         }
         return e.pipeline;
     };
-    Key k{};
-    std::memcpy(k.b, key.vs->hash.data(), 16);
-    if (key.fs) std::memcpy(k.b + 16, key.fs->hash.data(), 16);
     PipelineKey state_key{};
-    std::memcpy(&state_key, &key, sizeof key);
-    state_key.vs = state_key.fs = nullptr;
-    canonicalize_pipeline_key(state_key);
-    std::memcpy(k.b + 32, &state_key, sizeof state_key);
-    // A stage that gained an integer texture record has another module (nvn_spirv_int_textures.cpp).
-    const uint32_t generations[2] = {int_texture_generation(key.vs), key.fs ? int_texture_generation(key.fs) : 0u};
-    std::memcpy(k.b + 32 + sizeof state_key, generations, sizeof generations);
+    // Complete binding maps, not per-object discovery ordinals: private warmup
+    // and actual runtime objects may discover equal/different maps in any order.
+    Key k=graphics_pipeline_identity(key,state_key);
     if (last && std::memcmp(k.b, last->first.b, sizeof k.b) == 0) return current(last->second);
     if (auto it = cache.find(k); it != cache.end()) return current((last = &*it)->second);
+    // Only lookup misses enter the diagnostics path: ordinary draw/cache hits do
+    // not read a clock, lock a recorder, or perform I/O.
+    const bool trace_pipeline = pipeline_trace::enabled();
+    pipeline_trace::Identity trace_id;
+    if (trace_pipeline) {
+        trace_id = pipeline_trace::identity(
+            pipeline_trace::fingerprint({reinterpret_cast<const std::byte*>(k.b), sizeof k.b}),
+            g_frame.load(std::memory_order_relaxed), key.vs->hash, key.fs ? key.fs->hash : "",
+            caller_may_skip, may_skip, vk_gpl());
+        pipeline_trace::capture(trace_id, pipeline_trace::Operation::Miss);
+    }
+    const auto trace_operation = [&](pipeline_trace::Operation operation, uint64_t duration = 0,
+                                     int32_t result = 0, bool known = false) {
+        if (trace_pipeline) pipeline_trace::capture(trace_id, operation, duration, result, known);
+    };
+    const auto skipped_draw = [&]() -> VkPipeline {
+        ++g_pipelines_skipped;
+        ft::add(ft::kSkipped); // Actual omission, not a compile request or cache miss.
+        trace_operation(pipeline_trace::Operation::DrawSkipped);
+        return VK_NULL_HANDLE;
+    };
     auto store = [&](VkPipeline p, std::shared_ptr<AsyncPipeline> optimised = nullptr) {
         auto it = cache.emplace(k, Entry{p, std::move(optimised)}).first;
         return (last = &*it)->second.pipeline;
@@ -1126,6 +1255,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     // A compile already on a worker (nvn_pipeline_async.cpp): its pipeline when done, else skip or wait.
     static std::unordered_map<Key, std::shared_ptr<AsyncPipeline>, ByteKeyHash> pending;
     auto finish = [&](AsyncPipeline& a) {
+        trace_operation(pipeline_trace::Operation::AsyncObserved, a.ns, int32_t(a.result), true);
         note_pipeline_created(a.ns);
         if (a.result != VK_SUCCESS)
             log("nvn/vk: pipeline for %s + %s failed", key.vs->hash.c_str(), key.fs ? key.fs->hash.c_str() : "-");
@@ -1136,8 +1266,11 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     if (auto it = pending.find(k); it != pending.end()) {
         std::shared_ptr<AsyncPipeline> a = it->second;
         if (!a->ready()) {
-            if (may_skip) return g_pipelines_skipped++, VK_NULL_HANDLE;
+            if (may_skip) return skipped_draw();
+            const uint64_t wait_started = trace_pipeline ? pipeline_trace::now_ns() : 0;
             a->wait();
+            if (trace_pipeline) trace_operation(pipeline_trace::Operation::AsyncWait,
+                                                pipeline_trace::now_ns() - wait_started);
         }
         pending.erase(it);
         return finish(*a);
@@ -1157,7 +1290,9 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
             const uint64_t t0 = plat::monotonic_ns();
             const VkResult r = p_vkCreateGraphicsPipelines(vk_device(), pipeline_cache(), 1, &ci, nullptr, &p);
             ci.flags &= ~VkPipelineCreateFlags(VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT);
-            g_gpl.probes++, g_gpl.probe_ns += plat::monotonic_ns() - t0;
+            const uint64_t probe_ns = plat::monotonic_ns() - t0;
+            g_gpl.probes++, g_gpl.probe_ns += probe_ns;
+            trace_operation(pipeline_trace::Operation::CacheProbe, probe_ns, int32_t(r), true);
             if (r == VK_SUCCESS && p) {
                 g_gpl.probe_hits++;
                 record_pipeline_key(key);
@@ -1165,6 +1300,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
             }
         }
         // 2. Linked from the libraries now, the optimised pipeline compiled on a worker meanwhile.
+        const uint64_t libraries_started = trace_pipeline ? pipeline_trace::now_ns() : 0;
         auto keys = std::make_shared<std::array<std::string, kParts>>();
         library_keys(*build, layout, keys->data());
         VkPipeline libs[kParts] = {};
@@ -1187,17 +1323,23 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
                 for (LibPart part : {kPreRaster, kFragmentShader}) get_library(part, (*keys)[part], *build);
             });
             pending.emplace(k, compile_pipeline_async(build));
-            return g_pipelines_skipped++, VK_NULL_HANDLE;
+            trace_operation(pipeline_trace::Operation::AsyncQueued);
+            return skipped_draw();
         }
         bool complete = true;
         for (int part = 0; part < kParts; part++) {
             if (!libs[part]) libs[part] = get_library(LibPart(part), (*keys)[part], *build);
             complete = complete && libs[part];
         }
-        if (VkPipeline p = complete ? fast_link(libs, layout) : VK_NULL_HANDLE) {
+        VkPipeline linked = complete ? fast_link(libs, layout) : VK_NULL_HANDLE;
+        if (trace_pipeline) trace_operation(pipeline_trace::Operation::GplLibrariesAndLink,
+                                            pipeline_trace::now_ns() - libraries_started);
+        if (VkPipeline p = linked) {
             if (async_pipelines()) {
                 record_pipeline_key(key);
-                return store(p, compile_pipeline_async(build));
+                auto optimised = compile_pipeline_async(build);
+                trace_operation(pipeline_trace::Operation::AsyncQueued);
+                return store(p, std::move(optimised));
             }
             // NX_ASYNC_PIPELINES=0: the optimised one compiled here, below; the linked one is not used.
             g_gpl.waits++;
@@ -1215,21 +1357,27 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
         VkPipeline p = VK_NULL_HANDLE;
         const uint64_t t0 = plat::monotonic_ns();
         const VkResult r = p_vkCreateGraphicsPipelines(vk_device(), pipeline_cache(), 1, &ci, nullptr, &p);
+        const uint64_t probe_ns = (trace_pipeline || r == VK_SUCCESS) ? plat::monotonic_ns() - t0 : 0;
         ci.flags &= ~VkPipelineCreateFlags(VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT);
         if (r == VK_SUCCESS && p) {
-            note_pipeline_created(plat::monotonic_ns() - t0);
+            note_pipeline_created(probe_ns);
+            trace_operation(pipeline_trace::Operation::CacheProbe, probe_ns, int32_t(r), true);
             record_pipeline_key(key);
             return store(p);
         }
+        trace_operation(pipeline_trace::Operation::CacheProbe, probe_ns, int32_t(r), true);
     }
     if (may_skip && async_pipelines()) {
         pending.emplace(k, compile_pipeline_async(build));
-        return g_pipelines_skipped++, VK_NULL_HANDLE;
+        trace_operation(pipeline_trace::Operation::AsyncQueued);
+        return skipped_draw();
     }
     VkPipeline p = VK_NULL_HANDLE;
     const uint64_t t0 = plat::monotonic_ns();
     VkResult made = p_vkCreateGraphicsPipelines(vk_device(), pipeline_cache(), 1, &ci, nullptr, &p);
-    note_pipeline_created(plat::monotonic_ns() - t0);
+    const uint64_t compile_ns = plat::monotonic_ns() - t0;
+    note_pipeline_created(compile_ns);
+    trace_operation(pipeline_trace::Operation::SyncCompile, compile_ns, int32_t(made), true);
     if (made != VK_SUCCESS)
         log("nvn/vk: pipeline for %s + %s failed", key.vs->hash.c_str(), key.fs ? key.fs->hash.c_str() : "-");
     else if (g_trace)

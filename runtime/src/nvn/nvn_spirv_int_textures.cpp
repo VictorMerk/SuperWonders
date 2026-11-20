@@ -9,7 +9,7 @@
 // The draws record the bindings sampled with integer views (gather_textures, nvn_sets.cpp). Their modules declare those
 // bindings with an integer sampled type, and every sample, fetch or gather of them returns an integer vector that is
 // bitcast back to the float vector the rest of the code expects: the Maxwell semantics exactly. Pipelines of a shader
-// are rebuilt when it gains a record (int_texture_generation in their cache key). NX_INT_TEXTURES=0: off (bisecting).
+// select complete-map semantic pipeline identities. NX_INT_TEXTURES=0: off (bisecting).
 #include <algorithm>
 #include <cstdlib>
 #include <map>
@@ -18,8 +18,10 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <unordered_map>
 
 #include "nvn_pipeline.h"
+#include "integer_texture_variants.h"
 
 namespace nx::nvn {
 
@@ -34,9 +36,14 @@ enum : uint32_t {
 };
 
 struct Records {
+    struct Observation {
+        typed_pipeline::Kinds kinds;
+        uint32_t generation=0;
+        uint64_t identity=0;
+    };
     std::mutex lock;
-    std::map<const ShaderInfo*, std::map<uint32_t, uint32_t>> kinds;  // shader -> binding -> kind
-    std::map<const ShaderInfo*, uint32_t> generation;
+    std::unordered_map<const ShaderInfo*,Observation> shaders;
+    typed_pipeline::SemanticTokens tokens;
 };
 Records& records() {
     static Records r;
@@ -69,52 +76,79 @@ uint32_t vk_int_kind(VkFormat f) {
     }
 }
 
-bool note_int_texture(const ShaderInfo* s, uint32_t binding, uint32_t kind) {
+bool note_int_texture(const ShaderInfo* s, uint32_t binding, uint32_t kind) try {
     if (!s || !kind || !enabled()) return false;
     Records& r = records();
     std::lock_guard lk(r.lock);
-    uint32_t& k = r.kinds[s][binding];
-    if (k == kind) return false;
-    k = kind;
-    r.generation[s]++;
+    const auto previous=r.shaders.find(s);
+    if(previous!=r.shaders.end())if(auto it=previous->second.kinds.find(binding);it!=previous->second.kinds.end() && it->second==kind)return false;
+    auto next=previous==r.shaders.end()?typed_pipeline::Kinds{}:previous->second.kinds;
+    next[binding]=kind;
+    // Prepare every allocation before publishing either the new map or its key.
+    // Failure propagates, never leaves changed shader types with an old identity.
+    const auto token=r.tokens.intern(next);
+    if(previous==r.shaders.end())r.shaders.emplace(s,Records::Observation{std::move(next),1,token});
+    else {previous->second.kinds=std::move(next);++previous->second.generation;previous->second.identity=token;}
     static int logged = 0;
     if (logged++ < 40)
         log("nvn/vk: shader %s binding %u samples %s integer texture: declared as such", s->hash.c_str(), binding,
             kind == 2 ? "a signed" : "an unsigned");
     return true;
+} catch(...) {
+    fatal("Cannot safely publish integer texture shader variant (allocation or identity bound)");
 }
 
 uint32_t int_texture_kind(const ShaderInfo* s, uint32_t binding) {
     Records& r = records();
     std::lock_guard lk(r.lock);
-    auto it = r.kinds.find(s);
-    if (it == r.kinds.end()) return 0;
-    auto b = it->second.find(binding);
-    return b == it->second.end() ? 0 : b->second;
+    auto it = r.shaders.find(s);
+    if (it == r.shaders.end()) return 0;
+    auto b = it->second.kinds.find(binding);
+    return b == it->second.kinds.end() ? 0 : b->second;
 }
 
 uint32_t int_texture_generation(const ShaderInfo* s) {
     Records& r = records();
     std::lock_guard lk(r.lock);
-    auto it = r.generation.find(s);
-    return it == r.generation.end() ? 0 : it->second;
+    auto it = r.shaders.find(s);
+    return it == r.shaders.end() ? 0 : it->second.generation;
+}
+
+uint64_t int_texture_variant_id(const ShaderInfo* s) {
+    Records& r=records();std::lock_guard lk(r.lock);
+    auto it=r.shaders.find(s);return it==r.shaders.end()?0:it->second.identity;
+}
+
+bool int_texture_patches_enabled() {return enabled();}
+
+bool seed_private_int_texture_variant(const ShaderInfo* s,const std::map<uint32_t,uint32_t>& kinds) {
+    if(!s || !enabled() || kinds.empty())return false;
+    for(auto [binding,kind]:kinds) {
+        const auto* b=s->refl.find(2,binding);
+        if((kind!=1 && kind!=2) || !b || b->image.component!=ScalarType::Float || b->image.depth ||
+           (b->type!=DescriptorType::CombinedImageSampler && b->type!=DescriptorType::SampledImage))return false;
+    }
+    Records& r=records();std::lock_guard lk(r.lock);
+    if(r.shaders.contains(s))return false; // fresh private object only
+    auto next=kinds;const auto token=r.tokens.intern(next);
+    r.shaders.emplace(s,Records::Observation{std::move(next),1,token});return true;
 }
 
 std::string int_texture_key(const ShaderInfo* s) {
     Records& r = records();
     std::lock_guard lk(r.lock);
-    auto it = r.kinds.find(s);
-    if (it == r.kinds.end()) return {};
+    auto it = r.shaders.find(s);
+    if (it == r.shaders.end()) return {};
     std::string key;
-    for (auto [binding, kind] : it->second) key += std::to_string(binding) + ":" + std::to_string(kind) + ",";
+    for (auto [binding, kind] : it->second.kinds) key += std::to_string(binding) + ":" + std::to_string(kind) + ",";
     return key;
 }
 
 std::map<uint32_t, uint32_t> int_texture_kinds(const ShaderInfo* s) {
     Records& r = records();
     std::lock_guard lk(r.lock);
-    auto it = r.kinds.find(s);
-    return it == r.kinds.end() ? std::map<uint32_t, uint32_t>{} : it->second;
+    auto it = r.shaders.find(s);
+    return it == r.shaders.end() ? std::map<uint32_t, uint32_t>{} : it->second.kinds;
 }
 
 bool patch_int_textures(const std::vector<uint32_t>& in, const std::map<uint32_t, uint32_t>& kinds,

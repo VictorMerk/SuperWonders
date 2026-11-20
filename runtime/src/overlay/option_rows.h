@@ -1,5 +1,5 @@
 // Settings pages in two panes, after Savage Wind's option rows (github.com/Revivedx/SavageWindRecomp,
-// runtime/ui/option_rows.h, MIT): option rows on the left - an uppercase label, the value on the right (brighter when
+// runtime/ui/option_rows.h, MIT): option rows on the left - a label, the value on the right (brighter when
 // it isn't the default) - and the selected (controller / keyboard) or hovered (mouse) row's description on the right,
 // instead of tooltips. A / Enter / a click changes a row (toggle, next value), left / right step it.
 //
@@ -8,7 +8,8 @@
 //   if (rows::toggle("Fullscreen", &s.fullscreen, false, "Fill the whole screen.")) ...
 //   rows::end();
 //
-// Here the rows also ease their highlight in and out, and the description fades when it changes.
+// Mouse hover softens; keyboard/controller focus and help update immediately.
+// Labels/values wrap at normal font size and the help pane stacks in narrow windows.
 #pragma once
 
 namespace nx::overlay::rows {
@@ -20,8 +21,11 @@ bool toggle(const char* label, bool* v, bool def, const char* desc);
 bool choice(const char* label, int* v, const char* const* names, int n, int def, const char* desc, bool wrap = true);
 // whole numbers lo..hi in steps of `step` (holding left / right speeds up); fmt formats the value (e.g. "%d%%")
 bool integer(const char* label, int* v, int lo, int hi, int step, int def, const char* fmt, const char* desc);
-// an action row with a value on the right; true when activated. upper: the label in capitals.
+// An action row with a value on the right; true when activated. The legacy upper
+// argument is retained for source compatibility; the hub displays sentence case.
 bool action(const char* label, const char* value, const char* desc, bool upper = true, bool highlight = false);
+// The single main action on a page; keeps the same focus and description logic.
+bool primary_action(const char* label,const char* value,const char* desc);
 // the next row is greyed out and can't be changed (still selectable, so its description shows)
 void disable_next();
 // rows after this sit one step in (+1) or back out (-1): options that belong to the row above
@@ -31,5 +35,7 @@ void page_note(const char* text);
 void end();
 // the next page's first row takes the controller's cursor
 void focus_first();
+// Direct page actions can consume the same pending focus request as row pages.
+bool consume_focus_request();
 
 }  // namespace nx::overlay::rows

@@ -2,6 +2,7 @@
 #include "profiles.h"
 #include "platform.h"
 #include "netplay_timing.h"
+#include "netplay_input_snapshot.h"
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -24,9 +25,10 @@ void initialize();
 bool active();
 bool connected(uint32_t player);
 plat::PadState pad(uint32_t player);
+InputSnapshot input_snapshot(uint32_t player);
 void next_frame();
 void trace_framework_frame(uint64_t frame_before,uint64_t frame_after);
-void trace_hid_delivery(uint32_t player,uint64_t sampling_number,const plat::PadState& pad,uint64_t caller=0);
+void trace_hid_delivery(const InputSnapshot&,const plat::PadState& delivered,uint64_t caller=0);
 void loading_event(const char* path);
 void test_file_delay(const char* path);
 uint64_t seed();
@@ -49,9 +51,10 @@ inline void initialize() {}
 inline bool active() { return false; }
 inline bool connected(uint32_t) { return false; }
 inline plat::PadState pad(uint32_t) { return {}; }
+inline InputSnapshot input_snapshot(uint32_t) {return {};}
 inline void next_frame() {}
 inline void trace_framework_frame(uint64_t,uint64_t) {}
-inline void trace_hid_delivery(uint32_t,uint64_t,const plat::PadState&,uint64_t=0) {}
+inline void trace_hid_delivery(const InputSnapshot&,const plat::PadState&,uint64_t=0) {}
 inline void loading_event(const char*) {}
 inline void test_file_delay(const char*) {}
 inline uint64_t seed() { return 0; }

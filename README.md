@@ -1,6 +1,6 @@
 <h1 align="center">SuperWonders</h1>
 
-<p align="center"><b>Super Mario Bros. Wonder, recompiled for PC.</b><br>Experimental native runtime for Windows and Linux, powered by Vulkan.</p>
+<p align="center"><b>Super Mario Bros. Wonder, recompiled for PC.</b><br>One project for original Switch Wonder and Nintendo Switch 2 Edition.<br>Native PC runtime powered by Vulkan, with one shared edition launcher.</p>
 
 <p align="center">
   <a href="docs/PLAYING-WONDER.md">Start playing</a> ·
@@ -15,9 +15,22 @@ SuperWonders translates Wonder's AArch64 executable ahead of time and runs it th
 
 **Bring your own game files.** This repository contains source and documentation, not Nintendo game data, firmware, keys or a compiled game. Generated game libraries and assets stay on your machine.
 
-![SuperWonders launcher preview](docs/images/pc-preview-launcher.png)
+## Two Wonder editions, one launcher
 
-*An earlier PC launcher preview. Its “LAN co-op” entry opens the experimental shared-input mode; it is not evidence of working game-native LAN.*
+**This fork targets both the original Nintendo Switch version of Wonder and the Nintendo Switch 2 Edition.** Original Wonder remains part of the project while work continues on the supplied upgraded-edition package.
+
+| Edition | Preparation and launch |
+| --- | --- |
+| **Nintendo Switch - original Wonder** | Prepare the supported original executable and its matching assets. Keep its own compatible runtime, generated game library and data folder. |
+| **Nintendo Switch 2 Edition** | The supplied package's inspected **Product.120** executable has a separate port and version-checked integration. Keep its own compatible runtime, generated game library and data folder. Complete edition-specific content and services still need verification. |
+
+`Start Wonder Library.cmd` opens the shared launcher and lets you choose either prepared installation. Shared runtime and UI improvements are developed in this repository; each edition still needs a compatible build and its own regression checks. Reuse prepared game code when its ABI remains compatible. An older original-edition library cannot simply be substituted for the upgraded edition, or paired with a newer incompatible runtime.
+
+See [preparing and selecting editions](docs/PLAYING-WONDER.md#choose-an-edition) and the [edition support evidence](docs/WONDER-EDITIONS.md). Neither the package label nor a successful base-game run certifies all Switch 2 Edition features such as Bellabel Park or GameShare.
+
+![SuperWonders PC launcher](docs/images/ui-launcher-2026-11-20.png)
+
+*The PC launcher in an isolated test installation, with no game data configured. The LAN entry is experimental; this screenshot does not demonstrate working multiplayer.*
 
 ## Play on PC
 
@@ -33,7 +46,7 @@ Already have a prepared installation? Keep its data, saves and generated game li
 - **Controls:** keyboard, Xbox/DualSense and Nintendo layouts, remapping, rumble and four local controller slots.
 - **PC launcher:** settings, save backups, RomFS mod inspection and conflict reporting.
 - **Diagnostics:** FPS and frametime overlays, bounded graphics/network traces and reproducible test tools.
-- **Edition library:** separate prepared runtime/data slots for original Wonder and an updated Wonder installation.
+- **Edition library:** one launcher with separate prepared runtime/data slots for original Nintendo Switch Wonder and the Nintendo Switch 2 Edition installation.
 
 Frame generation adds displayed frames; it does not establish faster simulation or lower input latency. Driver behavior, shader compilation and the chosen settings still affect performance.
 

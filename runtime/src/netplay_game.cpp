@@ -53,6 +53,7 @@ std::atomic<uint64_t> pending_loading_event{0};
 using ExchangePipeline=OneAhead<TraceEntry,RecordedExchange>;
 ExchangePipeline* exchange_pipeline=nullptr;
 uint64_t scheduled_tick=1;
+ObservationRegistry observation_registry;
 ApplyTrace* apply_trace=nullptr;  // opt-in only; initialized before the worker starts
 void application_event(ApplyEvent event,const FrameInputs* agreed=nullptr,uint64_t tick=0,uint64_t sampled_ns=0,uint64_t marker=0) {
     if(!apply_trace)return;
@@ -420,6 +421,72 @@ InputSnapshot input_snapshot(uint32_t player) {
     return input_publication.read(player,[] {
         return InputReadMetadata{running.load(),pending_loading_event.load()};
     });
+}
+namespace {
+void observation_caller(ApplyTraceEntry& entry,const CPU& cpu) {
+    const uint64_t caller=cpu.x[30];
+    const auto* module=caller?module_at(caller):nullptr;
+    if(!module||!module->info||caller<module->base)return;
+    const uint64_t relative=caller-module->base;
+    if(relative<module->info->text||relative-module->info->text>=module->info->text_size)return;
+    const char* name=module->info->name;
+    if(!name)return;
+    if(!std::strcmp(name,"main"))entry.caller_module=1;
+    else if(!std::strcmp(name,"sdk"))entry.caller_module=2;
+    else return; // unknown module: never export a raw guest/host address
+    entry.caller_offset=relative;
+}
+}
+FrameworkObservation trace_framework_enter(const CPU& cpu) noexcept {
+    if(!apply_trace)return {};
+    FrameworkObservation result;
+    try {
+        const auto identity=observation_registry.begin(cpu.tpidrro);
+        result={identity.invocation,identity.parent,g_frame.load(),identity.thread};
+        if(!result.invocation)return {};
+        ApplyTraceEntry entry;entry.event=ApplyEvent::FrameworkEnter;
+        entry.ns=plat::monotonic_ns();entry.frame=entry.frame_before=result.frame_before;
+        entry.invocation=result.invocation;entry.parent_invocation=result.parent;
+        entry.thread_ordinal=result.thread;entry.local_loading_event=pending_loading_event.load();
+        observation_caller(entry,cpu);apply_trace->push(entry);
+        return result;
+    } catch(...) {
+        try {if(result.invocation)observation_registry.end(cpu.tpidrro,result.invocation);}catch(...) {}
+        return {};
+    }
+}
+void trace_framework_leave(const CPU& cpu,FrameworkObservation observation,bool threw) noexcept {
+    if(!observation.invocation||!apply_trace)return;
+    // No allocations, filesystem work or original guest calls, including during
+    // exception unwinding. Observation failures never replace a guest exception.
+    try {
+        observation_registry.end(cpu.tpidrro,observation.invocation);
+        ApplyTraceEntry entry;entry.event=threw?ApplyEvent::FrameworkThrow:ApplyEvent::FrameworkExit;
+        entry.ns=plat::monotonic_ns();entry.frame=g_frame.load();entry.frame_before=observation.frame_before;
+        entry.invocation=observation.invocation;entry.parent_invocation=observation.parent;
+        entry.thread_ordinal=observation.thread;entry.local_loading_event=pending_loading_event.load();
+        apply_trace->push(entry);
+    } catch(...) {}
+}
+void trace_loading_file(const char* path,const CPU& cpu) noexcept {
+    if(!apply_trace||!path)return;
+    try {
+        size_t length=0;while(length<4096&&path[length])++length;
+        if(length==4096)return;
+        const std::string_view view(path,length);
+        if(view.find("/Stage/StageLoadInfo/")==view.npos &&
+           view.find("/Sound/Resource/Stream/BGM_")==view.npos &&
+           view.find("/Sound/Resource/Stream/Env_")==view.npos)return;
+        uint64_t hash=0xcbf29ce484222325ull;
+        for(const unsigned char ch:view)hash=(hash^ch)*0x100000001b3ull;
+        if(!hash)hash=1;
+        const auto identity=observation_registry.current(cpu.tpidrro);
+        ApplyTraceEntry entry;entry.event=ApplyEvent::LoadingFile;
+        entry.ns=plat::monotonic_ns();entry.frame=g_frame.load();entry.resource_hash=hash;
+        entry.invocation=identity.invocation;entry.thread_ordinal=identity.thread;
+        entry.local_loading_event=pending_loading_event.load();
+        observation_caller(entry,cpu);apply_trace->push(entry);
+    } catch(...) {}
 }
 void trace_framework_frame(uint64_t frame_before,uint64_t frame_after) {
     if(!apply_trace)return;

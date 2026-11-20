@@ -11,6 +11,8 @@
 static std::string data;
 namespace nx {
 std::atomic<uint64_t> g_frame{0};
+// This lobby-only fixture loads no guest modules; any query is unexpected.
+const LoadedModule* module_at(uint64_t) { std::abort(); }
 namespace ft { void input_sample(uint64_t) {} void input_sample_at(uint64_t,uint64_t) {} }
 void log(const char*,...) {}
 void fatal(const char*,...) { std::abort(); }

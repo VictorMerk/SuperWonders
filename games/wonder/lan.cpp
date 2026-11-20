@@ -37,7 +37,10 @@ uint64_t seed_tick(uint64_t caller,uint64_t real_tick) {
 const bool seed_filter_registered=[] { lan::set_tick_seed_filter(seed_tick); return true; }();
 void framework_frame(CPU& cpu) {
     const auto frame_before=g_frame.load();
-    original(cpu);
+    const auto observation=lan::trace_framework_enter(cpu);
+    try { original(cpu); }
+    catch(...) {lan::trace_framework_leave(cpu,observation,true);throw;}
+    lan::trace_framework_leave(cpu,observation);
     static uint64_t previous = 0;
     const uint64_t frame = g_frame.load();
     lan::trace_framework_frame(frame_before,frame);

@@ -14,6 +14,8 @@ APPLICATIONS = {"apply", "loading_neutral_apply"}
 def read(path):
     """Stream CSV; keep compact applied ticks and HID sample identities only."""
     metadata = {}
+    observations = {}  # invocation -> retained enter/leave; local only
+    files = []
     applied = {}
     duplicates = []
     hid = {}  # (player, sampling number) -> (pad, tick, frame, sequence, changed)
@@ -39,6 +41,33 @@ def read(path):
         for row in csv.DictReader(data_lines()):
             stats["retained_events"] += 1
             event = row["event"]
+            if event in {"framework_enter", "framework_exit", "framework_throw", "loading_file"} and metadata.get("observation_identity") == "local_invocation_v1":
+                def number(field, maximum=(1 << 64) - 1):
+                    if row.get(field) in (None, ""):
+                        raise ValueError("Missing observation field: " + field)
+                    value = int(row[field])
+                    if not 0 <= value <= maximum:
+                        raise ValueError("Invalid observation field: " + field)
+                    return value
+                invocation = number("invocation")
+                parent = number("parent_invocation")
+                thread = number("thread_ordinal", 64)
+                caller_module = number("caller_module", 2)
+                offset = number("caller_offset")
+                resource = number("resource_hash")
+                sequence = number("sequence")
+                if not caller_module and offset:
+                    raise ValueError("Unknown caller must not carry an address/offset")
+                if event == "loading_file":
+                    files.append((invocation, thread, sequence))
+                else:
+                    if not invocation:
+                        raise ValueError("Framework observation requires an invocation")
+                    part = "enter" if event == "framework_enter" else "leave"
+                    recorded = observations.setdefault(invocation, {})
+                    if part in recorded:
+                        raise ValueError("Duplicate framework observation identity")
+                    recorded[part] = (thread, sequence, parent, event)
             if event in APPLICATIONS:
                 tick = int(row["tick"])
                 if tick in applied:
@@ -98,6 +127,31 @@ def read(path):
         raise ValueError("Application trace metadata must include seed, role and omitted")
     phase = [tick for tick, (_, values) in applied.items()
              if values[0] == "apply" and any(values[2 + p * 6] for p in range(4))]
+    observation_contract = metadata.get("observation_identity") == "local_invocation_v1"
+    matched = sum("enter" in pair and "leave" in pair and
+                  pair["enter"][0] == pair["leave"][0] and
+                  pair["enter"][1] < pair["leave"][1] and
+                  pair["enter"][2] == pair["leave"][2]
+                  for pair in observations.values())
+    contained_files = 0
+    for invocation, thread, sequence in files:
+        pair = observations.get(invocation, {})
+        if (thread and "enter" in pair and "leave" in pair and
+                pair["enter"][0] == thread == pair["leave"][0] and
+                pair["enter"][2] == pair["leave"][2] and
+                pair["enter"][1] < sequence < pair["leave"][1]):
+            contained_files += 1
+    stats.update(
+        framework_observation_contract="local_invocation_v1" if observation_contract else "legacy_or_unknown",
+        retained_framework_entries=sum("enter" in pair for pair in observations.values()) if observation_contract else None,
+        retained_framework_leaves=sum("leave" in pair for pair in observations.values()) if observation_contract else None,
+        retained_framework_exceptional_leaves=sum(pair.get("leave", (0, 0, 0, ""))[3] == "framework_throw" for pair in observations.values()) if observation_contract else None,
+        retained_matched_framework_invocations=matched if observation_contract else None,
+        retained_unpaired_framework_invocations=len(observations) - matched if observation_contract else None,
+        retained_loading_file_observations=len(files) if observation_contract else None,
+        retained_loading_files_in_framework_pair=contained_files if observation_contract else None,
+        retained_loading_files_without_framework_pair=len(files) - contained_files if observation_contract else None,
+        framework_observation_scope="Local invocation/thread ordinals are not cross-PC identities. File observations precede guest API return, not loader readiness. Missing pairs may reflect retention, incomplete export or an in-flight call; they do not prove a hang or simulation advancement. Guest module-relative caller offsets are not host callers; resource hashes are noncryptographic.")
     atomic_hid = metadata.get("hid_identity") == "exposed_commit_plus_one"
     if not atomic_hid:
         stats["hid_commit_identity_mismatches"] = None

@@ -39,7 +39,7 @@ before insertion, and a submit-return event is after insertion, not its exact ti
 Tracing is disabled by default. Enabled tracing retains a session prefix and
 recent circular tail in RAM, with counters and an explicit omitted-event count.
 There is no per-frame file output. The default capacity is 131,072 events
-(approximately 38 MiB on the current Windows build). Override it with
+(approximately 43 MiB on the current Windows build). Override it with
 `NX_LAN_APPLY_TRACE_CAPACITY`, from 2 through 262,144 events. Evidence between the
 prefix and tail may be evicted, so absence of a retained event is not proof that
 it never occurred. Abrupt process termination may prevent shutdown export.
@@ -75,6 +75,25 @@ The next controlled gameplay experiment is the same save, character choices,
 route and settings with input pipeline enabled versus disabled. This tests a
 specific buffering hypothesis; disabling it is not an established fix. Do not
 rewrite all guest/kernel clocks or discard additional barriers without evidence.
+
+## Framework and selected file observations
+
+With the same opt-in application trace enabled, `framework_enter`,
+`framework_exit` and `framework_throw` pair actual wrapped framework calls using
+local invocation numbers and parent/thread ordinals. `loading_file` observes
+successful physical opens of selected stage-load and BGM/environment resources
+before the guest OpenFile API returns. This excludes virtual opens and does not
+measure loader readiness. It records a noncryptographic resource-path hash and,
+when validated inside main/sdk text, a guest module-relative caller offset.
+Raw paths, guest TLS tokens and host callers are not exported by these additions.
+
+The fixed registry supports 64 local thread identities and eight nested calls;
+unknown/exhausted identities remain explicit. Invocation/thread numbers are local
+to one process and cannot be compared numerically across PCs. Exception exits
+preserve the original exception; observations perform no filesystem work. Older
+CSV files without the trailing observation columns remain readable. Retention can
+omit an entry or exit: an unpaired retained event alone is not evidence of a hang.
+These observations change no frame cadence, clocks, protocol or pause behavior.
 
 ## Loading publication asymmetry
 

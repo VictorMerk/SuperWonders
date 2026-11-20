@@ -36,6 +36,23 @@ int main() {
     framework.push(e);text=csv(framework);
     check(text.find("count_framework_frame=1")!=text.npos&&text.find(",77,99,")!=text.npos,
           "framework invocation without a present is retained separately from input apply");
+    ObservationRegistry registry;
+    const auto outer=registry.begin(1234),inner=registry.begin(1234);
+    check(outer.thread==inner.thread&&outer.invocation&&inner.parent==outer.invocation,"local nested invocation identity");
+    check(registry.current(1234).invocation==inner.invocation,"file observation sees current invocation");
+    registry.end(1234,inner.invocation);
+    check(registry.current(1234).invocation==outer.invocation,"nested exit restores outer invocation");
+    registry.end(1234,outer.invocation);
+    check(registry.current(1234).invocation==0,"exit clears current invocation");
+    check(registry.current(0).thread==0,"unknown thread token fails unknown");
+    for(uint64_t token=1;token<=63;++token)check(registry.current(token).thread!=0,"bounded thread slots available");
+    check(registry.current(9999).thread==0,"thread registry exhaustion is explicit unknown");
+    ObservationRegistry depth;
+    std::array<ObservationIdentity,9> nested{};
+    for(auto& identity:nested)identity=depth.begin(55);
+    check(depth.current(55).invocation==0,"nesting overflow does not falsely attribute loading file");
+    depth.end(55,nested.back().invocation);
+    check(depth.current(55).invocation==nested[7].invocation,"overflow unwinding restores tracked nesting");
     ApplyTrace concurrent(8);
     const auto produce=[&] { for(unsigned i=0;i<1000;++i)concurrent.push({}); };
     std::thread a(produce),b(produce); a.join(); b.join();

@@ -19,6 +19,9 @@ namespace fixture {
 std::deque<nx::lan::FrameInputs> replies;
 std::vector<uint64_t> sent_markers;
 std::vector<uint64_t> before_ticks;
+nx::ModuleInfo main_info{};
+nx::LoadedModule main_module{&main_info,0x100000,0x1000,nullptr};
+unsigned module_queries=0;
 void check(bool ok, const char *m) {
   if (!ok) {
     std::fprintf(stderr, "FAIL: %s\n", m);
@@ -29,6 +32,7 @@ void check(bool ok, const char *m) {
 namespace nx {
 std::atomic<uint64_t> g_frame{100};
 void log(const char *, ...) {}
+const LoadedModule* module_at(uint64_t) {++fixture::module_queries;return &fixture::main_module;}
 [[noreturn]] void fatal(const char *, ...) { std::abort(); }
 namespace plat {
 uint64_t monotonic_ns() {
@@ -122,14 +126,22 @@ int main() {
   using namespace nx::lan;
   using fixture::check;
   Session fake;
-  const char *path = "fixture-loading-event";
+  const char *path = "fixture:/Sound/Resource/Stream/BGM_CourseFixture.bwav";
   uint64_t marker = 0xcbf29ce484222325ull;
   for (const unsigned char *p = reinterpret_cast<const unsigned char *>(path);
        *p; ++p)
     marker = (marker ^ *p) * 0x100000001b3ull;
+  nx::CPU cpu{};cpu.x[30]=fixture::main_module.base+0x140;cpu.tpidrro=0xabcdef123456ull;
+  fixture::main_info.name="main";fixture::main_info.text=0x100;fixture::main_info.text_size=0x100;
+  check(trace_framework_enter(cpu).invocation==0&&fixture::module_queries==0,"default-off observations do not resolve callers");
+  trace_loading_file(path,cpu);check(fixture::module_queries==0,"default-off file observation fast path");
   reset(fake, 0);
+  const auto observation=trace_framework_enter(cpu);
+  check(observation.invocation&&observation.thread,"actual framework entry local identity");
+  trace_loading_file(path,cpu);
   fixture::replies = {frame(1, marker, 0), frame(2, marker, marker)};
   loading_event(path);
+  trace_framework_leave(cpu,observation);
   check(fixture::replies.empty(), "loader used exactly the bounded replies");
   check(fixture::before_ticks == std::vector<uint64_t>({0, 0}),
         "actual loader does not publish intermediate transport-only tick");
@@ -144,6 +156,23 @@ int main() {
             loader_trace.str().find("# count_loading_neutral_apply=1\n") !=
                 std::string::npos,
         "actual loader trace labels neutral publication");
+  const auto loader_text=loader_trace.str();
+  check(loader_text.find("observation_identity=local_invocation_v1")!=std::string::npos&&
+        loader_text.find("# count_framework_enter=1\n")!=std::string::npos&&
+        loader_text.find("# count_framework_exit=1\n")!=std::string::npos&&
+        loader_text.find("# count_loading_file=1\n")!=std::string::npos,"actual entry/file/exit observations exported");
+  const auto suffix=","+std::to_string(observation.invocation)+",0,"+std::to_string(observation.thread)+",";
+  check(loader_text.find(suffix+std::to_string(marker)+",1,320\n")!=std::string::npos,
+        "actual loading file correlates invocation, path hash and source-relative caller");
+  check(loader_text.find(path)==std::string::npos&&loader_text.find(std::to_string(cpu.tpidrro))==std::string::npos,
+        "no raw path or guest TLS token exported");
+  auto nested=trace_framework_enter(cpu);trace_framework_leave(cpu,nested,true);
+  cpu.x[30]=fixture::main_module.base+0x200;trace_loading_file(path,cpu); // text span excludes upper bound
+  cpu.x[30]=fixture::main_module.base+0xff;trace_loading_file(path,cpu); // below nonzero text start
+  std::ostringstream unknown_callers;apply_trace->write(unknown_callers,0,1,true);
+  check(unknown_callers.str().find(","+std::to_string(marker)+",0,0\n")!=std::string::npos&&
+        unknown_callers.str().find("# count_framework_throw=1\n")!=std::string::npos,
+        "invalid caller range stays unknown and exceptional exit is distinct");
   reset(fake, 1);
   fixture::replies = {frame(1, marker, 0)};
   nx::lan::next_frame();

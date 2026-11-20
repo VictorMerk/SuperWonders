@@ -336,6 +336,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     lan::test_file_delay(guest.c_str());
     play::file_opened(guest);
+    lan::trace_loading_file(guest.c_str(),c); // before guest OpenFile returns; not a readiness claim
     game::file_opened(guest.c_str());
     c.x[0] = kOk;
 }

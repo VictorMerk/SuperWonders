@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+namespace nx { struct CPU; }
+
 namespace nx::lan {
 using TickSeedFilter=uint64_t(*)(uint64_t caller,uint64_t real_tick);
 enum class LobbyPhase { Idle, Preparing, Waiting, Ready, Failed };
@@ -19,6 +21,10 @@ struct LobbyRequest {
     bool pipeline = false;
     uint8_t frame_rate = 60;
 };
+struct FrameworkObservation {
+    uint64_t invocation=0, parent=0, frame_before=0;
+    uint32_t thread=0;
+};
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
 // Development opt-in. Transport success alone does not establish simulation sync.
 void initialize();
@@ -28,6 +34,9 @@ plat::PadState pad(uint32_t player);
 InputSnapshot input_snapshot(uint32_t player);
 void next_frame();
 void trace_framework_frame(uint64_t frame_before,uint64_t frame_after);
+FrameworkObservation trace_framework_enter(const CPU&) noexcept;
+void trace_framework_leave(const CPU&,FrameworkObservation,bool threw=false) noexcept;
+void trace_loading_file(const char* path,const CPU&) noexcept;
 void trace_hid_delivery(const InputSnapshot&,const plat::PadState& delivered,uint64_t caller=0);
 void loading_event(const char* path);
 void test_file_delay(const char* path);
@@ -54,6 +63,9 @@ inline plat::PadState pad(uint32_t) { return {}; }
 inline InputSnapshot input_snapshot(uint32_t) {return {};}
 inline void next_frame() {}
 inline void trace_framework_frame(uint64_t,uint64_t) {}
+inline FrameworkObservation trace_framework_enter(const CPU&) noexcept {return {};}
+inline void trace_framework_leave(const CPU&,FrameworkObservation,bool=false) noexcept {}
+inline void trace_loading_file(const char*,const CPU&) noexcept {}
 inline void trace_hid_delivery(const InputSnapshot&,const plat::PadState&,uint64_t=0) {}
 inline void loading_event(const char*) {}
 inline void test_file_delay(const char*) {}

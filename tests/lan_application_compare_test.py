@@ -23,10 +23,12 @@ class ComparisonTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
 
-    def write(self, name, role, rows, seed=123, omitted=0, identity=None):
+    def write(self, name, role, rows, seed=123, omitted=0, identity=None, observations=False):
         path = Path(self.temp.name) / name
         with path.open("w", newline="", encoding="utf-8") as out:
             marker = '' if identity is None else ',hid_identity=' + identity
+            if observations:
+                marker += ',observation_identity=local_invocation_v1'
             out.write(f"# schema=1,role={role},seed={seed},capacity=8,total={len(rows)+omitted},retained={len(rows)},omitted={omitted}{marker}\n")
             writer = csv.DictWriter(out, fieldnames=list(rows[0]))
             writer.writeheader()
@@ -163,6 +165,56 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(indexed, {})
         self.assertEqual(stats["retained_events"], 10000)
         self.assertLess(peak, 2_000_000, "nonindexed CSV rows must not accumulate in memory")
+
+    def test_framework_file_pairs_remain_local_observations(self):
+        def observation(event, sequence, invocation=7, thread=1, **changes):
+            fields = dict(sequence=sequence, invocation=invocation, parent_invocation=0,
+                          thread_ordinal=thread, resource_hash=42 if event == "loading_file" else 0,
+                          caller_module=1, caller_offset=320)
+            fields.update(changes)
+            return row(0, event, **fields)
+        events = [observation("framework_enter", 1), observation("loading_file", 2),
+                  observation("framework_exit", 3),
+                  observation("loading_file", 4, invocation=0, thread=2),
+                  observation("framework_enter", 5, invocation=8),
+                  observation("framework_throw", 6, invocation=8)]
+        path = self.write("observed", 0, events, observations=True)
+        _, _, stats = module.read(path)
+        self.assertEqual(stats["retained_matched_framework_invocations"], 2)
+        self.assertEqual(stats["retained_framework_exceptional_leaves"], 1)
+        self.assertEqual(stats["retained_loading_files_in_framework_pair"], 1)
+        self.assertEqual(stats["retained_loading_files_without_framework_pair"], 1)
+        # A mismatched parent cannot establish a valid containing invocation.
+        inconsistent = [observation("framework_enter", 1, parent_invocation=3),
+                        observation("loading_file", 2),
+                        observation("framework_exit", 3, parent_invocation=4)]
+        bad_path = self.write("bad-parent", 0, inconsistent, observations=True)
+        _, _, bad_stats = module.read(bad_path)
+        self.assertEqual(bad_stats["retained_matched_framework_invocations"], 0)
+        self.assertEqual(bad_stats["retained_loading_files_in_framework_pair"], 0)
+        self.assertEqual(bad_stats["retained_loading_files_without_framework_pair"], 1)
+        # Prefix/tail eviction may remove one end; never infer a blocked frame.
+        path = self.write("partial", 0, events[:2], omitted=10, observations=True)
+        _, _, partial = module.read(path)
+        self.assertEqual(partial["retained_unpaired_framework_invocations"], 1)
+        self.assertEqual(partial["retained_loading_files_without_framework_pair"], 1)
+        self.assertIn("do not prove a hang", partial["framework_observation_scope"])
+        path = self.write("legacy", 0, [row(1)])
+        _, _, old = module.read(path)
+        self.assertIsNone(old["retained_framework_entries"])
+        self.assertEqual(old["framework_observation_contract"], "legacy_or_unknown")
+
+    def test_observation_fields_reject_raw_unknown_caller_and_invalid_identity(self):
+        event = row(0, "framework_enter", sequence=1, invocation=1, parent_invocation=0,
+                    thread_ordinal=1, resource_hash=0, caller_module=0, caller_offset=123)
+        path = self.write("invalidcaller", 0, [event], observations=True)
+        with self.assertRaises(ValueError):
+            module.read(path)
+        event["caller_offset"] = "0"
+        event["thread_ordinal"] = "65"
+        path = self.write("invalidthread", 0, [event], observations=True)
+        with self.assertRaises(ValueError):
+            module.read(path)
 
     def test_invalid_schema_and_hid_player_rejected(self):
         left = self.write("left", 0, [row(1)])

@@ -315,3 +315,24 @@ service failure and local-network argument. Stop at an account requirement. Only
 natural local-backend activation warrants a physical discovery/join test. No mode,
 resource, account or room fabrication is part of that test. This bounded static
 evidence applies to Product120 and certifies neither rooms nor world synchronization.
+
+
+## Confirmed input-publication asymmetry in a CPU reproduction
+
+A two-process, localhost reproduction links the actual runtime netplay code,
+OneAhead pipeline and production Session transport. It runs no guest engine and
+uses mocked host/device probes. Both sides authenticate the same nonneutral
+commit. The host enters the loader and records that commit as
+`loading_drain_discard`; the other process consumes it through ordinary
+`next_frame`, publishes it to the HID snapshot and records `apply`. Both later
+agree on the same loading marker and publish a final neutral commit.
+
+This proves different publication decisions are possible despite identical
+committed input payloads. It does not prove a guest simulation step occurred or
+establish the cause of a historical physical-PC failure. The newer rejection of
+conflicting loading identities does not detect this case: its identities agree.
+A fix needs agreement about simulation boundaries and each commit's fate, not
+only matching input values. Blocking ordinary progression on a remote loading
+marker alone can prevent the guest from reaching its own matching file request;
+applying then overwriting a drained snapshot under the loader lock does not
+establish guest consumption. Neither shortcut is shipped as a synchronization fix.

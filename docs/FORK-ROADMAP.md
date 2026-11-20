@@ -50,9 +50,11 @@ installed. The feature must be tested separately from repairing LAN synchronizat
 Private two-controller contact tests confirmed independent Mario/Toad control.
 Changing only one collision-table cell did not establish solid contact; a second
 variant caused both actors to disappear followed by a death transition. Those
-experimental packs are not installed or shipped. Yoshi riding is being checked
-as an existing character-specific baseline; it does not implement arbitrary-player
-carrying. Input/capture timing must overlap before judging a jump or attachment.
+experimental packs are not installed or shipped. A subsequent two-controller Mario/Yoshi test
+captured the jump, seated landing and movement of the attached pair under P2-only
+input. This confirms the existing character-specific riding baseline locally; it
+does not implement arbitrary-player carrying, verify dismount/death cleanup or
+certify the interaction over LAN.
 
 ## Evidence from the reported sessions
 

@@ -84,6 +84,9 @@ endforeach()
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(game_source_test tests/game_source_test.cpp runtime/src/launcher/game_source.cpp)
+    target_include_directories(game_source_test PRIVATE runtime/src)
+    add_test(NAME game_source COMMAND game_source_test)
     add_executable(input_settings_test tests/input_settings_test.cpp runtime/src/overlay/settings.cpp)
     target_include_directories(input_settings_test PRIVATE runtime/src)
     add_test(NAME input_settings COMMAND input_settings_test)
@@ -349,6 +352,7 @@ list(APPEND NX_RUNTIME_SOURCES ${NX_GAME_SOURCES} ${NX_SHADER_SOURCES} runtime/s
 if(NX_GAME_LIBRARY)
     # SuperWonders Launcher: the start screen before the game (setup, settings, mods, updates; launcher/launcher.h)
     list(APPEND NX_RUNTIME_SOURCES runtime/src/launcher/launcher.cpp runtime/src/launcher/game_version.cpp
+         runtime/src/launcher/game_source.cpp
          runtime/src/launcher/updates.cpp runtime/src/launcher/test_pad.cpp
          runtime/src/launcher/update_core.c runtime/src/launcher/update_crypto.c)
     if(NOT WIN32)

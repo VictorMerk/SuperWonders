@@ -1,5 +1,7 @@
 // SuperWonders Launcher (launcher.h): state, the setup job, and the screen.
 #include "launcher/launcher.h"
+#include "launcher/game_source.h"
+#include <future>
 
 #include <algorithm>
 #include <atomic>
@@ -495,7 +497,8 @@ struct State {
     bool config_mode = false;
     Job job;
     std::mutex pick_lock;
-    std::string picked_exefs, picked_romfs, picked_output;  // from the folder picker's thread
+    std::string picked_exefs, picked_romfs, picked_output, picked_game_source;  // from the folder picker's thread
+    std::future<source::Found> source_search;
     ExefsInfo exefs_info;
     RomfsInfo romfs_info;
     PairInfo pair_info;
@@ -841,6 +844,14 @@ void page_files() {
     if (g->browse) return page_browse();
     rows::begin("##files", ImGui::GetContentRegionAvail().y);
     rows::section(lt(LtYourGameFiles));
+    const bool searching = g->source_search.valid();
+    if (searching) rows::disable_next();
+    if (rows::action("Choose game folder", searching ? "Searching..." : lt(LtChoose),
+                     "Find matching ExeFS and RomFS folders inside one extracted game folder.", true))
+        plat::pick_folder("Choose your extracted game folder", home_folder(), [](std::string path) {
+            std::lock_guard lock(g->pick_lock);
+            g->picked_game_source = std::move(path);
+        });
     const std::string cur_out = plat::data_root();
     const std::string out_val = fit_path(cur_out, lt(LtOutputFolder));
     std::string out_desc =
@@ -1786,17 +1797,38 @@ void screen(float w, float h) {
     const float k = g_k;
     const ui::Theme& th = ui::theme();
     {
-        std::string picked_exefs, picked_romfs, picked_output;
+        std::string picked_exefs, picked_romfs, picked_output, picked_game_source;
         {
             std::lock_guard lk(g->pick_lock);  // folders the picker returned
             picked_exefs = std::move(g->picked_exefs);
             picked_romfs = std::move(g->picked_romfs);
             picked_output = std::move(g->picked_output);
+            picked_game_source.swap(g->picked_game_source);
             g->picked_exefs.clear(), g->picked_romfs.clear(), g->picked_output.clear();
         }
         if (!picked_exefs.empty() || !picked_romfs.empty() || !picked_output.empty())
             g->browse = 0;  // (the system's picker answered)
         if (!picked_output.empty()) apply_output_folder(picked_output);
+        if (!picked_game_source.empty() && !g->source_search.valid()) {
+            g->source_search = std::async(std::launch::async, [folder = std::move(picked_game_source)] {
+                return source::discover(u8(folder));
+            });
+        }
+        if (g->source_search.valid() &&
+            g->source_search.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try {
+                const auto found = g->source_search.get();
+                if (!found.limited && found.exefs.size() == 1 && found.romfs.size() == 1) {
+                    picked_exefs = found.exefs.front();
+                    picked_romfs = found.romfs.front();
+                    g->note.clear();
+                } else {
+                    g->note = "Could not identify one ExeFS and one RomFS. Choose each folder separately.";
+                }
+            } catch (...) {
+                g->note = "Could not read the selected folder.";
+            }
+        }
         if (!picked_exefs.empty() || !picked_romfs.empty()) {
             if (!picked_exefs.empty()) g->config.exefs = picked_exefs;
             if (!picked_romfs.empty()) g->config.romfs = picked_romfs;

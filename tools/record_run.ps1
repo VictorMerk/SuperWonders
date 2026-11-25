@@ -33,6 +33,7 @@ param(
     [switch]$NoAnalysis
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'perf/capture_evidence.ps1')
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 if (Get-Process wonder -ErrorAction SilentlyContinue) { Write-Error "a wonder process is already running"; exit 2 }
@@ -116,7 +117,8 @@ while ($job.State -eq 'Running') {
     $t = ((Get-Date) - $started).TotalSeconds
     foreach ($d in $dumps) {
         if (-not $done[$d] -and $t -ge $d) {
-            Set-Content -Encoding ascii "private\wonder\dump_frames" "40 1"
+            if(Test-Path -LiteralPath 'private\wonder\dump_frames'){continue}
+            Publish-WonderCaptureRequest -DataRoot 'private\wonder' -Count 40 -Every 1
             $done[$d] = $true
             Write-Host ("dump_frames at {0:N0} s (video {1:N0} s)" -f $t, ($t - $recFrom))
         }

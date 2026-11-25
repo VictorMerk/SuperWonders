@@ -84,6 +84,9 @@ endforeach()
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(mod_overlay_test tests/mod_overlay_test.cpp runtime/src/mod_overlay.cpp)
+    target_include_directories(mod_overlay_test PRIVATE runtime/src)
+    add_test(NAME mod_overlay COMMAND mod_overlay_test)
     add_executable(input_settings_test tests/input_settings_test.cpp runtime/src/overlay/settings.cpp)
     target_include_directories(input_settings_test PRIVATE runtime/src)
     add_test(NAME input_settings COMMAND input_settings_test)
@@ -239,6 +242,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/svc_time.cpp
     runtime/src/svc_process.cpp
     runtime/src/hle_fs.cpp
+    runtime/src/mod_overlay.cpp
     runtime/src/svc_account.cpp
     runtime/src/svc_fiber.cpp
     runtime/src/svc_friends.cpp

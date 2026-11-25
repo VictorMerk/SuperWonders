@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "nvn_pipeline.h"
+#include "integer_texture_variants.h"
 
 namespace nx::nvn {
 
@@ -96,6 +97,16 @@ uint32_t int_texture_kind(const ShaderInfo* s, uint32_t binding) {
 
 uint32_t int_texture_generation(const ShaderInfo* s) {
     return s ? __atomic_load_n(&s->int_tex_gen, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint64_t int_texture_variant_id(const ShaderInfo* s) {
+    if (!s) return 0;
+    Records& r = records();
+    std::lock_guard lock(r.lock);
+    const auto it = r.kinds.find(s);
+    if (it == r.kinds.end() || it->second.empty()) return 0;
+    static typed_pipeline::SemanticTokens tokens;
+    return tokens.intern(it->second);
 }
 
 std::string int_texture_key(const ShaderInfo* s) {

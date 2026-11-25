@@ -1085,7 +1085,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     const PipelineKey& key = dynamic ? normalized : draw_key;
     // By the key's bytes, as before, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and
     // compared down a tree per draw; and the last entry first: consecutive draws mostly share their state.
-    using Key = ByteKey<sizeof(PipelineKey) + 40>;
+    using Key = ByteKey<sizeof(PipelineKey) + 48>;
     // A pipeline, and with GPL its optimised replacement while that compiles (swapped in by the first draw after).
     struct Entry {
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -1118,8 +1118,8 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     state_key.vs = state_key.fs = nullptr;
     std::memcpy(k.b + 32, &state_key, sizeof state_key);
     // A stage that gained an integer texture record has another module (nvn_spirv_int_textures.cpp).
-    const uint32_t generations[2] = {int_texture_generation(key.vs), key.fs ? int_texture_generation(key.fs) : 0u};
-    std::memcpy(k.b + 32 + sizeof state_key, generations, sizeof generations);
+    const uint64_t variants[2] = {int_texture_variant_id(key.vs), int_texture_variant_id(key.fs)};
+    std::memcpy(k.b + 32 + sizeof state_key, variants, sizeof variants);
     if (last && std::memcmp(k.b, last->first.b, sizeof k.b) == 0) return current(last->second);
     if (auto it = cache.find(k); it != cache.end()) return current((last = &*it)->second);
     auto store = [&](VkPipeline p, std::shared_ptr<AsyncPipeline> optimised = nullptr) {

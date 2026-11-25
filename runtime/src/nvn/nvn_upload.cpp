@@ -359,7 +359,9 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     if (img.alpha_from_r && t.stride) {  // R8 pitch-linear -> RGBA8 (255, 255, 255, R), level 0
         const uint8_t* src = reinterpret_cast<const uint8_t*>(t.memory);
         uint64_t rows = uint64_t(img.height) * layers;
-        if (uint64_t(t.stride) * rows > t.storage_size) rows = t.storage_size / t.stride;
+        if (!rows || !img.width || img.width > t.stride || img.width > t.storage_size ||
+            rows - 1 > (t.storage_size - img.width) / t.stride ||
+            rows > UINT64_MAX / (uint64_t(img.width) * 4)) return clear_image(cb, img);
         Upload u = upload_alloc(rows * img.width * 4, 16);
         for (uint64_t y = 0; y < rows; y++) {
             const uint8_t* s = src + y * t.stride;
@@ -369,7 +371,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         VkBufferImageCopy r{};
         r.bufferOffset = u.offset;
         r.imageSubresource = {img.aspect, 0, 0, img.layers};
-        r.imageExtent = {img.width, uint32_t(std::min<uint64_t>(rows, img.height)), 1};
+        r.imageExtent = {img.width, img.height, 1};
         transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         return;
@@ -400,7 +402,12 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
             std::memset(u.ptr, 0, staged);
             for (uint64_t y = 0; y < have; y++) widen_r11g11b10(src + y * t.stride, u.ptr + y * img.width * 8, texels);
         } else {
-            staged = uint64_t(t.stride) * rows * layers;
+            const uint64_t row_count = rows * layers;
+            const uint64_t row_bytes = ((uint64_t(img.width) + bw - 1) / bw) * bytes;
+            if (!row_count || !row_bytes || t.stride % bytes || row_bytes > t.stride ||
+                row_bytes > t.storage_size || row_count - 1 > (t.storage_size - row_bytes) / t.stride ||
+                uint64_t(t.stride / bytes) * bw > UINT32_MAX) return clear_image(cb, img);
+            staged = (row_count - 1) * t.stride + row_bytes;
             u = upload(reinterpret_cast<const void*>(t.memory), staged, 16);
             r.bufferRowLength = t.stride / bytes * bw;
         }

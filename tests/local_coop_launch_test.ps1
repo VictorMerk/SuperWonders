@@ -15,5 +15,23 @@ try {
     if($env:NX_PLAY_SHOTS -ne 'map=map+680' -or $env:NX_TRACE_SHADOW_SHOT -ne 'map'){throw 'Parent diagnostic environment was changed'}
     if($env:NX_LAN_MODE -ne 'join'){throw 'The parent shell environment was changed'}
     if($info.UseShellExecute -or $info.Arguments -ne '--play'){throw 'Incorrect local game launch'}
-    Write-Output 'Local co-op launch: independent child environment, physical controllers and data selection passed; no game launched.'
+    $case=Join-Path ([IO.Path]::GetTempPath()) ('wonder-coop-plan-'+[guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $case | Out-Null
+    try {
+        $fake=Join-Path $case 'must-not-execute.exe'
+        [IO.File]::WriteAllText($fake,'This is not an executable. A dry run must never start it.')
+        $script=Join-Path $PSScriptRoot '../tools/play/Start-Wonder-LocalCoop.ps1'
+        $plan=& $script -Runtime $fake -DataRoot $case -DryRun | ConvertFrom-Json
+        if($plan.launch_performed -ne $false -or $plan.runtime -ne $fake -or $plan.arguments -ne '--play') {
+            throw 'Dry-run unexpectedly launched or changed the plan.'
+        }
+        $rejected=$false
+        try { & $script -Runtime $fake -DataRoot $case -UnknownLaunchOption } catch [Management.Automation.ParameterBindingException] {$rejected=$true}
+        if(!$rejected){throw 'Unknown options must fail parameter binding before any launch.'}
+    } finally {
+        # Only remove the exact files/directory created by this test, non-recursively.
+        if(Test-Path -LiteralPath $fake){Remove-Item -LiteralPath $fake}
+        Remove-Item -LiteralPath $case
+    }
+    Write-Output 'Local co-op launch: isolated child environment, read-only dry run and unknown-option rejection passed; no game launched.'
 } finally {foreach($key in $old.Keys){[Environment]::SetEnvironmentVariable($key,$old[$key])}}

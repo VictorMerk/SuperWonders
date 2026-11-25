@@ -222,6 +222,7 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
     if (!WinHttpCrackUrl(w.c_str(), 0, 0, &uc)) return why = "bad address " + url, false;
     HINTERNET s = WinHttpOpen(L"SuperWonders-Update", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                               WINHTTP_NO_PROXY_BYPASS, 0);
+    if (s) WinHttpSetTimeouts(s, 10000, 15000, 30000, 30000);
     HINTERNET c = s ? WinHttpConnect(s, host, uc.nPort, 0) : nullptr;
     const bool tls = uc.nScheme == INTERNET_SCHEME_HTTPS;
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -241,7 +242,19 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
         if (!out) ok = false, why = "can't write " + str(*to);
     }
     uint64_t got = 0;
-    for (DWORD n = 0; ok && WinHttpQueryDataAvailable(r, &n) && n;) {
+    const uint64_t limit = to && expect ? expect : 8ull * 1024 * 1024;
+    while (ok) {
+        DWORD n = 0;
+        if (!WinHttpQueryDataAvailable(r, &n)) {
+            ok = false, why = "couldn't read the download";
+            break;
+        }
+        if (!n) break;
+        if (got > limit || n > limit - got) {
+            ok = false, why = "the response exceeds its size limit";
+            break;
+        }
+        n = std::min<DWORD>(n, 64 * 1024);
         std::string chunk(n, '\0');
         DWORD read = 0;
         if (!WinHttpReadData(r, chunk.data(), n, &read)) {
@@ -249,10 +262,20 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
             break;
         }
         chunk.resize(read);
+        if (!read) break;
         got += read;
         if (to) out.write(chunk.data(), std::streamsize(chunk.size()));
         else body->append(chunk);
+        if (to && !out) {
+            ok = false, why = "couldn't write the download";
+            break;
+        }
         if (progress && expect) *progress = float(double(got) / double(expect));
+    }
+    if (ok && to && expect && got != expect) ok = false, why = "the download was incomplete";
+    if (to && out.is_open()) {
+        out.flush();
+        if (ok && !out) ok = false, why = "couldn't save the download";
     }
     for (HINTERNET h : {r, c, s})
         if (h) WinHttpCloseHandle(h);

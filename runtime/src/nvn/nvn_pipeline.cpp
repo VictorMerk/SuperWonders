@@ -21,6 +21,7 @@
 #include "map_proxy_debug.h"
 
 #include "nvn_pipeline.h"
+#include "pipeline_blend_key.h"
 #include "nvn_pipeline_async.h"
 #include "nvn_ultrawide.h"
 #include "platform.h"
@@ -113,6 +114,7 @@ void load_pipeline_keys() {
     }
     for (auto& rec : g_pipeline_key_records) {
         rec.key.vs = rec.key.fs = nullptr;  // never trust pointer bytes from disk, even in a versioned local cache
+        canonicalize_pipeline_blend(rec.key);
         g_pipeline_key_ids.insert(pipeline_record_id(rec));
     }
     log("nvn/vk: loaded %llu recorded pipeline recipes from %s", (unsigned long long)g_pipeline_key_records.size(),
@@ -420,6 +422,7 @@ void record_pipeline_key(const PipelineKey& key) {
     if (key.fs) std::copy(std::begin(key.fs->local_size), std::end(key.fs->local_size), rec.fs_local);
     std::memcpy(&rec.key, &key, sizeof key);
     rec.key.vs = rec.key.fs = nullptr;
+    canonicalize_pipeline_blend(rec.key);
     const std::string id = pipeline_record_id(rec);
     if (g_pipeline_key_ids.insert(id).second) {
         g_pipeline_key_records.push_back(rec);
@@ -1116,6 +1119,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     PipelineKey state_key{};
     std::memcpy(&state_key, &key, sizeof key);
     state_key.vs = state_key.fs = nullptr;
+    canonicalize_pipeline_blend(state_key);
     std::memcpy(k.b + 32, &state_key, sizeof state_key);
     // A stage that gained an integer texture record has another module (nvn_spirv_int_textures.cpp).
     const uint32_t generations[2] = {int_texture_generation(key.vs), key.fs ? int_texture_generation(key.fs) : 0u};
@@ -1146,7 +1150,9 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
         return finish(*a);
     }
 
-    std::shared_ptr<PipelineBuild> build = make_build(key, layout);
+    state_key.vs = key.vs;
+    state_key.fs = key.fs;
+    std::shared_ptr<PipelineBuild> build = make_build(state_key, layout);
     VkGraphicsPipelineCreateInfo& ci = build->ci;
 
     if (vk_gpl()) {

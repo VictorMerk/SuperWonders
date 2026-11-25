@@ -26,6 +26,7 @@ static inline std::filesystem::path nx_u8path(std::string_view s) { return std::
 #include <nx/game.h>
 
 #include "platform.h"
+#include "mod_overlay.h"
 #include "user_profiles.h"
 #include "frametrace.h"
 #include "play.h"
@@ -106,41 +107,10 @@ std::set<std::string> g_rom_mounts;
 // Mods: <data root>/mods/<name>/, each with a romfs folder in its first levels (romfs/, or the layouts Switch mods
 // ship in: contents/<title id>/romfs/, atmosphere/contents/<title id>/romfs/). Their files go over the game's
 // RomFS; folders in name order, the first with a file wins; a folder whose name starts with '-' is off.
-const std::vector<fs::path>& mod_roots() {
-    static const std::vector<fs::path> roots = [] {
-        std::vector<fs::path> mods, out;
-        std::error_code ec;
-        const char* aspect_profile = std::getenv("NX_ASPECT_PROFILE");
-        for (auto& e : fs::directory_iterator(data_root() / "mods", ec)) {
-            if (!e.is_directory()) continue;
-            std::string name = utf8(e.path().filename());
-            const bool disabled = !name.empty() && name[0] == '-';
-            const std::string clean = disabled ? name.substr(1) : name;
-            const bool map32 = clean == "00-uw-map-hud-32-9";
-            const bool screen32 = clean == "00-uw-screen-test";
-            const bool map21 = clean == "00-uw-map-hud-21-9";
-            const bool screen21 = clean == "00-uw-screen-test-21-9";
-            if (aspect_profile && (map32 || screen32 || map21 || screen21)) {
-                const bool selected = ((map32 || screen32) && std::strcmp(aspect_profile, "32:9") == 0) ||
-                                      ((map21 || screen21) && std::strcmp(aspect_profile, "21:9") == 0);
-                if (selected) mods.push_back(e.path());
-            } else if (!disabled) mods.push_back(e.path());
-        }
-        std::sort(mods.begin(), mods.end());
-        for (const fs::path& m : mods) {
-            fs::path found;
-            for (auto it = fs::recursive_directory_iterator(m, ec); it != fs::recursive_directory_iterator();
-                 it.increment(ec)) {
-                if (it.depth() >= 3) it.disable_recursion_pending();
-                if (it->is_directory() && virtual_key(it->path().filename()) == "romfs") {
-                    found = it->path();
-                    break;
-                }
-            }
-            log("mods: %s%s", utf8(m.filename()).c_str(), found.empty() ? ": no romfs folder, skipped" : "");
-            if (!found.empty()) out.push_back(found);
-        }
-        return out;
+const std::vector<mods::Root>& active_mods() {
+    static const auto roots = [] {
+        const char* aspect = std::getenv("NX_ASPECT_PROFILE");
+        return mods::selected(data_root() / "mods", aspect ? aspect : "");
     }();
     return roots;
 }
@@ -159,7 +129,7 @@ std::vector<fs::path> mod_paths(const std::string& guest) {
     std::vector<fs::path> v;
     auto [mnt, rest] = split(guest);
     if (g_rom_mounts.count(mnt))
-        for (const fs::path& r : mod_roots()) v.push_back(r / nx_u8path(rest));
+        for (const auto& r : active_mods()) v.push_back(r.romfs / nx_u8path(rest));
     return v;
 }
 
@@ -168,13 +138,14 @@ fs::path resolve(const std::string& guest) {
     auto [mnt, rest] = split(guest);
     auto it = g_mounts.find(mnt);
     if (it == g_mounts.end()) return {};
-    std::error_code ec;
-    for (const fs::path& m : mod_paths(guest))
-        if (fs::is_regular_file(m, ec)) {
-            static std::set<std::string> logged;  // each modded file once
-            if (logged.insert(rest).second) log("mods: %s from %s", rest.c_str(), utf8(m).c_str());
-            return m;
+    if (g_rom_mounts.count(mnt)) {
+        static const mods::Overlay overlay(active_mods());
+        if (const auto path = overlay.resolve(rest)) {
+            static std::set<std::string> logged;
+            if (logged.insert(rest).second) log("mods: %s from %s", rest.c_str(), utf8(*path).c_str());
+            return *path;
         }
+    }
     return it->second / nx_u8path(rest);
 }
 

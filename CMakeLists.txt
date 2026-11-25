@@ -242,6 +242,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/svc_time.cpp
     runtime/src/svc_process.cpp
     runtime/src/hle_fs.cpp
+    runtime/src/mod_overlay.cpp
     runtime/src/svc_account.cpp
     runtime/src/svc_fiber.cpp
     runtime/src/svc_friends.cpp

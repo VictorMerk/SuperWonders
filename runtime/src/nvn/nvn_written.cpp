@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "nvn_draw_state.h"
+#include "write_back_words.h"
 
 namespace nx::nvn::replay {
 
@@ -351,15 +352,7 @@ void apply_write_back(const WriteBack& w) {
         std::memcpy(w.to, w.from, w.size);
         return;
     }
-    const uint8_t* was = w.before->data();
-    uint64_t k = 0;
-    for (; k + 8 <= w.size; k += 8) {
-        if (std::memcmp(w.from + k, was + k, 8) == 0) continue;
-        for (uint64_t b = k; b < k + 8; b += 4)
-            if (std::memcmp(w.from + b, was + b, 4) != 0) std::memcpy(w.to + b, w.from + b, 4);
-    }
-    for (; k < w.size; k++)
-        if (w.from[k] != was[k]) w.to[k] = w.from[k];
+    copy_changed_words(w.to, w.from, w.before->data(), w.size);
 }
 
 }  // namespace nx::nvn

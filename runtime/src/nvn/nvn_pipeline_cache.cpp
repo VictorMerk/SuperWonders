@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "nvn_pipeline.h"
+#include "cache_file.h"
 #include "nvn_pipeline_async.h"
 #include "nvn_vk.h"
 #include "platform.h"
@@ -43,12 +44,11 @@ void write_pipeline_cache(bool force) {
     if (!force && n <= g_saved_size) return note_pipeline_cache_changed();  // still owed: the shutdown save writes it
     std::vector<uint8_t> data(n);
     if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, data.data()) != VK_SUCCESS) return note_pipeline_cache_changed();
-    std::string tmp = g_path + ".tmp";
-    if (FILE* f = plat::fopen_utf8(tmp, "wb")) {
+    CacheFile pending(g_path);
+    if (FILE* f = plat::fopen_utf8(pending.path(), "wb")) {
         bool ok = std::fwrite(data.data(), 1, n, f) == n;
         ok = std::fclose(f) == 0 && ok;
-        std::remove(g_path.c_str());
-        if (ok && std::rename(tmp.c_str(), g_path.c_str()) == 0) {
+        if (ok && pending.commit()) {
             g_saved_size = n;
             g_unsaved_pipelines.store(0, std::memory_order_release);
             log("nvn/vk: pipeline cache saved (%zu bytes)%s", n, force ? " at shutdown" : "");

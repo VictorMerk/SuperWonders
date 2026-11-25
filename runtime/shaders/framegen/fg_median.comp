@@ -9,14 +9,30 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D src;
 layout(set = 0, binding = 3, rg16f) uniform writeonly image2D dst;
 
-float med9(float v[9]) {
-    for (int i = 0; i < 5; i++)   // the 5 smallest in order: the 5th is the median
-        for (int j = i + 1; j < 9; j++)
-            if (v[j] < v[i]) {
-                float t = v[i];
-                v[i] = v[j];
-                v[j] = t;
-            }
+// Fixed median selection network: nineteen compare-exchanges, no dynamic loop.
+void order(inout vec2 a, inout vec2 b) {
+    vec2 lo=min(a,b);b=max(a,b);a=lo;
+}
+vec2 med9(vec2 v[9]) {
+    order(v[1],v[2]);
+    order(v[4],v[5]);
+    order(v[7],v[8]);
+    order(v[0],v[1]);
+    order(v[3],v[4]);
+    order(v[6],v[7]);
+    order(v[1],v[2]);
+    order(v[4],v[5]);
+    order(v[7],v[8]);
+    order(v[0],v[3]);
+    order(v[5],v[8]);
+    order(v[4],v[7]);
+    order(v[3],v[6]);
+    order(v[1],v[4]);
+    order(v[2],v[5]);
+    order(v[4],v[7]);
+    order(v[4],v[2]);
+    order(v[6],v[4]);
+    order(v[4],v[2]);
     return v[4];
 }
 
@@ -24,11 +40,10 @@ void main() {
     ivec2 g = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(g, imageSize(dst)))) return;
     ivec2 m = textureSize(src, 0) - 1;
-    float xs[9], ys[9];
+    vec2 values[9];
     for (int i = 0; i < 9; i++) {
         vec2 f = texelFetch(src, clamp(g + ivec2(i % 3 - 1, i / 3 - 1), ivec2(0), m), 0).xy;
-        xs[i] = f.x;
-        ys[i] = f.y;
+        values[i] = f;
     }
-    imageStore(dst, g, vec4(med9(xs), med9(ys), 0.0, 0.0));
+    imageStore(dst, g, vec4(med9(values), 0.0, 0.0));
 }

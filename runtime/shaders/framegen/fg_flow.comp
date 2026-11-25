@@ -35,13 +35,47 @@ const int SIDE = 2 * HALF, WIN = 2 * RADIUS + 1;
 
 float lum(sampler2D s, ivec2 p, ivec2 m) { return texelFetch(s, clamp(p, ivec2(0), m), 0).r; }
 
+// Coarse-search workgroups repeatedly visit overlapping patches. Share those
+// exact texels; the finer stages retain their existing sampler path.
+const int NEW_TILE = 7 * CELL + (SIDE - 1) * STEP + 1 + 2 * RADIUS;
+shared float shared_new[START == 0 ? NEW_TILE * NEW_TILE : 1];
+float new_lum(ivec2 p, ivec2 m) {
+    if (START == 0) {
+        ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 * CELL + CELL / 2 - HALF * STEP - RADIUS;
+        ivec2 local = p - origin;
+        return shared_new[local.y * NEW_TILE + local.x];
+    }
+    return lum(lb,p,m);
+}
+const int OLD_TILE = 7 * CELL + (SIDE - 1) * STEP + 1;
+shared float shared_old[START == 0 ? OLD_TILE * OLD_TILE : 1];
+float old_lum(ivec2 p, ivec2 m) {
+    if (START == 0) {
+        ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 * CELL + CELL / 2 - HALF * STEP;
+        ivec2 local = p - origin;
+        return shared_old[local.y * OLD_TILE + local.x];
+    }
+    return lum(la,p,m);
+}
+
 void main() {
     ivec2 g = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(g, imageSize(flow)))) return;
     ivec2 lm = textureSize(la, 0) - 1;
+    // Every invocation participates before out-of-range lanes return.
+    if (START == 0) {
+        ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 * CELL + CELL / 2 - HALF * STEP - RADIUS;
+        for (uint i = gl_LocalInvocationIndex; i < NEW_TILE * NEW_TILE; i += 64)
+            shared_new[i] = lum(lb,origin + ivec2(i % NEW_TILE,i / NEW_TILE),lm);
+        origin += RADIUS;
+        for (uint i = gl_LocalInvocationIndex; i < OLD_TILE * OLD_TILE; i += 64)
+            shared_old[i] = lum(la,origin + ivec2(i % OLD_TILE,i / OLD_TILE),lm);
+        barrier();
+    }
+    if (any(greaterThanEqual(g, imageSize(flow)))) return;
+
     ivec2 c = g * CELL + CELL / 2 - HALF * STEP;   // the patch's first texel
     float pa[SIDE * SIDE];
-    for (int i = 0; i < SIDE * SIDE; i++) pa[i] = lum(la, c + ivec2(i % SIDE, i / SIDE) * STEP, lm);
+    for (int i = 0; i < SIDE * SIDE; i++) pa[i] = old_lum(c + ivec2(i % SIDE, i / SIDE) * STEP, lm);
     ivec2 start = START != 0 ? ivec2(round(texelFetch(cand, g >> SPARSE, 0).xy / pc.a.x)) : ivec2(0);
     // An unchanged patch with a zero coarse vector needs no search. Besides
     // saving work on still scenery/HUD, this avoids fitting a fractional motion
@@ -49,7 +83,7 @@ void main() {
     if (all(equal(start, ivec2(0)))) {
         float still = 0.0;
         for (int i = 0; i < SIDE * SIDE; i++)
-            still += abs(pa[i] - lum(lb, c + ivec2(i % SIDE, i / SIDE) * STEP, lm));
+            still += abs(pa[i] - new_lum(c + ivec2(i % SIDE, i / SIDE) * STEP, lm));
         if (still == 0.0) { imageStore(flow, g, vec4(0.0)); return; }
     }
     // With zero start and a constant new search region, every match has
@@ -58,11 +92,11 @@ void main() {
     if (SIDE == 8 && all(equal(start, ivec2(0))) && pc.a.y * pc.a.x >= 1e-6) {
         const int SPAN = (SIDE - 1) * STEP + 1 + 2 * RADIUS;
         ivec2 first = c - RADIUS;
-        float value = lum(lb, first, lm);
+        float value = new_lum(first, lm);
         bool uniform_region = true;
         for (int y = 0; y < SPAN && uniform_region; ++y)
             for (int x = 0; x < SPAN; ++x)
-                if (lum(lb, first + ivec2(x, y), lm) != value) {
+                if (new_lum(first + ivec2(x, y), lm) != value) {
                     uniform_region = false;
                     break;
                 }
@@ -76,7 +110,7 @@ void main() {
     for (int k = zero_in ? 0 : -1; k < WIN * WIN; k++) {
         ivec2 d = k < 0 ? ivec2(0) : start + ivec2(k % WIN, k / WIN) - RADIUS;
         float sad = 0.0;
-        for (int i = 0; i < SIDE * SIDE; i++) sad += abs(pa[i] - lum(lb, c + d + ivec2(i % SIDE, i / SIDE) * STEP, lm));
+        for (int i = 0; i < SIDE * SIDE; i++) sad += abs(pa[i] - new_lum(c + d + ivec2(i % SIDE, i / SIDE) * STEP, lm));
         float e = sad / float(SIDE * SIDE);
         ivec2 off = d - start;
         e += d == ivec2(0) && start != ivec2(0) ? pc.a.z : pc.a.y * pc.a.x * float(abs(off.x) + abs(off.y));
@@ -86,8 +120,31 @@ void main() {
             bv = d;
             bk = k;
         }
-        // Zero is the global minimum; a fractional fit still needs every neighbouring cost.
-        if (SUBPIX == 0 && best == 0.0) break;
+        // A zero match cannot be beaten by nonnegative costs. For the
+        // fractional fit, evaluate only missing neighbours of that winner.
+        if (best == 0.0) {
+            if (SUBPIX == 0) break;
+            if (pc.a.y * pc.a.x >= 0.0 && pc.a.z >= 0.0) {
+                if (bk >= 0) {
+                    int x = bk % WIN, y = bk / WIN;
+                    for (int n = 0; n < 4; ++n) {
+                        // Edge winners do not receive an axis fit at all.
+                        if (n < 2 ? (x == 0 || x == WIN - 1) : (y == 0 || y == WIN - 1)) continue;
+                        int nk = bk + (n == 0 ? -1 : n == 1 ? 1 : n == 2 ? -WIN : WIN);
+                        if (nk <= k) continue;
+                        ivec2 nd = start + ivec2(nk % WIN, nk / WIN) - RADIUS;
+                        float nsad = 0.0;
+                        for (int i = 0; i < SIDE * SIDE; ++i)
+                            nsad += abs(pa[i] - new_lum(c + nd + ivec2(i % SIDE, i / SIDE) * STEP, lm));
+                        float ne = nsad / float(SIDE * SIDE);
+                        ivec2 noff = nd - start;
+                        ne += nd == ivec2(0) && start != ivec2(0) ? pc.a.z : pc.a.y * pc.a.x * float(abs(noff.x) + abs(noff.y));
+                        cost[nk] = ne;
+                    }
+                }
+                break;
+            }
+        }
     }
     vec2 v = vec2(bv);
     if (SUBPIX != 0 && bk >= 0) {   // the minimum of a parabola through the best and its two neighbours, each axis

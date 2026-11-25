@@ -195,6 +195,82 @@ bool copy_save(const std::filesystem::path& root, const User& source, const User
     return copy_save_dir(save_path(root, source), save_path(root, destination), backup, error);
 }
 
+namespace {
+bool backup_name(const std::filesystem::path& path) {
+    const auto name = path.filename().generic_u8string();
+    constexpr std::u8string_view prefix = u8"save.backup-";
+    return name.starts_with(prefix) && name.size() > prefix.size() &&
+           std::all_of(name.begin() + prefix.size(), name.end(), [](char8_t c) { return c >= u8'0' && c <= u8'9'; });
+}
+
+bool plain_save_tree(const std::filesystem::path& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(fs::symlink_status(path, ec)) || ec) return false;
+    uintmax_t available = 1ull << 30;
+    size_t entries = 0;
+    for (fs::recursive_directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+        const auto status = it->symlink_status(ec);
+        if (ec || ++entries > 16384) return false;
+        if (fs::is_directory(status)) continue;
+        if (!fs::is_regular_file(status)) return false;
+        const auto size = it->file_size(ec);
+        if (ec || size > available) return false;
+        available -= size;
+    }
+    return !ec;
+}
+}
+
+bool snapshot_save(const std::filesystem::path& root, const User& user,
+                   std::filesystem::path& snapshot, std::string& error) {
+    namespace fs = std::filesystem;
+    snapshot.clear();
+    error.clear();
+    const auto sav = save_path(root, user);
+    if (!plain_save_tree(sav)) {
+        error = "No eligible save folder for this profile.";
+        return false;
+    }
+    for (unsigned i = 0; i < 10000; ++i) {
+        const auto candidate = sav.parent_path() / ("save.backup-" + std::to_string(i));
+        std::error_code ec;
+        const auto status = fs::symlink_status(candidate, ec);
+        if (fs::exists(status) || fs::is_symlink(status)) continue;
+        if (ec && ec != std::errc::no_such_file_or_directory) break;
+        fs::path previous;
+        if (!copy_save_dir(sav, candidate, previous, error)) return false;
+        snapshot = candidate;
+        return true;
+    }
+    error = "No available backup name.";
+    return false;
+}
+
+std::vector<std::filesystem::path> save_backups(const std::filesystem::path& root, const User& user) {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> backups;
+    std::error_code ec;
+    for (fs::directory_iterator it(save_path(root, user).parent_path(), ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code entry_error;
+        if (backup_name(it->path()) && fs::is_directory(it->symlink_status(entry_error)) && !entry_error)
+            backups.push_back(it->path());
+    }
+    std::sort(backups.begin(), backups.end());
+    return backups;
+}
+
+bool restore_save(const std::filesystem::path& root, const User& user, const std::filesystem::path& snapshot,
+                  std::filesystem::path& previous, std::string& error) {
+    const auto sav = save_path(root, user);
+    if (snapshot.parent_path() != sav.parent_path() || !backup_name(snapshot) || !plain_save_tree(snapshot)) {
+        previous.clear();
+        error = "Choose a completed backup from this profile.";
+        return false;
+    }
+    return copy_save_dir(snapshot, sav, previous, error);
+}
+
 bool import_save(const std::filesystem::path& root, const std::filesystem::path& source_dir,
                  const User& destination, std::filesystem::path& backup, std::string& error) {
     namespace fs = std::filesystem;

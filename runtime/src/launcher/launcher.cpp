@@ -1167,6 +1167,44 @@ void profile_dialog(bool open) {
         log("profiles: Import save clicked, detected %zu emulator save(s)", detected_saves.size());
         open_import_modal = true;
     }
+    static std::vector<fs::path> save_backups;
+    static size_t restore_index = 0;
+    static size_t backup_profile = 0;
+    if (ImGui::Button("Back up save", {half_w, 42 * k})) {
+        fs::path snapshot;
+        if (profiles::snapshot_save(root, db.users[edited], snapshot, message))
+            message = "Save backed up to " + str(snapshot);
+    }
+    ImGui::SameLine(0, 8 * k);
+    if (ImGui::Button("Restore save...", {half_w, 42 * k})) {
+        backup_profile = size_t(edited);
+        save_backups = profiles::save_backups(root, db.users[backup_profile]);
+        restore_index = 0;
+        ImGui::OpenPopup("Restore profile save");
+    }
+    if (ImGui::BeginPopupModal("Restore profile save", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Close any running game before restoring. The current save will be backed up.");
+        if (save_backups.empty()) {
+            ImGui::TextUnformatted("No completed backups for this profile.");
+        } else {
+            if (ImGui::BeginCombo("Backup", str(save_backups[restore_index].filename()).c_str())) {
+                for (size_t i = 0; i < save_backups.size(); ++i)
+                    if (ImGui::Selectable(str(save_backups[i].filename()).c_str(), i == restore_index)) restore_index = i;
+                ImGui::EndCombo();
+            }
+            if (backup_profile < db.users.size() && ImGui::Button("Confirm restore")) {
+                fs::path previous;
+                if (profiles::restore_save(root, db.users[backup_profile], save_backups[restore_index], previous, message)) {
+                    message = "Save restored.";
+                    if (!previous.empty()) message += " Previous save: " + str(previous);
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     ImGui::PopStyleColor(3);
     ImGui::EndGroup();
 

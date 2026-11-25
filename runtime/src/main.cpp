@@ -17,6 +17,7 @@
 #include "launcher/launcher.h"
 #endif
 #include "platform.h"
+#include "nvn/nvn.h"
 
 namespace nx {
 

@@ -26,6 +26,7 @@ static inline std::filesystem::path nx_u8path(std::string_view s) { return std::
 #include <nx/game.h>
 
 #include "platform.h"
+#include "stream_cache.h"
 #include "user_profiles.h"
 #include "frametrace.h"
 #include "play.h"
@@ -55,12 +56,26 @@ std::map<std::string, fs::path> g_mounts;
 struct File {
     FILE* f;
     std::string path;
+    streaming::MusicCache::Token music;
     File(FILE* file, std::string p) : f(file), path(std::move(p)) {}
     File(const File&) = delete;  // owns the FILE: one instance only
     File& operator=(const File&) = delete;
     ~File() { std::fclose(f); }
 };
 std::map<uint64_t, std::shared_ptr<File>> g_files;
+
+bool prefetch_music() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("NX_STREAM_CACHE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+streaming::MusicCache& music_cache() {
+    static streaming::MusicCache cache;
+    return cache;
+}
 
 // Files the runtime adds or replaces (mods): key = path under the mount point, '/' separated, lower case.
 std::map<std::string, std::string> g_virtual;
@@ -313,7 +328,15 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         return;
     }
     uint64_t h = g_next++;
-    g_files[h] = std::make_shared<File>(f, guest);
+    auto file = std::make_shared<File>(f, guest);
+    if (mode == 1 && prefetch_music() && streaming::eligible_music(guest)) {
+        try {
+            file->music = music_cache().open(p);
+        } catch (...) {
+            log("fs: music prefetch unavailable; using the file");
+        }
+    }
+    g_files[h] = std::move(file);
     st<uint64_t>(c.x[0], h);
     if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     play::file_opened(guest);
@@ -350,7 +373,9 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
 
 uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
     uint64_t t0 = plat::monotonic_ns();
-    uint64_t n = plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
+    uint64_t n = 0;
+    if (!file.music || !music_cache().read(file.music, off, reinterpret_cast<void*>(buf), size, n))
+        n = plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
     const uint64_t read_ns = plat::monotonic_ns() - t0;
     ft::add(ft::kFileReads), ft::add(ft::kFileBytes, n), ft::add(ft::kFileNs, read_ns);
     uint64_t ms = read_ns / 1'000'000;

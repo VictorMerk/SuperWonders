@@ -110,7 +110,14 @@ std::set<std::string> g_rom_mounts;
 const std::vector<mods::Root>& active_mods() {
     static const auto roots = [] {
         const char* aspect = std::getenv("NX_ASPECT_PROFILE");
-        return mods::selected(data_root() / "mods", aspect ? aspect : "");
+        try {
+            return mods::selected(data_root() / "mods", aspect ? aspect : "");
+        } catch (const std::filesystem::filesystem_error& error) {
+            log("mods: %s", error.what());
+        } catch (const std::runtime_error& error) {
+            log("mods: %s", error.what());
+        }
+        return std::vector<mods::Root>{};
     }();
     return roots;
 }
@@ -129,7 +136,8 @@ std::vector<fs::path> mod_paths(const std::string& guest) {
     std::vector<fs::path> v;
     auto [mnt, rest] = split(guest);
     if (g_rom_mounts.count(mnt))
-        for (const auto& r : active_mods()) v.push_back(r.romfs / nx_u8path(rest));
+        for (const auto& r : active_mods())
+            if (!r.romfs.empty()) v.push_back(r.romfs / nx_u8path(rest));
     return v;
 }
 

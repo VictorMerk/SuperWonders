@@ -1,0 +1,3 @@
+# Native LAN co-op handoff
+The historical implementation and protocol tests are on [fix/lan-r8-runtime-20261118](https://github.com/VictorMerk/SuperWonders/tree/fix/lan-r8-runtime-20261118). The later fork includes loading-state publication checks in [34e726b](https://github.com/VictorMerk/SuperWonders/commit/34e726b) and [paired trace validation](https://github.com/VictorMerk/SuperWonders/commit/0212f6f).
+Start with standalone wire, timing and input-history tests. Then integrate with the current input and launcher paths and verify two physical peers through cold loading, reconnect, and course reentry. The earlier fork documented a loading-state asymmetry, so recheck it on the new baseline before enabling the feature.

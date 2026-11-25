@@ -206,7 +206,7 @@ void CommandBufferEndRecording(CPU& c) {  // NVNcommandHandle
         cb->control_base = used(cb->control_size, cb->control_base, n, kControlBytes);
         list.swap(cb->recording);
     }
-    list->epoch = current_epoch();
+    list->epoch = recording_epoch();
     g_ends++;
     g_end_cmds += list->cmds.size();
     uint64_t h = g_next_handle++;

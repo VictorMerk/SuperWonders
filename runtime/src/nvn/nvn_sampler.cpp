@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "nvn_pipeline.h"
+#include "sampler_limits.h"
 
 namespace nx::nvn {
 
@@ -77,20 +78,24 @@ VkSampler sampler_for(const SamplerInfo& s, bool shadow, bool game_anisotropy) {
     ci.addressModeU = vk_wrap(s.wrap[0]);
     ci.addressModeV = vk_wrap(s.wrap[1]);
     ci.addressModeW = vk_wrap(s.wrap[2]);
-    ci.mipLodBias = s.lod_bias;
-    // Games pass lod_min -1000 ("no limit"); Metal wants lodMinClamp >= 0, and a negative one made the glyph
-    // sampler return 0 (all text invisible).
-    ci.minLod = m <= 1 ? 0.0f : std::max(0.0f, s.lod_min);
-    ci.maxLod = m <= 1 ? 0.25f : std::max(ci.minLod, s.lod_max);  // no mipmapping: level 0 only
     // The game's anisotropy, raised to the player's level for mipmapped linear sampling (never for nearest
     // filtering: pixel-art and lookup textures stay exact). `game_anisotropy`: the game's alone, for what the GPU
     // rendered (anisotropic taps along a post-process pass's derivatives smeared the depth and colour targets across
     // silhouettes: bright outlines around characters, vfjoo888/SuperWonders#120).
     float aniso = s.max_anisotropy;
     if (!game_anisotropy && anisotropy_raised(s)) aniso = std::max(aniso, anisotropy_floor());
-    if (aniso > 1.0f && !vk_features().samplerAnisotropy) aniso = 1.0f;
-    ci.anisotropyEnable = aniso > 1.0f;
-    ci.maxAnisotropy = std::min(aniso, 16.0f);
+    static const VkPhysicalDeviceLimits limits = [] {
+        VkPhysicalDeviceProperties properties{};
+        p_vkGetPhysicalDeviceProperties(vk_physical(), &properties);
+        return properties.limits;
+    }();
+    const auto lod = sampler_lod(m, s.lod_min, s.lod_max, s.lod_bias, aniso,
+        vk_features().samplerAnisotropy, limits.maxSamplerLodBias, limits.maxSamplerAnisotropy);
+    ci.mipLodBias = lod.bias;
+    ci.minLod = lod.minimum;
+    ci.maxLod = lod.maximum;
+    ci.anisotropyEnable = lod.anisotropy > 1.0f;
+    ci.maxAnisotropy = lod.anisotropy;
     ci.compareEnable = shadow;
     ci.compareOp = shadow ? vk_compare(s.compare_func) : VK_COMPARE_OP_ALWAYS;
     bool white = s.border[3] > 0.5f && s.border[0] > 0.5f;

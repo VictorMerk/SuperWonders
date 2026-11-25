@@ -14,6 +14,7 @@
 #include <set>
 
 #include "nvn_pipeline.h"
+#include "nvn_spirv_nan.h"
 
 namespace nx::nvn {
 
@@ -484,6 +485,7 @@ bool init_vertex_outputs(const std::vector<uint32_t>& in, std::vector<uint32_t>&
 
 std::vector<uint32_t> patched_spirv(const ShaderInfo* s, const uint8_t* kinds, uint32_t unwritten, bool* int_inputs) {
     std::vector<uint32_t> code = s->spirv, next;  // each pass reads `code` and leaves its result in `next`
+    if (patch_nan_minmax(code, next)) code.swap(next);
     bool is_int = kinds && patch_int_inputs(code, kinds, next);
     if (is_int) code.swap(next);
     if (int_inputs) *int_inputs = is_int;

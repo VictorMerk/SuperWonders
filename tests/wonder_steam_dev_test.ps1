@@ -142,6 +142,43 @@ try {
     MustFail {Invoke-WonderSteamDev $plan 'Launch' -ProcessLauncher {$script:unexpectedLaunch=$true;throw 'unexpected launch'}} 'Changed staged runtime was accepted'
     Check (!$script:unexpectedLaunch) 'Changed staged runtime reached process launch'
     foreach($file in $sourceFiles){Check ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $hashes[$file]) 'Source runtime/AppID/SDK/game library/config/save was modified'}
+    $counterRun=Join-Path $sandbox 'counter-evidence'
+    New-Item -ItemType Directory -Path $counterRun | Out-Null
+    $counterPath=Join-Path $counterRun 'steam-dev-stats.json'
+    $observed=Read-WonderSteamDevEvidence $counterRun
+    Check ($observed.state -eq 'missing' -and $null -eq $observed.initialization_succeeded) 'Missing runtime counters became success or failure evidence'
+    $counters=@{schema=1;source='steam_dev_bootstrap';app_id=480;checkpoint='shutdown';status='stopped';
+        init_attempted=$true;initialized_ever=$true;callback_calls=4;callback_completed=4;callback_failures=0;
+        shutdown_calls=1;shutdown_completed=1;loader_error=0;missing_exports=0;
+        remote_play_together_verified=$false;p2p_transport_verified=$false}
+    $counterText=$counters | ConvertTo-Json
+    [IO.File]::WriteAllText($counterPath,$counterText)
+    $observed=Read-WonderSteamDevEvidence $counterRun
+    Check ($observed.state -eq 'runtime-reported' -and $observed.initialization_succeeded -and
+        $observed.callbacks_completed -eq 4 -and $observed.shutdown_completed -and
+        !$observed.remote_play_together_verified -and !$observed.p2p_transport_verified) 'Runtime lifecycle counters were misclassified or promoted to multiplayer proof'
+    $failure=$counterText | ConvertFrom-Json
+    $failure.checkpoint='initialization';$failure.status='load-failed';$failure.init_attempted=$false;$failure.initialized_ever=$false
+    $failure.callback_calls=0;$failure.callback_completed=0;$failure.shutdown_calls=0;$failure.shutdown_completed=0;$failure.loader_error=193
+    [IO.File]::WriteAllText($counterPath,($failure | ConvertTo-Json))
+    $observed=Read-WonderSteamDevEvidence $counterRun
+    Check ($observed.state -eq 'runtime-reported' -and !$observed.initialization_attempted -and
+        !$observed.initialization_succeeded -and !$observed.shutdown_completed -and $observed.loader_error -eq 193) 'Loader failure was lost or fabricated initialization/shutdown'
+    foreach($case in @('malformed','wrong-source','fake-session','impossible-callbacks','impossible-shutdown','unattempted-success','bad-diagnostic','oversized')) {
+        $changed=$counterText | ConvertFrom-Json
+        switch($case) {
+            'wrong-source' {$changed.source='unrelated'}
+            'fake-session' {$changed.remote_play_together_verified=$true}
+            'impossible-callbacks' {$changed.callback_completed=5}
+            'impossible-shutdown' {$changed.shutdown_completed=2}
+            'unattempted-success' {$changed.init_attempted=$false}
+            'bad-diagnostic' {$changed.loader_error='193'}
+        }
+        $text=if($case -eq 'malformed'){'{'}elseif($case -eq 'oversized'){' ' * 65537}else{$changed | ConvertTo-Json}
+        [IO.File]::WriteAllText($counterPath,$text)
+        $observed=Read-WonderSteamDevEvidence $counterRun
+        Check ($observed.state -eq 'invalid' -and $null -eq $observed.initialization_succeeded) "Invalid counters $case became API success evidence"
+    }
     Write-Output 'Steam developer fixture: read-only preflight, isolated files, SDK-path control, prepared game-library hash pin/reuse rejection, scoped session identity, source preservation and mocked local-coop process passed; no Steam/game/API/client launched.'
 } finally {
     foreach($key in $old.Keys){[Environment]::SetEnvironmentVariable($key,$old[$key])}

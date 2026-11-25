@@ -22,6 +22,10 @@ enum class Status {
     CallbackFailed, ShutdownFailed,
 };
 const char* status_name(Status status) noexcept;
+// Actionable checks, not a diagnosis of Steam account/client state. In
+// particular, the legacy boolean Init export cannot distinguish its failures.
+const char* status_hint(Status status, uint32_t loader_error = 0) noexcept;
+enum MissingExport : uint32_t { MissingInit = 1, MissingCallbacks = 2, MissingShutdown = 4 };
 struct Exports {
     InitFn init = nullptr;
     CallbacksFn run_callbacks = nullptr;
@@ -29,7 +33,12 @@ struct Exports {
     // Owns the loaded module through every API call and deferred shutdown.
     std::shared_ptr<void> lifetime;
 };
-struct LoadResult { Status status = Status::LoadFailed; Exports api; };
+struct LoadResult {
+    Status status = Status::LoadFailed;
+    Exports api;
+    uint32_t loader_error = 0; // Native Windows error, zero when unavailable.
+    uint32_t missing_exports = 0; // MissingExport bits; no speculative API calls.
+};
 class Exporter {
 public:
     virtual ~Exporter() = default;
@@ -46,6 +55,7 @@ struct Snapshot {
     bool init_attempted = false, initialized_ever = false;
     uint64_t callback_calls = 0, callback_completed = 0, callback_failures = 0;
     uint64_t shutdown_calls = 0, shutdown_completed = 0;
+    uint32_t loader_error = 0, missing_exports = 0;
 };
 // Explicit, optional bootstrap only: successful initialization proves no overlay,
 // Remote Play Together, friend, lobby, P2P or gameplay capability. Root launch

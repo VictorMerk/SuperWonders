@@ -41,7 +41,7 @@ void trace_phase_leave(const CPU&,FrameworkObservation,CalcPhase,bool threw=fals
 FrameworkObservation trace_framework_enter(const CPU&) noexcept;
 void trace_framework_leave(const CPU&,FrameworkObservation,bool threw=false) noexcept;
 void trace_loading_file(const char* path,const CPU&) noexcept;
-void trace_hid_delivery(const InputSnapshot&,const plat::PadState& delivered,uint64_t caller=0);
+void trace_hid_delivery(const InputSnapshot&,const plat::PadState& delivered,const CPU& cpu) noexcept;
 void loading_event(const char* path);
 void test_file_delay(const char* path);
 uint64_t seed();
@@ -73,7 +73,7 @@ inline void trace_phase_leave(const CPU&,FrameworkObservation,CalcPhase,bool=fal
 inline FrameworkObservation trace_framework_enter(const CPU&) noexcept {return {};}
 inline void trace_framework_leave(const CPU&,FrameworkObservation,bool=false) noexcept {}
 inline void trace_loading_file(const char*,const CPU&) noexcept {}
-inline void trace_hid_delivery(const InputSnapshot&,const plat::PadState&,uint64_t=0) {}
+inline void trace_hid_delivery(const InputSnapshot&,const plat::PadState&,const CPU&) noexcept {}
 inline void loading_event(const char*) {}
 inline void test_file_delay(const char*) {}
 inline uint64_t seed() { return 0; }

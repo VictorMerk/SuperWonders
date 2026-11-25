@@ -46,8 +46,9 @@ class NativeExporter final : public Exporter {
 public:
     LoadResult load(const std::filesystem::path& path) override {
 #ifdef _WIN32
-        std::error_code error;
-        if (!std::filesystem::is_regular_file(path, error) || error) return {Status::LoadFailed, {}};
+        const auto attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) return {Status::LoadFailed, {}, GetLastError()};
+        if (attributes & FILE_ATTRIBUTE_DIRECTORY) return {Status::LoadFailed, {}, ERROR_DIRECTORY};
         auto module = std::make_shared<Module>();
         {
             auto& process = process_lease();
@@ -59,13 +60,15 @@ public:
         // System32. No current-directory/PATH search or process-wide setting.
         module->handle = LoadLibraryExW(path.c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!module->handle) return {Status::LoadFailed, {}};
+        if (!module->handle) return {Status::LoadFailed, {}, GetLastError()};
         Exports api;
         api.init = reinterpret_cast<InitFn>(GetProcAddress(module->handle, "SteamAPI_Init"));
         api.run_callbacks = reinterpret_cast<CallbacksFn>(GetProcAddress(module->handle, "SteamAPI_RunCallbacks"));
         api.shutdown = reinterpret_cast<ShutdownFn>(GetProcAddress(module->handle, "SteamAPI_Shutdown"));
         api.lifetime = std::move(module);
-        if (!api.init || !api.run_callbacks || !api.shutdown) return {Status::MissingExports, std::move(api)};
+        const uint32_t missing = (!api.init ? MissingInit : 0u) |
+            (!api.run_callbacks ? MissingCallbacks : 0u) | (!api.shutdown ? MissingShutdown : 0u);
+        if (missing) return {Status::MissingExports, std::move(api), 0, missing};
         return {Status::Ready, std::move(api)};
 #else
         (void)path;
@@ -85,6 +88,29 @@ const char* status_name(Status status) noexcept {
     case Status::ShutdownFailed: return "shutdown-failed";
     }
     return "unknown";
+}
+const char* status_hint(Status status, uint32_t error) noexcept {
+    switch (status) {
+    case Status::InvalidPath: return "Select an absolute local drive path ending in steam_api64.dll from the official Windows x64 SDK redistributable.";
+    case Status::UnsupportedPlatform: return "This developer bootstrap currently supports Windows only.";
+    case Status::LoadFailed:
+        switch (error) {
+        case 2: case 3: return "The selected SDK DLL or its directory is missing; restore the official SDK and choose a fresh developer fixture.";
+        case 5: return "Windows denied access to the selected SDK DLL; check its file permissions and Windows protection history.";
+        case 126: return "Windows could not load the selected DLL or one of its dependencies; use the complete official SDK x64 redistributable.";
+        case 193: return "Windows rejected the DLL image; select the official Windows x64 steam_api64.dll, not an x86, corrupt or non-Windows file.";
+        case 267: return "The selected SDK DLL path refers to a directory; select the official redistributable file.";
+        default: return "Windows could not load the selected SDK DLL; inspect loader_error and use the complete official Windows x64 SDK redistributable.";
+        }
+    case Status::MissingExports: return "The selected DLL lacks required lifecycle exports; replace it with the official matching SDK redistributable. missing_exports bits: Init=1, RunCallbacks=2, Shutdown=4.";
+    case Status::AlreadyActive: return "Another bootstrap owns the Steam API module in this process; stop it before initializing another instance.";
+    case Status::InitFailed: return "SteamAPI_Init returned false without a specific cause. Check Steam is running under the same Windows user and elevation, the isolated working directory/AppID480 file, account access to that AppID and app configuration. A process check alone does not prove these conditions.";
+    case Status::InitException: return "SteamAPI_Init raised an exception; preserve the log and check the official SDK DLL and client installation.";
+    case Status::CallbackFailed: return "The Steam callback pump raised an exception; this bootstrap stopped and attempted shutdown.";
+    case Status::ShutdownFailed: return "SteamAPI_Shutdown raised an exception; completed teardown is unverified.";
+    case Status::Ready: return "Only local Steam API initialization succeeded; Remote Play sessions, independent guest controls and P2P are unverified.";
+    default: return "Inspect the lifecycle status and counters; no multiplayer capability is inferred from this state.";
+    }
 }
 struct Bootstrap::State {
     enum class Phase { Fresh, Initializing, Ready, Pumping, Stopping, Stopped, Failed };
@@ -150,10 +176,20 @@ Status Bootstrap::initialize() {
         else { NativeExporter exporter; loaded = exporter.load(s->config.absolute_library); }
     } catch (...) { return teardown(s, Status::LoadFailed, true); }
     {
-        std::lock_guard lock(s->mutex); s->api = std::move(loaded.api);
+        std::lock_guard lock(s->mutex);
+        s->stats.loader_error = loaded.loader_error;
+        s->stats.missing_exports = loaded.missing_exports;
+        s->api = std::move(loaded.api);
     }
     if (loaded.status != Status::Ready) return teardown(s, loaded.status, true);
-    if (!s->api.init || !s->api.run_callbacks || !s->api.shutdown) return teardown(s, Status::MissingExports, true);
+    if (!s->api.init || !s->api.run_callbacks || !s->api.shutdown) {
+        {
+            std::lock_guard lock(s->mutex);
+            s->stats.missing_exports |= (!s->api.init ? MissingInit : 0u) |
+                (!s->api.run_callbacks ? MissingCallbacks : 0u) | (!s->api.shutdown ? MissingShutdown : 0u);
+        }
+        return teardown(s, Status::MissingExports, true);
+    }
     bool stop;
     { std::lock_guard lock(s->mutex); stop = s->stop_requested; }
     if (stop) return teardown(s, Status::Stopped, false);

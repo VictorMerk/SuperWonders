@@ -526,17 +526,22 @@ void trace_framework_frame(uint64_t frame_before,uint64_t frame_after) {
     entry.local_loading_event=pending_loading_event.load();
     apply_trace->push(entry);
 }
-void trace_hid_delivery(const InputSnapshot& captured,const plat::PadState& pad,uint64_t caller) {
+void trace_hid_delivery(const InputSnapshot& captured,const plat::PadState& pad,const CPU& cpu) noexcept {
     if(!apply_trace || captured.player>=kPlayers || !captured.active)return;
-    // Identity and control metadata were captured together with the raw pad.
-    // The caller adds stick-direction bits before reporting actual delivery.
-    ApplyTraceEntry entry;
-    entry.event=ApplyEvent::HidDelivery; entry.ns=plat::monotonic_ns(); entry.frame=g_frame.load();
-    entry.tick=captured.committed_tick; entry.player=captured.player;
-    entry.sampling_number=captured.sampling_number; entry.caller=caller;
-    entry.inputs.players=captured.players; entry.inputs.pads[captured.player]=pad;
-    entry.local_loading_event=captured.local_loading_event;
-    apply_trace->push(entry);
+    // The exact CPU at the HLE call supplies ancestry and a checked guest
+    // return address. These remain local observations, not actor-step proof.
+    // Trace failure must never prevent the guest's HID result from being stored.
+    try {
+        const auto identity=observation_registry.current(cpu.tpidrro);
+        ApplyTraceEntry entry;
+        entry.event=ApplyEvent::HidDelivery; entry.ns=plat::monotonic_ns(); entry.frame=g_frame.load();
+        entry.tick=captured.committed_tick; entry.player=captured.player;
+        entry.sampling_number=captured.sampling_number;
+        entry.inputs.players=captured.players; entry.inputs.pads[captured.player]=pad;
+        entry.local_loading_event=captured.local_loading_event;
+        entry.invocation=identity.invocation;entry.thread_ordinal=identity.thread;
+        observation_caller(entry,cpu);apply_trace->push(entry);
+    } catch(...) {}
 }
 void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange(); } }
 void test_file_delay(const char* path) {

@@ -36,6 +36,8 @@ void write_stats(const Bootstrap& api, const char* checkpoint) {
         << ",\"callback_failures\":" << s.callback_failures
         << ",\"shutdown_calls\":" << s.shutdown_calls
         << ",\"shutdown_completed\":" << s.shutdown_completed
+        << ",\"loader_error\":" << s.loader_error
+        << ",\"missing_exports\":" << s.missing_exports
         << ",\"remote_play_together_verified\":false,\"p2p_transport_verified\":false,"
         << "\"scope\":\"Local Steam API lifecycle only; no room, player, packet, RTT, FPS or gameplay certification\"}\n";
     if (!out) log("Steam developer statistics write failed");
@@ -79,7 +81,12 @@ void start_from_environment() {
     auto api=std::make_unique<Bootstrap>(Config{true,std::filesystem::path(reinterpret_cast<const char8_t*>(library))});
     const auto status=api->initialize();
     write_stats(*api, "initialization");
-    if(status!=Status::Ready)fatal("Steam developer API initialization failed: %s; check the SDK, Steam client and AppID480 fixture",status_name(status));
+    if(status!=Status::Ready) {
+        const auto diagnostics=api->snapshot();
+        fatal("Steam developer API initialization failed: %s (loader_error=%u, missing_exports=%u). %s",
+            status_name(status), diagnostics.loader_error, diagnostics.missing_exports,
+            status_hint(status, diagnostics.loader_error));
+    }
     current.store(api.release(),std::memory_order_release);
     std::atexit(stop);
     log("Steam developer bootstrap ready for AppID480; Remote Play Together, overlay, lobbies and P2P are not certified by this result");
@@ -89,7 +96,9 @@ void pump_current() {
     auto* api=current.load(std::memory_order_acquire);
     if(!api)return;
     const auto status=api->pump();
-    if(status!=Status::Ready&&status!=Status::Busy&&status!=Status::Stopped&&status!=Status::Deferred&&status!=Status::Disabled)
-        fatal("Steam developer callback pump stopped: %s",status_name(status));
+    if(status!=Status::Ready&&status!=Status::Busy&&status!=Status::Stopped&&status!=Status::Deferred&&status!=Status::Disabled) {
+        write_stats(*api, "callback-failure");
+        fatal("Steam developer callback pump stopped: %s. %s",status_name(status),status_hint(status));
+    }
 }
 }

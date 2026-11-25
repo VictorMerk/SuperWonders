@@ -1,6 +1,7 @@
 # Run one local-co-op simulation. A streaming app can supply separate guest
 # controllers; this script does not start a LAN room or send invitations.
-param([string]$Runtime,[string]$DataRoot)
+[CmdletBinding()]
+param([string]$Runtime,[string]$DataRoot,[switch]$DryRun)
 $ErrorActionPreference='Stop'
 
 function New-WonderLocalCoopStartInfo([string]$Executable,[string]$Data) {
@@ -30,6 +31,13 @@ $runtimePath=(Resolve-Path -LiteralPath $Runtime).Path
 $dataPath=(Resolve-Path -LiteralPath $DataRoot).Path
 if(!(Test-Path -LiteralPath $runtimePath -PathType Leaf)){throw 'Runtime must be a file.'}
 if(!(Test-Path -LiteralPath $dataPath -PathType Container)){throw 'DataRoot must be a directory.'}
+if($DryRun) {
+    $info=New-WonderLocalCoopStartInfo $runtimePath $dataPath
+    [ordered]@{runtime=$info.FileName;data_root=$info.EnvironmentVariables['NX_DATA_ROOT'];
+        arguments=$info.Arguments;local_controllers_enabled=$true;launch_performed=$false;
+        scope='Launch plan only; controller delivery and gameplay are not tested.'} | ConvertTo-Json
+    return
+}
 $reservation=Join-Path $PSScriptRoot '../perf/game_test_reservation.ps1'
 $claim=& $reservation -Action Acquire -Task 'Wonder local co-op / shared-PC play' -Workspace $PSScriptRoot -OwnerPid $PID | ConvertFrom-Json
 if($claim.state -ne 'acquired') { $claim | ConvertTo-Json -Depth 5; exit 75 }

@@ -120,7 +120,7 @@ void get_npad_state(CPU& c,bool* network_used=nullptr) {
     if (!connected) return;
     // read() has already included analog-stick direction bits in the delivered
     // pad. Its sample identity/control metadata belong to the same locked read.
-    if(network)lan::trace_hid_delivery(captured,p);
+    if(network)lan::trace_hid_delivery(captured,p,c);
     static bool pressed = false;
     if (p.buttons && !pressed) log("hid: first buttons %llx", (unsigned long long)p.buttons), pressed = true;
     st<uint64_t>(out + 8, p.buttons);

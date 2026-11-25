@@ -135,6 +135,59 @@ function New-WonderSteamSessionMetadata($Manifest,[string]$RunId,[DateTime]$Star
         scope='Local Steam API lifecycle test; no Remote Play or two-PC synchronization certification.'}
 }
 
+# Interpret only a fresh run's bounded runtime counters. Process exit zero and
+# Steam's process presence cannot substitute for this evidence; these counters
+# still do not prove a Remote Play session, controller delivery or P2P traffic.
+function Read-WonderSteamDevEvidence([string]$Run) {
+    $result=[ordered]@{state='missing';initialization_attempted=$null;initialization_succeeded=$null;
+        callbacks_completed=$null;shutdown_completed=$null;runtime_status=$null;
+        loader_error=$null;missing_exports=$null;remote_play_together_verified=$false;p2p_transport_verified=$false;
+        scope='Runtime-reported local API counters only; no session, controller, transport or gameplay verification.'}
+    $path=Join-Path $Run 'steam-dev-stats.json'
+    if(!(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]$result}
+    $result.state='invalid'
+    try {
+        if((Get-Item -LiteralPath $path).Length -gt 65536){return [pscustomobject]$result}
+        $stats=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if($stats.schema -ne 1 -or $stats.source -ne 'steam_dev_bootstrap' -or $stats.app_id -ne 480 -or
+            $stats.checkpoint -notin @('initialization','shutdown','callback-failure') -or
+            $stats.status -notin @('disabled','invalid-path','unsupported-platform','load-failed','missing-exports',
+                'already-active','init-failed','init-exception','ready','busy','stopped','deferred','callback-failed','shutdown-failed')) {
+            return [pscustomobject]$result
+        }
+        foreach($name in @('init_attempted','initialized_ever','remote_play_together_verified','p2p_transport_verified')) {
+            if($stats.$name -isnot [bool]){return [pscustomobject]$result}
+        }
+        if($stats.remote_play_together_verified -or $stats.p2p_transport_verified){return [pscustomobject]$result}
+        foreach($name in @('callback_calls','callback_completed','callback_failures','shutdown_calls','shutdown_completed')) {
+            $value=$stats.$name
+            if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return [pscustomobject]$result}
+        }
+        if(($stats.initialized_ever -and !$stats.init_attempted) -or
+            ($stats.callback_completed -gt $stats.callback_calls) -or
+            ($stats.callback_failures -gt ($stats.callback_calls-$stats.callback_completed)) -or
+            ($stats.shutdown_calls -gt 1) -or ($stats.shutdown_completed -gt $stats.shutdown_calls) -or
+            (!$stats.initialized_ever -and ($stats.callback_calls -ne 0 -or $stats.shutdown_calls -ne 0)) -or
+            ($stats.status -eq 'ready' -and !$stats.initialized_ever)) {return [pscustomobject]$result}
+        # The two diagnostic fields were added to schema 1; older valid runtime
+        # snapshots remain readable, with unavailable diagnostics kept unknown.
+        foreach($name in @('loader_error','missing_exports')) {
+            if($null -ne $stats.$name) {
+                $value=$stats.$name
+                if(($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt [uint32]::MaxValue){return [pscustomobject]$result}
+                $result[$name]=$value
+            }
+        }
+        $result.state='runtime-reported'
+        $result.initialization_attempted=$stats.init_attempted
+        $result.initialization_succeeded=$stats.initialized_ever
+        $result.callbacks_completed=$stats.callback_completed
+        $result.shutdown_completed=($stats.initialized_ever -and $stats.shutdown_calls -eq 1 -and $stats.shutdown_completed -eq 1)
+        $result.runtime_status=$stats.status
+    } catch {return [pscustomobject]$result}
+    return [pscustomobject]$result
+}
+
 function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][string]$Mode='DryRun',
     [switch]$CopyApi,[scriptblock]$ProcessLauncher) {
     if($Mode -eq 'DryRun'){return $Plan}
@@ -206,8 +259,9 @@ function Invoke-WonderSteamDev($Plan,[ValidateSet('DryRun','Prepare','Launch')][
         $game=New-Object Diagnostics.Process;$game.StartInfo=$info
         if(!$game.Start()){throw 'Could not start the developer runtime.'}
         $handle=$game.Handle;$game.WaitForExit()
-        $result=[pscustomobject]@{state='exited';exit_code=$game.ExitCode;steam_api_success_unverified=$true;dev_root=$Plan.dev_root;run_directory=$run}
-        $result | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $run 'result.json') -Encoding UTF8
+        $result=[pscustomobject]@{state='exited';exit_code=$game.ExitCode;steam_api_success_unverified=$true;
+            steam_api_evidence=(Read-WonderSteamDevEvidence $run);dev_root=$Plan.dev_root;run_directory=$run}
+        $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $run 'result.json') -Encoding UTF8
         return $result
     } finally {
         if($game){$game.Dispose()}

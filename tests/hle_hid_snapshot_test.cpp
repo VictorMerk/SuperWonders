@@ -21,6 +21,7 @@ uint64_t loading = 0;
 InputSnapshot observed;
 plat::PadState delivered;
 size_t traces = 0;
+uint64_t observed_caller=0,observed_thread=0;
 bool active() { return network; }
 uint32_t local_player() { return 0; }
 InputSnapshot input_snapshot(uint32_t p) {
@@ -28,7 +29,9 @@ InputSnapshot input_snapshot(uint32_t p) {
                           [] { return InputReadMetadata{network, loading}; });
 }
 void trace_hid_delivery(const InputSnapshot &s, const plat::PadState &p,
-                        uint64_t) {
+                        const CPU& cpu) noexcept {
+  observed_caller = cpu.x[30];
+  observed_thread = cpu.tpidrro;
   observed = s;
   delivered = p;
   ++traces;
@@ -74,13 +77,18 @@ static_assert(sizeof(State) == 0x28);
 static State one(uint32_t id) {
   State s{};
   nx::CPU c{};
+  c.x[30]=0x123456; c.tpidrro=0xabcdef;
   c.x[0] = reinterpret_cast<uintptr_t>(&s);
   c.x[1] = reinterpret_cast<uintptr_t>(&id);
   nx::GetNpadState(c);
+  if(nx::lan::network && id<2) {
+    check(nx::lan::observed_caller==c.x[30] && nx::lan::observed_thread==c.tpidrro,"HID forwards real calling CPU identity");
+  }
   return s;
 }
 static size_t history(uint32_t id, std::array<State, 16> &s, int n = 16) {
   nx::CPU c{};
+  c.x[30]=0x123456; c.tpidrro=0xabcdef;
   c.x[0] = reinterpret_cast<uintptr_t>(s.data());
   c.x[1] = uint64_t(n);
   c.x[2] = reinterpret_cast<uintptr_t>(&id);

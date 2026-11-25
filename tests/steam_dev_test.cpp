@@ -4,7 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <fstream>
 #include <future>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 
@@ -16,6 +18,7 @@ void check(bool value, const char* message) {
 struct Fixture {
     std::atomic<unsigned> loads{0}, inits{0}, pumps{0}, shutdowns{0}, unloads{0}, active{0};
     bool init_ok = true, load_ok = true, init_export = true, pump_export = true, shutdown_export = true;
+    uint32_t loader_error = 0;
     std::function<void()> on_init, on_pump, on_shutdown, on_unload;
 };
 Fixture* current;
@@ -33,7 +36,7 @@ public:
     explicit FakeExporter(Fixture& value) : fixture(value) { current = &value; }
     LoadResult load(const std::filesystem::path&) override {
         ++fixture.loads;
-        if (!fixture.load_ok) return {Status::LoadFailed, {}};
+        if (!fixture.load_ok) return {Status::LoadFailed, {}, fixture.loader_error};
         Exports api;
         api.init = fixture.init_export ? fake_init : nullptr;
         api.run_callbacks = fixture.pump_export ? fake_pump : nullptr;
@@ -65,6 +68,7 @@ int main() {
         check(f.loads == 0 && f.inits == 0 && f.pumps == 0 && f.shutdowns == 0, "disabled has no exporter/API side effects");
         const auto stats = bootstrap.snapshot();
         check(stats.status == Status::Disabled && !stats.init_attempted && !stats.initialized_ever && stats.callback_calls == 0 && stats.shutdown_calls == 0, "disabled snapshot has no API activity");
+        check(stats.loader_error == 0 && stats.missing_exports == 0, "disabled snapshot has no fabricated loader diagnostics");
         Bootstrap default_loader;
         check(default_loader.initialize() == Status::Disabled, "native loader is unreachable when disabled");
     }
@@ -81,10 +85,15 @@ int main() {
 #endif
     }
     {
-        Fixture f; f.load_ok = false;
+        Fixture f; f.load_ok = false; f.loader_error = 193;
         Bootstrap bootstrap(enabled(), std::make_shared<FakeExporter>(f));
         check(bootstrap.initialize() == Status::LoadFailed && bootstrap.initialize() == Status::LoadFailed &&
               f.loads == 1 && f.inits == 0 && f.shutdowns == 0, "unavailable DLL honest terminal failure, no API calls");
+        check(bootstrap.snapshot().loader_error == 193 && bootstrap.snapshot().missing_exports == 0,
+              "native diagnostic survives terminal failure and repeat initialize");
+        check(std::strstr(status_hint(Status::LoadFailed, 193), "x64") != nullptr &&
+              std::strstr(status_hint(Status::InitFailed), "without a specific cause") != nullptr,
+              "bad-image error actionable and legacy Init false is not misdiagnosed");
     }
     for (int missing = 0; missing < 3; ++missing) {
         Fixture f;
@@ -94,7 +103,35 @@ int main() {
         Bootstrap bootstrap(enabled(), std::make_shared<FakeExporter>(f));
         check(bootstrap.initialize() == Status::MissingExports && f.inits == 0 && f.shutdowns == 0 && f.unloads == 1,
               "all required exports checked before Init; missing export releases module");
+        check(bootstrap.snapshot().missing_exports == (1u << missing) && bootstrap.snapshot().loader_error == 0,
+              "exact missing export recorded even when injected exporter omitted mask");
     }
+#ifdef _WIN32
+    {
+        // Exercise the production Windows loader, never a Steam DLL: missing
+        // file and deliberately invalid image must fail before any API call.
+        const auto folder = std::filesystem::temp_directory_path() /
+            ("wonder-steam-loader-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        check(std::filesystem::create_directory(folder), "create isolated native loader fixture");
+        const auto library = folder / "steam_api64.dll";
+        {
+            Bootstrap missing({true, library});
+            check(missing.initialize() == Status::LoadFailed, "production loader rejects absent library");
+            const auto stats = missing.snapshot();
+            check(stats.loader_error == 2 && !stats.init_attempted && !stats.initialized_ever && stats.shutdown_calls == 0,
+                  "production missing-file Windows error retained without API calls");
+        }
+        { std::ofstream invalid(library, std::ios::binary); invalid << "deliberately not a PE DLL"; }
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            Bootstrap invalid({true, library});
+            check(invalid.initialize() == Status::LoadFailed, "production loader rejects invalid image and releases process lease");
+            const auto stats = invalid.snapshot();
+            check(stats.loader_error == 193 && !stats.init_attempted && stats.callback_calls == 0 && stats.shutdown_calls == 0,
+                  "production invalid-image Windows error retained without Steam API calls");
+        }
+        check(std::filesystem::remove(library) && std::filesystem::remove(folder), "remove exact owned native loader fixture");
+    }
+#endif
     {
         Fixture f; f.init_ok = false;
         Bootstrap bootstrap(enabled(), std::make_shared<FakeExporter>(f));
@@ -196,5 +233,5 @@ int main() {
         check(bootstrap.shutdown() == Status::Stopped && bootstrap.initialize() == Status::Stopped && f.loads == 0,
               "early process stop cannot later initialize Steam");
     }
-    std::puts("Steam bootstrap CPU mocks passed; no real DLL/client/API calls performed");
+    std::puts("Steam bootstrap CPU lifecycle and loader rejection tests passed; no Steam DLL/client/API calls performed");
 }

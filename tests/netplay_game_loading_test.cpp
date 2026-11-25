@@ -149,6 +149,8 @@ int main() {
   const auto observation=trace_framework_enter(cpu);
   check(observation.invocation&&observation.thread,"actual framework entry local identity");
   trace_loading_file(path,cpu);
+  const auto hid_snapshot=input_snapshot(1);
+  trace_hid_delivery(hid_snapshot,hid_snapshot.pad,cpu);
   fixture::replies = {frame(1, marker, 0), frame(2, marker, marker)};
   loading_event(path);
   trace_framework_leave(cpu,observation);
@@ -176,6 +178,9 @@ int main() {
         "actual loading file correlates invocation, path hash and source-relative caller");
   check(loader_text.find(path)==std::string::npos&&loader_text.find(std::to_string(cpu.tpidrro))==std::string::npos,
         "no raw path or guest TLS token exported");
+  check(loader_text.find("# count_hid_delivery=1\n")!=std::string::npos &&
+        loader_text.find(suffix+"0,1,320\n")!=std::string::npos,
+        "HID delivery attaches retained invocation, local thread and checked caller");
   auto nested=trace_framework_enter(cpu);trace_framework_leave(cpu,nested,true);
   cpu.x[30]=fixture::main_module.base+0x200;trace_loading_file(path,cpu); // text span excludes upper bound
   cpu.x[30]=fixture::main_module.base+0xff;trace_loading_file(path,cpu); // below nonzero text start

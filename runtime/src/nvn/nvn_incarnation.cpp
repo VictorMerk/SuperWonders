@@ -141,6 +141,12 @@ namespace {
 std::atomic<uint64_t> g_floor{UINT64_MAX};  // the last replay's mark (everything, until a replay sets one)
 }
 uint64_t current_epoch() { return g_epoch.load(std::memory_order_acquire); }
+uint64_t recording_epoch() {
+    // A descriptor transaction can retire snapshots and their pool at distinct
+    // epochs. Never let a command list retain a mark between those changes.
+    std::shared_lock lk(objects_lock());
+    return current_epoch();
+}
 uint64_t replay_floor() { return g_floor.load(std::memory_order_acquire); }
 
 // The mark is the epoch at which the submit's command lists ended recording, not the submit's start: the game's

@@ -78,6 +78,7 @@ void note_replaced(uint64_t guest);                  // under objects_lock (alon
 void purge_incarnations(uint64_t upto);              // under objects_lock (alone), from drain_objects: records <= upto
 bool has_pending_incarnations();                     // any retired/pool/sampler incarnation records waiting for purge
 uint64_t current_epoch();                            // the epoch of the last recorded change
+uint64_t recording_epoch();                          // coherent end-recording mark; caller holds no objects lock
 uint64_t replay_floor();                             // the last replay's mark: objects retired up to it can go
 // A submit's replay (gpu_submit, under the GPU lock): takes the mark, then drains the deferred objects no replay
 // needs any more. `lists_epoch`: the newest epoch at which the submit's command lists ended recording (0: unknown).

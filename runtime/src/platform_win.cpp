@@ -1,5 +1,6 @@
 // Windows host: memory, threads, time, files, the game window (F11 / Alt+Enter fullscreen), XInput/SDL gamepads + keyboard,
 // XAudio2, the Vulkan loader and win32 surface, crash handler, hardware watchpoints (NX_WATCH) and main().
+#include "host_path.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -227,7 +228,7 @@ uint64_t monotonic_ns() {
 // ---- files and output -----------------------------------------------------------------------------------------
 
 FILE* fopen_utf8(const std::string& path, const char* mode) {
-    std::wstring wp = nx_u8path(path).wstring();
+    std::wstring wp = nx::host_path(nx_u8path(path)).wstring();
     std::wstring wm(mode, mode + std::strlen(mode));
     return _wfopen(wp.c_str(), wm.c_str());
 }

@@ -26,6 +26,7 @@ static inline std::filesystem::path nx_u8path(std::string_view s) { return std::
 #include <nx/game.h>
 
 #include "platform.h"
+#include "host_path.h"
 #include "user_profiles.h"
 #include "frametrace.h"
 #include "play.h"
@@ -92,7 +93,7 @@ struct Dir {
 std::vector<std::pair<uint64_t, Dir>> g_dirs;
 uint64_t g_next = 1;
 
-fs::path data_root() { return nx_u8path(plat::data_root()); }
+fs::path data_root() { return host_path(nx_u8path(plat::data_root())); }
 
 std::string utf8(const fs::path& p) {
     auto s = p.u8string();
@@ -159,7 +160,7 @@ std::vector<fs::path> mod_paths(const std::string& guest) {
     std::vector<fs::path> v;
     auto [mnt, rest] = split(guest);
     if (g_rom_mounts.count(mnt))
-        for (const fs::path& r : mod_roots()) v.push_back(r / nx_u8path(rest));
+        for (const fs::path& r : mod_roots()) v.push_back(host_path(r / nx_u8path(rest)));
     return v;
 }
 
@@ -175,7 +176,7 @@ fs::path resolve(const std::string& guest) {
             if (logged.insert(rest).second) log("mods: %s from %s", rest.c_str(), utf8(m).c_str());
             return m;
         }
-    return it->second / nx_u8path(rest);
+    return host_path(it->second / nx_u8path(rest));
 }
 
 void mount(const std::string& name, const fs::path& p) {

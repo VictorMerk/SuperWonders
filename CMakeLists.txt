@@ -84,6 +84,9 @@ endforeach()
 option(NX_TESTS "Build the standalone unit tests" OFF)
 if(NX_TESTS AND NOT ANDROID)
     enable_testing()
+    add_executable(texture_cache_test tests/texture_cache_test.cpp runtime/src/nvn/texture_cache.cpp)
+    target_include_directories(texture_cache_test PRIVATE runtime/src/nvn)
+    add_test(NAME texture_cache COMMAND texture_cache_test)
     add_executable(input_settings_test tests/input_settings_test.cpp runtime/src/overlay/settings.cpp)
     target_include_directories(input_settings_test PRIVATE runtime/src)
     add_test(NAME input_settings COMMAND input_settings_test)
@@ -301,6 +304,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_compare_twin.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_upload.cpp
+    runtime/src/nvn/texture_cache.cpp
     runtime/src/nvn/nvn_astc.cpp
     runtime/src/nvn/nvn_spirv_patch.cpp
     runtime/src/nvn/nvn_spirv_int_textures.cpp

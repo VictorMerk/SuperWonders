@@ -1,6 +1,8 @@
 // Texture uploads (nvn_pipeline.h): guest pool memory into the host image, untiled, widened where the host stores a
 // format wider than NVN does, and checked against what the copies read (docs/nvn/DEBUG.md #50).
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +12,8 @@
 #include "nvn_astc.h"
 #include "nvn_pipeline.h"
 #include "nvn_tiling.h"
+#include "texture_cache.h"
+#include "nvn_pipeline_async.h"
 #include "platform.h"
 
 namespace nx::nvn {
@@ -176,6 +180,91 @@ static void transcode_astc_to_bc3(std::vector<uint8_t>& rgba, std::vector<Linear
         }
     }
     rgba.swap(compressed); levels.swap(out);
+}
+
+std::atomic<uint64_t> g_texture_write_bytes{0};
+std::atomic<unsigned> g_texture_write_jobs{0};
+std::atomic<bool> g_texture_write_failed{false};
+TextureCache& texture_cache() {
+    static TextureCache* cache = [] {
+        auto directory = plat::data_root() + "/texture-cache-v1";
+        auto* result = new TextureCache(std::filesystem::path(reinterpret_cast<const char8_t*>(directory.c_str())));
+        std::atexit(wait_background_writes);  // finish bounded writes before static teardown
+        return result;  // process-lifetime, like the existing background writer
+    }();
+    return *cache;
+}
+struct PendingTextureWrite {
+    uint64_t bytes = 0;
+    TextureCacheRequest request;
+    std::vector<uint8_t> source;
+    ~PendingTextureWrite() {
+        if (bytes) g_texture_write_bytes.fetch_sub(bytes), g_texture_write_jobs.fetch_sub(1);
+    }
+    bool reserve(uint64_t size) {
+        constexpr uint64_t limit = 16ull << 20;
+        if (!size || size > limit) return false;
+        if (g_texture_write_jobs.fetch_add(1) >= 64) { g_texture_write_jobs.fetch_sub(1); return false; }
+        uint64_t queued = g_texture_write_bytes.load();
+        while (queued <= limit - size) {
+            if (g_texture_write_bytes.compare_exchange_weak(queued, queued + size)) { bytes = size; return true; }
+        }
+        g_texture_write_jobs.fetch_sub(1);
+        return false;
+    }
+};
+
+void decode_bc3_cached(uint32_t format, std::vector<uint8_t>& linear, std::vector<LinearLevel>& levels,
+                       uint32_t layers, uint32_t bw, uint32_t bh) {
+    static const bool allowed = [] { const char* e = std::getenv("NX_TEXTURE_CACHE"); return e && e[0] == '1'; }();
+    static const bool validate = [] { const char* e = std::getenv("NX_TEXTURE_CACHE_VALIDATE"); return e && e[0] == '1'; }();
+    static uint64_t hits = 0, misses = 0, lookup_ns = 0;
+    std::shared_ptr<PendingTextureWrite> pending;
+    if (allowed) try {
+        const auto started = plat::monotonic_ns();
+        auto request = texture_cache_request(format, layers, linear, levels);
+        if (!request.name.empty()) {
+            std::vector<uint8_t> converted;
+            if (texture_cache().load(request, linear, converted)) {
+                if (validate) {
+                    auto reference = linear; auto reference_levels = levels;
+                    decode_astc(format, reference, reference_levels, layers, bw, bh);
+                    transcode_astc_to_bc3(reference, reference_levels, layers);
+                    bool identical = converted == reference && reference_levels.size() == request.output_levels.size();
+                    for (size_t i = 0; identical && i < reference_levels.size(); ++i) {
+                        const auto& a = reference_levels[i]; const auto& b = request.output_levels[i];
+                        identical = a.offset == b.offset && a.layer_size == b.layer_size && a.width == b.width &&
+                            a.height == b.height && a.width_blocks == b.width_blocks && a.height_blocks == b.height_blocks;
+                    }
+                    log("texture cache validation: %s (format %#x, %u layers, %zu converted bytes)",
+                        identical ? "PASS" : "FAIL", format, layers, converted.size());
+                    if (!identical) converted = std::move(reference), request.output_levels = std::move(reference_levels);
+                }
+                linear.swap(converted); levels = std::move(request.output_levels);
+                lookup_ns += plat::monotonic_ns() - started;
+                if (++hits == 1 || (hits + misses) % 128 == 0)
+                    log("texture conversion cache: %llu hits / %llu misses, %.1f ms total lookup; exact source / output checksum",
+                        (unsigned long long)hits, (unsigned long long)misses, double(lookup_ns) / 1e6);
+                return;
+            }
+            pending = std::make_shared<PendingTextureWrite>();
+            if (!g_texture_write_failed.load(std::memory_order_relaxed) && pending->reserve(linear.size() + request.output_bytes)) {
+                pending->request = std::move(request);
+                pending->source = linear;
+            } else pending.reset();
+            ++misses;
+        }
+        lookup_ns += plat::monotonic_ns() - started;
+    } catch (...) { pending.reset(); }
+    decode_astc(format, linear, levels, layers, bw, bh);
+    transcode_astc_to_bc3(linear, levels, layers);
+    if (pending && pending->request.output_bytes == linear.size()) try {
+        background_write([pending, converted = linear] {
+            if (!g_texture_write_failed.load(std::memory_order_relaxed) &&
+                !texture_cache().store(pending->request, pending->source, converted) && !g_texture_write_failed.exchange(true))
+                log("texture conversion cache: writes unavailable for this session; existing entries and normal conversion remain usable");
+        });
+    } catch (...) {}  // keep the freshly converted picture even if caching cannot be queued
 }
 
 // Whether a 1 MB+ upload gets a staging buffer of its own (PHASE4.md U1). In steady state (a course frame stages ~30
@@ -443,8 +532,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     if (astc_decoded(t.format)) {  // RGBA8 texels from here on
         if (img.format == VK_FORMAT_BC3_UNORM_BLOCK || img.format == VK_FORMAT_BC3_SRGB_BLOCK) {
             // Low-VRAM profile: BC3 is encoded from the CPU decode (the GPU decoder writes RGBA8 only).
-            decode_astc(t.format, linear, levels, layers, bw, bh);
-            transcode_astc_to_bc3(linear, levels, layers);
+            decode_bc3_cached(t.format, linear, levels, layers, bw, bh);
             bw = bh = 4, bytes = host_bytes = 16;
             static uint64_t bc3_textures = 0;
             if (++bc3_textures == 1 || bc3_textures % 500 == 0)

@@ -49,6 +49,22 @@ void replay_list(VkCommandBuffer cb, Targets& st, const CmdList& list, int depth
                 (unsigned long long)c.a[1], c.i[0], c.i[1], c.i[2], c.i[3], c.f[0], c.f[1], c.f[2], c.f[3], depth);
         switch (c.op) {
             case Cmd::SetRenderTargets: {  // the pass ends only when a draw or clear needs other targets
+                if(c.mask==0x80000000u && g_frame>=1800){
+                    static unsigned mismatches=0;
+                    for(unsigned slot=0;slot<2 && mismatches<2000;++slot){
+                        uint64_t memory=0;uint32_t width=0,height=0;
+                        std::memcpy(&memory,c.i+slot*2,sizeof memory);
+                        std::memcpy(&width,c.f+slot*2,sizeof width);std::memcpy(&height,c.f+slot*2+1,sizeof height);
+                        auto* texture=get<Texture>(c.a[slot ? 8 : 0]);
+                        if(texture && (memory!=texture->memory || width!=texture->width || height!=texture->height)){
+                            ++mismatches;
+                            log("target-record mismatch frame %llu list-epoch %llu mark %llu slot %u texture %llx: recorded %llx %ux%u replay %llx %ux%u",
+                                (unsigned long long)g_frame.load(),(unsigned long long)list.epoch,(unsigned long long)t_replay_mark,slot,
+                                (unsigned long long)c.a[slot ? 8 : 0],(unsigned long long)memory,width,height,
+                                (unsigned long long)texture->memory,texture->width,texture->height);
+                        }
+                    }
+                }
                 static const bool always = std::getenv("NX_TARGETS_BREAK") != nullptr;  // bisecting: the old way
                 if (always) draw_end_rendering(cb, 7);
                 st.color_count = c.n;

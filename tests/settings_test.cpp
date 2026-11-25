@@ -79,6 +79,16 @@ int main() {
               configured.controller_custom_mask == s.controller_custom_mask && configured.shader_bundle == s.shader_bundle, "graphics presets preserve personal settings");
         check(!configured.pipeline_skip_draws && !configured.framegen && configured.frame_cap == 60, "presets retain complete-image rendering and a normal speed cap");
     }
+    auto previous=s;
+    for(auto profile:{GraphicsProfile::LowLatency,GraphicsProfile::SmoothMotion,GraphicsProfile::BatterySaver}){
+        auto configured=s;apply_graphics_profile(configured,profile);
+        check(configured.internal_resolution==1&&configured.low_vram_profile&&!configured.pipeline_skip_draws,"new presets retain complete-image rendering with a low-VRAM 720p target");
+        if(profile==GraphicsProfile::LowLatency)check(configured.vsync==3&&configured.render_ahead==1&&!configured.framegen,"low-latency preset disables generation and synchronization queues");
+        if(profile==GraphicsProfile::SmoothMotion)check(configured.framegen&&configured.framegen_multiplier==2&&configured.render_ahead==2,"smooth-motion preset explicitly enables generated presentation");
+        if(profile==GraphicsProfile::BatterySaver)check(configured.frame_cap==30&&!configured.framegen,"battery saver requests 30 real pictures per second");
+        configured.volume=27;configured.game_language=3;restore_graphics_options(configured,previous);
+        check(configured.frame_cap==previous.frame_cap&&configured.internal_resolution==previous.internal_resolution&&configured.framegen==previous.framegen&&configured.volume==27&&configured.game_language==3,"undo restores only graphics and preserves subsequent personal changes");
+    }
     std::remove(path.c_str());
     Settings active, requested;
     requested.volume = 37; requested.fullscreen = true; requested.framegen = true;

@@ -19,6 +19,7 @@
 
 #include "nvn.h"
 #include "framegen_timing.h"
+#include "frame_governor_layout.h"
 #include "nvn_ultrawide.h"
 #include "platform.h"
 #include "frametrace.h"
@@ -322,7 +323,11 @@ int frame_cap() {
 // longer between presents alone would halve its speed (its step follows the interval it chose, not wall time).
 void frame_time_probe(CPU& c) {
     const LoadedModule* m = module_at(c.x[30]);
-    if (!m || c.x[30] - m->base != 0xe16ac || !c.x[19]) return;
+    if(!m||!m->info||!m->info->build_id||!c.x[19])return;
+    const auto site=frame_governor_return_site(m->info->build_id);
+    if(!site||c.x[30]-m->base!=site)return;
+    static bool reported=false;
+    if(!reported){log("nvn: verified frame governor at main+%llx",(unsigned long long)site);reported=true;}
     plat::perf_hint_thread();  // the game's main thread makes the frame too (ADPF, PLAN.md R2)
     plat::frame_thread_tick(1);
     static const char* max_env = std::getenv("NX_MAX_INTERVAL");

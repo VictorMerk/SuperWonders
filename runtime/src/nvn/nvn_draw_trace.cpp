@@ -21,24 +21,28 @@ using namespace nx::vk;
 bool trace_capture() {
     static const bool enabled = std::getenv("NX_TRACE_REQUEST") != nullptr;
     if (!enabled) return false;
-    static uint64_t checked = UINT64_MAX, until = 0;
+    static uint64_t checked = UINT64_MAX, from = 0, until = 0;
     if (checked != g_frame) {
         checked = g_frame;
         const std::string path = plat::data_root() + "/trace_capture";
         if (FILE* f = plat::fopen_utf8(path, "r")) {
             unsigned frames = 0;
-            const bool valid = std::fscanf(f, "%u", &frames) == 1;
+            unsigned long long requested_start = 0;
+            const int fields = std::fscanf(f, "%u %llu", &frames, &requested_start);
+            const bool valid = fields >= 1;
             std::fclose(f);
             std::error_code ec;
             std::filesystem::remove(std::filesystem::u8path(path), ec);
             if (valid && frames) {
-                until = g_frame + std::min(frames, 6u);
-                log("nvn: bounded trace capture frames %llu..%llu", (unsigned long long)g_frame,
+                const auto now = g_frame.load();
+                from = fields >= 2 ? std::clamp<uint64_t>(requested_start,now,now+600) : now;
+                until = from + std::min(frames, 6u);
+                log("nvn: bounded trace capture frames %llu..%llu", (unsigned long long)from,
                     (unsigned long long)(until-1));
             }
         }
     }
-    return g_frame < until;
+    return g_frame >= from && g_frame < until;
 }
 
 namespace {

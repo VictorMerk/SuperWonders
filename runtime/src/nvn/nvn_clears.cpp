@@ -219,7 +219,10 @@ void draw_clear(VkCommandBuffer cb, const Targets& t, const Cmd& c) {
     uint32_t level = color ? t.views.level[c.n] : t.views.level[8];
     VkExtent2D full{std::max(1u, img->width >> level), std::max(1u, img->height >> level)};
     static const bool transfer = std::getenv("NX_TRANSFER_CLEARS") != nullptr;  // bisecting: whole-image clears
-    static const bool eager = std::getenv("NX_EAGER_CLEARS") != nullptr;
+    static const bool eager = [] {
+        const char* value=std::getenv("NX_EAGER_CLEARS");
+        return value && value[0]!='0';
+    }();
     // Off unless NX_CLEARS_SCISSOR=1: clipping clears to the bound scissor broke the course (whole regions left
     // uncleared: huge black/white shapes, DEBUG.md #52), so NVN's clears are not scissored the way this reads it.
     static const bool no_scissor = std::getenv("NX_CLEARS_SCISSOR") == nullptr;

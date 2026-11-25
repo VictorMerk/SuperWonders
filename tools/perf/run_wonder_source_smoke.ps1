@@ -15,6 +15,14 @@ param(
     [switch]$TraceFiles,
     [string]$ContentPython='',
     [string]$QuitFile='',
+    [ValidateRange(0,100000)][int]$ThirtyFpsUntilFrame=0,
+    [switch]$ScanPlayer,
+    [switch]$MoveCaptures,
+    [switch]$TraceRenderEvents,
+    [switch]$TraceBlurInputs,
+    [switch]$TraceTargetRecords,
+    [switch]$RecordInputs,
+    [ValidateSet('none','eager-clears','deferred-clears','target-breaks','submit-mark')][string]$RenderDiagnostic='none',
     [string]$LeaseId=''
 )
 # A real native-game smoke test, distinct from the library GUI's unit tests.
@@ -73,6 +81,19 @@ try {
     if($ThreadDumpAtSeconds){$options['NX_THREAD_DUMP_AT']=[string]$ThreadDumpAtSeconds}
     if($TraceFiles){$options['NX_TRACE_FS']='1'}
     if($quitFilePath){$options['NX_TEST_QUIT_FILE']=$quitFilePath}
+    if($ThirtyFpsUntilFrame){$options['NX_FPS_CAP_UNTIL']=[string]$ThirtyFpsUntilFrame}
+    if($ScanPlayer){$options['NX_PROBE_SCAN']=Join-Path $outputPath 'player-scan.txt'}
+    if($TraceRenderEvents){$options['NX_TRACE_REQUEST']='1'}
+    if($TraceTargetRecords){$options['NX_RT_RECORD_TRACE']='1'}
+    if($RecordInputs){$options['NX_INPUT_RECORD']=Join-Path $outputPath 'inputs.frames'}
+    if($TraceBlurInputs){
+        $options['NX_DUMP_ON_FS']='8d2597627e69be11';$options['NX_DUMP_ANY']='1'
+        $options['NX_DUMP_FROM']='1600';$options['NX_DUMP_LIMIT']='2000';$options['NX_DUMP_TARGET_EVERY']='60'
+    }
+    if($RenderDiagnostic -eq 'eager-clears'){$options['NX_EAGER_CLEARS']='1'}
+    if($RenderDiagnostic -eq 'deferred-clears'){$options['NX_EAGER_CLEARS']='0'}
+    if($RenderDiagnostic -eq 'target-breaks'){$options['NX_TARGETS_BREAK']='1'}
+    if($RenderDiagnostic -eq 'submit-mark'){$options['NX_MARK_AT_SUBMIT']='1'}
     if($layerPath) {
         $options['VK_LAYER_PATH']=$layerPath
         $options['VK_INSTANCE_LAYERS']='VK_LAYER_KHRONOS_validation'
@@ -103,7 +124,11 @@ try {
     $frames=@(Get-ChildItem -LiteralPath (Join-Path $dataPath 'frames') -File -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTimeUtc -ge $began})
     if($frames.Count) {
         $capture=Join-Path $outputPath 'frames';$null=New-Item -ItemType Directory -Path $capture
-        foreach($frame in $frames){Copy-Item -LiteralPath $frame.FullName -Destination (Join-Path $capture $frame.Name)}
+        foreach($frame in $frames){
+            $target=Join-Path $capture $frame.Name
+            if($MoveCaptures){Move-Item -LiteralPath $frame.FullName -Destination $target}
+            else{Copy-Item -LiteralPath $frame.FullName -Destination $target}
+        }
     }
     $contentPassed=$null;$audioPassed=$null
     if($contentPythonPath) {
@@ -116,6 +141,7 @@ try {
         runtime=$runtimePath;data_root=$dataPath;reason=$reason;exit_code=$game.ExitCode;
         intentional_quit=$intentional;shutdown_mode=$(if($quitFilePath){'request-file'}else{'frame'});
         fresh_captures=$frames.Count;fatal_errors=[regex]::Matches($log,'FATAL:').Count;
+        captures_moved=[bool]$MoveCaptures;
         validation_enabled=[bool]$layerPath;
         audio_bytes=$audioBytes;audio_required=[bool]$RequireAudio;
         audio_checked=[bool]$contentPythonPath;non_silent_audio_observed=$audioPassed;

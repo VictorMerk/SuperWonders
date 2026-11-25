@@ -40,6 +40,13 @@ int main() {
     write(root/"mods/-00-uw-map-hud-32-9/romfs/camera.bin","inactive profile update");
     check(wide==hash("21:9"),"inactive aspect data is not hashed");
     check(hash()==hash("16:9"),"default and explicit normal aspect match");
+    nx::mods::save_order(root/"mods",{"01-first"});
+    const auto ordered=hash();nx::mods::save_order(root/"mods",{"01-first","readme-only"});
+    check(ordered==hash(),"inactive/non-loadable order entries do not change effective LAN content");
+    write(root/"mods/02-later/romfs/Stage/course.bin","later");
+    const auto normal_order=hash();nx::mods::save_order(root/"mods",{"02-later","01-first"});
+    check(normal_order!=hash(),"different effective custom mod orders reject LAN compatibility");
+    nx::mods::save_order(root/"mods",{});
     const auto version=hash();write(root/"analysis/main.bin","originalSwitch");
     check(version!=hash(),"different Wonder executables cannot match");
     const auto runtime=hash();write(root/"runtime.exe","different runtime");

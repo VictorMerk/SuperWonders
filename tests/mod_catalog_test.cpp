@@ -49,6 +49,23 @@ int main() {
     for(const auto& mod:mods) if(mod.name=="00-ordinary")
         precedence=mod.shadowed==1&&mod.conflicts[0].find("00-uw-map-hud-21-9")!=std::string::npos;
     check(precedence,"conflict order follows actual folder names, including selected disabled profiles");
+    std::ofstream(root/"02-overlay/wonder-mod.ini")<<"input=0123456789abcdef0123456789abcdef\n";
+    std::string warning;
+    mods=nx::launcher::inspect_mods(root,"21:9","ffffffffffffffffffffffffffffffff",&warning);
+    bool mismatched=false;
+    for(const auto&mod:mods)if(mod.name=="02-overlay"){
+        mismatched=!mod.compatibility.empty()&&!mod.issue.empty();
+        check(nx::launcher::mod_matches(mod,"OVERLAY",nx::launcher::ModFilter::Issues),"case-insensitive search combines with issue filter");
+        check(!nx::launcher::mod_matches(mod,"missing",nx::launcher::ModFilter::All),"search filters names without changing mods");
+    }
+    check(mismatched,"declared prepared-input mismatch is surfaced");
+    mods=nx::launcher::inspect_mods(root,"21:9","0123456789abcdef0123456789abcdef",&warning);
+    for(const auto&mod:mods)if(mod.name=="02-overlay")check(mod.issue.empty()&&!mod.compatibility.empty(),"matching target is an author claim, not a load failure");
+    check(nx::launcher::write_mod_report(mods,root/"report.txt",warning),"mod diagnostics can be exported");
+    {std::ifstream in(root/"report.txt");std::string report((std::istreambuf_iterator<char>(in)),{});check(report.find(root.string())==std::string::npos&&report.find("02-overlay")!=std::string::npos,"report contains names without absolute installation paths");}
+    std::ofstream(root/"load-order.txt")<<"../bad-order\n";
+    mods=nx::launcher::inspect_mods(root,"21:9","",&warning);
+    check(!warning.empty(),"malformed custom order is not silently presented as a complete report");
     // Cleanup is restricted to the unique directory created by this test.
     check(root.is_absolute() && root.parent_path()==fs::temp_directory_path() &&
           root.filename().string().starts_with("wonder-mod-test-"),"cleanup target is the test's own temp directory");

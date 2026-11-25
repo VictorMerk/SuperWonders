@@ -11,6 +11,7 @@
 #include "play.h"
 #include "netplay_probe.h"
 #include "player_probe_layout.h"
+#include "play_scene.h"
 #include "netplay_game.h"
 #include "resident_scan.h"
 
@@ -712,6 +713,14 @@ void file_opened(const std::string& path) {
     // playable when its first music or ambience stream opens (Sound/Resource/Stream/BGM_* or Env_*). A death plays
     // BGM_Jingle_PlayerDown; the course starts again at the next stream.
     static std::string armed;  // the scene that is loading
+    if (const auto map = map_scene_resource(path); !map.empty()) {
+        g_course = map;
+        armed = "map";
+        g_scene = "loading";
+        g_search_generation++;
+        g_player = 0, g_track_n = 0;
+        return;
+    }
     const size_t sli = path.find("/StageLoadInfo/");
     if (sli != std::string::npos) {
         std::string name = path.substr(sli + 15);
@@ -751,8 +760,11 @@ void file_opened(const std::string& path) {
     }
     // The music, not the ambience: a course's Env_ stream opens with its "Welcome" card, ~200 frames before the
     // player can move; its BGM_Course_ stream opens as the card goes.
+    // Returning to an already loaded map can reuse its music without opening
+    // BGM_World again. Its newly opened ambience also marks that map ready.
+    const bool map_ambience = armed == "map" && stream.rfind("Env_",0) == 0;
     const char* want = armed == "title" ? "BGM_Title" : armed == "map" ? "BGM_World" : armed == "course" ? "BGM_Course" : nullptr;
-    if (want && stream.rfind(want, 0) == 0) {  // (a course load first switches the map's music: BGM_World_01)
+    if (map_ambience || (want && stream.rfind(want, 0) == 0)) {  // (a course load first switches the map's music: BGM_World_01)
         g_scene = armed;
         fire(armed == "title" ? kEvTitle : armed == "map" ? kEvMap : kEvCourse);
         if (armed == "course") g_go_armed = true;

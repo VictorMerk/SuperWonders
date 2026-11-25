@@ -13,6 +13,7 @@
 #include <set>
 
 #include "nvn_draw_state.h"
+#include "pipeline_skip_policy.h"
 #include "nvn_ultrawide.h"
 #include "platform.h"
 
@@ -884,7 +885,7 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
     // A pipeline not compiled yet may be compiled on a worker while this draw is skipped, when the next frame draws it
     // again: every target of the pass was also rendered in the previous frame (or this one). A target rendered for
     // the first time, or once now and then (a light probe, a capture), waits for its pipeline (nvn_pipeline_async.h).
-    bool may_skip = t.color_count || dimg;
+    bool may_skip = pipeline_draw_skip_candidate(key);
     const uint64_t frame = g_frame.load(std::memory_order_relaxed) + 1;
     for (uint32_t k = 0; k < t.color_count && may_skip; k++) {
         GpuImage* img = t.colors[k] ? image_of(t.colors[k]) : nullptr;

@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace nx::nvn {
@@ -24,13 +25,19 @@ class TextureCache {
     uint64_t budget;
     size_t max_files;
     std::mutex index_lock;
+    std::mutex write_lock;
     std::unordered_map<std::string,uint64_t> index;
+    std::unordered_set<std::string> invalid;
+    uint64_t generation = 0;
     uint64_t known_bytes = 0;
+    void reject(const std::string& name,uint64_t observed_generation,bool missing=false);
     void trim();
 public:
     explicit TextureCache(std::filesystem::path directory, uint64_t bytes = 256ull << 20, size_t files = 4096);
     bool load(const TextureCacheRequest&, std::span<const uint8_t> source, std::vector<uint8_t>& output) noexcept;
     // Call from the bounded background writer, never while presenting.
     bool store(const TextureCacheRequest&, std::span<const uint8_t> source, std::span<const uint8_t> output) noexcept;
+    struct Stats { uint64_t bytes; size_t files, invalid_files; };
+    Stats stats();  // in-memory bookkeeping only; no filesystem scan
 };
 }

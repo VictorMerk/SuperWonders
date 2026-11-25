@@ -23,16 +23,29 @@ uint32_t restart_changes(const Settings& active, const Settings& requested) {
 }
 
 void apply_graphics_profile(Settings& s, GraphicsProfile profile) {
-    s.frame_cap = 60;
+    const bool light=profile==GraphicsProfile::Performance || profile==GraphicsProfile::LowLatency ||
+                     profile==GraphicsProfile::SmoothMotion || profile==GraphicsProfile::BatterySaver;
+    s.frame_cap = profile==GraphicsProfile::BatterySaver ? 30 : 60;
     s.vsync = 1;
     s.pipeline_skip_draws = false;
-    s.framegen = false;
+    s.framegen = profile==GraphicsProfile::SmoothMotion;
+    s.framegen_multiplier = 2;
+    s.render_ahead = profile==GraphicsProfile::SmoothMotion ? 2 : 1;
     s.upscaler = 1;
-    s.internal_resolution = profile == GraphicsProfile::Performance ? 1 : profile == GraphicsProfile::Balanced ? 2 : 3;
-    s.low_vram_profile = profile == GraphicsProfile::Performance;
-    s.antialiasing = profile == GraphicsProfile::Performance ? 0 : 1;
-    s.anisotropy = profile == GraphicsProfile::Performance ? 0 : profile == GraphicsProfile::Balanced ? 4 : 8;
-    s.fsr_sharpness = profile == GraphicsProfile::Quality ? 50 : 100;
+    s.internal_resolution = light ? 1 : profile==GraphicsProfile::Balanced ? 2 : 3;
+    s.low_vram_profile = light;
+    s.antialiasing = light ? 0 : 1;
+    s.anisotropy = light ? 0 : profile==GraphicsProfile::Balanced ? 4 : 8;
+    s.fsr_sharpness = profile==GraphicsProfile::Quality ? 50 : 100;
+    if(profile==GraphicsProfile::LowLatency) s.vsync=3;
+
+}
+
+void restore_graphics_options(Settings& s,const Settings& old){
+    s.frame_cap=old.frame_cap;s.vsync=old.vsync;s.pipeline_skip_draws=old.pipeline_skip_draws;
+    s.framegen=old.framegen;s.framegen_multiplier=old.framegen_multiplier;s.render_ahead=old.render_ahead;
+    s.upscaler=old.upscaler;s.internal_resolution=old.internal_resolution;s.low_vram_profile=old.low_vram_profile;
+    s.antialiasing=old.antialiasing;s.anisotropy=old.anisotropy;s.fsr_sharpness=old.fsr_sharpness;
 }
 
 int default_controller_binding(size_t action, int preset) {

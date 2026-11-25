@@ -311,6 +311,15 @@ void SetRenderTargets(CPU& c) {
     }
     cmd.a[8] = c.x[4];  // depth/stencil
     if (Texture* texture = get<Texture>(cmd.a[8])) texture->render_target.store(true, std::memory_order_relaxed);
+    static const bool record_trace=std::getenv("NX_RT_RECORD_TRACE")!=nullptr;
+    if(record_trace){
+        cmd.mask=0x80000000u;
+        for(unsigned slot=0;slot<2;++slot)if(auto* texture=get<Texture>(cmd.a[slot ? 8 : 0])){
+            std::memcpy(cmd.i+slot*2,&texture->memory,sizeof texture->memory);
+            std::memcpy(cmd.f+slot*2,&texture->width,sizeof texture->width);
+            std::memcpy(cmd.f+slot*2+1,&texture->height,sizeof texture->height);
+        }
+    }
     // The views pick the level and layer rendered to (a bloom chain renders each mip of one texture in turn).
     TargetViews tv;
     for (uint32_t k = 0; k < n && c.x[3]; k++) {

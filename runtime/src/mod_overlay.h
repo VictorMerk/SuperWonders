@@ -16,6 +16,10 @@ bool enabled(std::string_view name, std::string_view aspect = {});
 std::filesystem::path find_romfs(const std::filesystem::path& folder, const std::function<void()>& checkpoint = {});
 std::vector<Root> selected(const std::filesystem::path& folder, std::string_view aspect = {},
                            const std::function<void()>& checkpoint = {});
+std::string logical_name(std::string_view name);
+void apply_order(std::vector<Root>& roots,const std::filesystem::path& folder,const std::function<void()>& checkpoint = {});
+void save_order(const std::filesystem::path& folder,const std::vector<std::string>& names);
+bool set_all_enabled(const std::filesystem::path& folder,bool on,std::string& error,const std::function<void()>& checkpoint = {});
 bool linked(const std::filesystem::directory_entry& entry);
 
 // Snapshot the file names at boot. Contents remain on disk; removals still fall through

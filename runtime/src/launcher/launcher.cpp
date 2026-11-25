@@ -5,9 +5,11 @@
 #include "profiles.h"
 #include "overlay/usability.h"
 #include "launcher/mod_catalog.h"
+#include "mod_overlay.h"
 #include "launcher/game_source.h"
 
 #include <algorithm>
+#include <optional>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -331,7 +333,8 @@ private:
 
 // ---- mods: <data root>/mods/<name>/ (hle_fs.cpp mod_roots: name order, a leading '-' turns one off) ----
 using Mod = ModInfo;
-std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods", std::getenv("NX_ASPECT_PROFILE") ? std::getenv("NX_ASPECT_PROFILE") : ""); }
+std::string mod_warning;
+std::vector<Mod> list_mods() { return inspect_mods(u8(plat::data_root())/"mods", std::getenv("NX_ASPECT_PROFILE") ? std::getenv("NX_ASPECT_PROFILE") : "",read_line(u8(plat::data_root())/"game/build-id.txt","input"),&mod_warning); }
 
 bool set_mod(const Mod& m, bool on) {
     const fs::path dir = u8(plat::data_root()) / "mods";
@@ -953,19 +956,30 @@ void page_settings() {
         overlay::set_aspect_ratio(aspect);
 
     rows::section("Quick graphics presets");
-    const char* names[] = {"Performance", "Balanced", "Quality"};
-    const char* values[] = {"720p / 60 FPS", "900p / 60 FPS", "1080p / 60 FPS"};
+    static std::optional<overlay::Settings> previous_graphics;
+    const char* names[] = {"Performance", "Balanced", "Quality", "Low latency", "Smooth motion", "Battery saver"};
+    const char* values[] = {"720p / 60 FPS", "900p / 60 FPS", "1080p / 60 FPS", "720p / 1 queued picture", "720p / frame generation 2x", "720p / 30 FPS target"};
     const char* descs[] = {
         "Lower internal resolution and compressed textures for older GPUs. FSR 1 scales the picture to your display. Changes apply when you start the game.",
         "900p rendering, FSR 1, FXAA and 4x texture filtering. Keeps all draws visible. A 60 FPS target is a cap, not a performance guarantee.",
-        "1080p rendering, FXAA and 8x texture filtering. Needs more GPU memory and processing power. Changes apply when you start the game."};
-    for (int i = 0; i < 3; ++i)
+        "1080p rendering, FXAA and 8x texture filtering. Needs more GPU memory and processing power. Changes apply when you start the game.",
+        "720p, one queued picture, frame generation off and VSync off. Can tear. This is a configuration choice, not an end-to-end latency measurement.",
+        "720p, two queued pictures and experimental frame generation 2x. Generated pictures do not raise simulation speed; artifacts and extra latency are possible.",
+        "720p with a 30 FPS cap and frame generation off. Reduces the requested rendering rate; battery life is not measured. LAN timing remains host controlled."};
+    for (int i = 0; i < 6; ++i)
         if (rows::action(names[i], values[i], descs[i])) {
             auto s = overlay::current_settings();
+            previous_graphics=s;
             overlay::apply_graphics_profile(s, static_cast<overlay::GraphicsProfile>(i));
             overlay::apply_settings(s);
             ui::notify("Graphics preset saved. Start or restart the game to apply all changes.");
         }
+    if(!previous_graphics) rows::disable_next();
+    if(rows::action("Undo last graphics preset","Restore graphics","Restore the graphics options from before the last preset in this launcher session. Audio, controls and language changes are preserved.")) {
+        auto s=overlay::current_settings();const auto& old=*previous_graphics;
+        overlay::restore_graphics_options(s,old);
+        overlay::apply_settings(s);previous_graphics.reset();ui::notify("Previous graphics options restored.");
+    }
     rows::section("Make it yours");
     const char* sections[] = {"Video & graphics", "Audio & language", "Controllers & keyboard", "FPS & performance", "System & memory"};
     const char* descriptions[] = {
@@ -981,12 +995,7 @@ void page_settings() {
         start_shader_optimization();
     rows::section("Profiles & saves");
     if (rows::action("Manage profiles & progress", profiles::active(u8(plat::data_root())).name.c_str(), "Create or rename profiles, switch independent save slots, and restore backups with a safety copy of current progress.")) open_profiles();
-    if (rows::action("Back up saves", "Create a copy", "Copy your saves into a new folder under data/backups. Existing backups and active saves are preserved. The completed backup folder opens when the copy finishes.")) {
-        std::string error;
-        const auto backup = backup_saves(profiles::storage_root(u8(plat::data_root())), error);
-        if (backup.empty()) ui::notify(error.c_str());
-        else { ui::notify("Save backup created."); plat::open_folder(str(backup)); }
-    }
+    if (rows::action("Back up saves", "Create a verified copy", "Create a background backup with an integrity record. Progress and cancellation are available in Profiles & saves.")) start_profile_backup();
     std::error_code backup_error;
     if (!fs::is_directory(profiles::storage_root(u8(plat::data_root())) / "backups", backup_error)) rows::disable_next();
     if (rows::action("Open save backups", "Folder", "Browse your saved copies. Close the game before manually restoring a backup."))
@@ -1008,42 +1017,65 @@ void page_mods() {
         auto s=overlay::current_settings();s.muted=false;s.rumble=100;overlay::apply_settings(s);ui::notify("Sound and rumble restored.");
     }
     rows::section("Installed game mods");
-    if (g->mods.empty())
-        rows::action("No mods yet", "", "Put each mod in a folder of its own in the mods folder. A mod holds a romfs "
-                                        "folder (romfs/, or contents/<title id>/romfs/ as Switch mods come).",
-                     true);
-    uint64_t enabled = 0, conflicts = 0;
-    for (const auto& m : g->mods) if (m.active) { ++enabled; conflicts += m.shadowed; }
-    const std::string summary = std::to_string(enabled)+" active | "+std::to_string(conflicts)+" shadowed files";
-    rows::action("Load order",summary.c_str(),"Mods load in name order. The first enabled mod supplying a path wins. Shadowed files in later mods are ignored. Changes apply after restarting the game. Aspect profiles can select their matching mods regardless of the folder toggle. LAN peers need identical active mods.",true);
-    bool rescan = false;
-    for (Mod& m : g->mods) {
-        bool on = m.on;
-        std::string details = std::to_string(m.files)+" files, "+std::to_string(m.bytes/1024)+" KiB. ";
-        details += m.active ? "Active for the selected aspect. " : "Inactive for the selected aspect. ";
-        details += m.issue.empty() ? "RomFS layout detected. " : m.issue+" ";
-        if (m.shadowed) details += std::to_string(m.shadowed)+" files are overridden by earlier mods. ";
-        for (const auto& conflict : m.conflicts) details += "\n"+conflict;
-        details += "\nRestart after changes. Custom code patches outside RomFS are not installed by this manager.";
-        const auto phase = lan::lobby_status().phase;
-        const bool paired = lan::active() || phase == lan::LobbyPhase::Preparing || phase == lan::LobbyPhase::Waiting || phase == lan::LobbyPhase::Ready;
-        if (paired) rows::disable_next();
-        const std::string toggle_label = m.name+"###mod-"+(m.on ? "on-" : "off-")+m.name;
-        if (rows::toggle(toggle_label.c_str(), &on, true,details.c_str())) {
-            if (set_mod(m,on)) {
-                rescan = true;
-                ui::notify("Mod selection saved. Restart the game to apply it.");
-            } else ui::notify("Could not change this mod. Check for a duplicate enabled/disabled folder.");
+    static char search[128]{};static int filter=0;
+    ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##mod-search","Search mod names",search,sizeof search);
+    const char* filters[]={"All mods","Active","Needs attention","File conflicts","Inactive"};
+    rows::choice("Show",&filter,filters,5,0,"Search and filter this list without changing installed mods.");
+    if(!mod_warning.empty())rows::action("Inspection warning",mod_warning.c_str(),"Repair the indicated issue, then refresh. Incomplete reports do not prove that files are conflict-free.",true);
+    const auto phase=lan::lobby_status().phase;
+    const bool paired=lan::active()||phase==lan::LobbyPhase::Preparing||phase==lan::LobbyPhase::Waiting||phase==lan::LobbyPhase::Ready;
+    bool rescan=false;const auto root=u8(plat::data_root())/"mods";
+    for(int enabled=0;enabled<2;++enabled){
+        if(paired)rows::disable_next();
+        if(rows::action(enabled?"Enable ordinary mods":"Disable ordinary mods","Apply","Changes ordinary mod folders together; aspect-controlled built-ins keep their selection. Duplicate enabled/disabled copies block the operation. Restart afterwards.")){
+            std::string error;if(nx::mods::set_all_enabled(root,enabled!=0,error)){rescan=true;ui::notify("Ordinary mod selection updated. Restart the game.");}else ui::notify(error.c_str());
         }
-        std::string label = m.name+" details###mod-details-"+(m.on ? "on-" : "off-")+m.name;
-        std::string state = !m.issue.empty() ? "Check folder" : m.shadowed ? "File conflicts" : std::to_string(m.files)+" files";
-        rows::action(label.c_str(),state.c_str(),details.c_str(),true);
     }
-    if (rescan) g->mods = list_mods();
+    if(paired)rows::disable_next();
+    if(rows::action("Reset custom mod order","Name order","Clear custom priorities and restore folder-name order. Mod files and enable/disable selection are preserved.")){
+        try{nx::mods::save_order(root,{});rescan=true;ui::notify("Folder-name load order restored.");}catch(const std::exception&error){ui::notify(error.what());}
+    }
+    uint64_t enabled=0,conflicts=0;for(const auto&m:g->mods)if(m.active){++enabled;conflicts+=m.shadowed;}
+    const std::string summary=std::to_string(enabled)+" active | "+std::to_string(conflicts)+" shadowed files";
+    rows::action("Load order",summary.c_str(),"Custom priorities load first, then remaining folders in name order. The first active mod supplying a path wins. LAN peers need the same effective order and content. Aspect selection can override folder toggles.",true);
+    size_t shown=0;
+    for(size_t index=0;index<g->mods.size();++index){
+        auto&m=g->mods[index];if(!mod_matches(m,search,static_cast<ModFilter>(filter)))continue;++shown;
+        bool on=m.on;std::string details=std::to_string(m.files)+" files, "+std::to_string(m.bytes/1024)+" KiB. ";
+        details+=m.active?"Active for the selected aspect. ":"Inactive for the selected aspect. ";
+        details+=m.issue.empty()?"RomFS layout detected. ":m.issue+" ";
+        if(!m.compatibility.empty())details+="\n"+m.compatibility;
+        if(m.shadowed)details+=std::to_string(m.shadowed)+" files are overridden by earlier mods. ";
+        for(const auto&conflict:m.conflicts)details+="\n"+conflict;
+        details+="\nRestart after changes. ExeFS code patches are not installed here. Target declarations are author claims, not gameplay certification.";
+        if(paired)rows::disable_next();
+        const auto id=(m.on?"on-":"off-")+m.name;
+        const auto toggle_label=m.name+"###mod-"+id;
+        if(rows::toggle(toggle_label.c_str(),&on,true,details.c_str())){
+            if(set_mod(m,on)){rescan=true;ui::notify("Mod selection saved. Restart the game.");}else ui::notify("Could not change mod; check duplicate enabled/disabled copies.");
+        }
+        const auto label=m.name+" details###mod-details-"+id;
+        const auto state=!m.issue.empty()?"Check folder":m.shadowed?"File conflicts":"Ready";
+        rows::action(label.c_str(),state,details.c_str(),true);
+        const auto open_label="Open "+m.name+" folder###mod-folder-"+id;
+        if(rows::action(open_label.c_str(),"Folder","Open this mod's own folder without changing selection.",true))plat::open_folder(str(m.folder));
+        for(int direction:{-1,1}){
+            const bool available=direction<0?index>0:index+1<g->mods.size();
+            if(paired||!available)rows::disable_next();
+            const auto move_label=m.name+(direction<0?" - Move earlier":" - Move later")+"###mod-move-"+id+std::to_string(direction);
+            if(rows::action(move_label.c_str(),"Change priority","Move this mod one position in the complete list, including entries hidden by filters. Restart to apply. Mod folder names are preserved.")){
+                try{std::vector<std::string> names;for(const auto&mod:g->mods)names.push_back(mod.name);std::swap(names[index],names[size_t(int(index)+direction)]);nx::mods::save_order(root,names);rescan=true;ui::notify("Custom load order saved. Restart both LAN peers with the same order.");}catch(const std::exception&error){ui::notify(error.what());}
+            }
+        }
+    }
+    if(!shown)rows::action("No matching mods","","Change the search/filter or add a mod with a RomFS folder.",true);
+    if(rescan)g->mods=list_mods();
     rows::section(lt(LtFolder));
-    if (rows::action(lt(LtOpenModsFolder), "", "Add, remove or rename mods there.", true))
-        plat::open_folder(plat::data_root() + "/mods");
-    if (rows::action(lt(LtRefresh), "", "Read the mods folder again.", true)) g->mods = list_mods();
+    if(rows::action("Export mod report","Write text file","Save mod names, active order, counts and relative conflicts to mod-report.txt in this data folder. Includes author target claims; contains no game assets or absolute installation paths.",true)){
+        std::string error;if(write_mod_report(g->mods,u8(plat::data_root())/"mod-report.txt",error))ui::notify("Mod report saved in the data folder.");else ui::notify(error.c_str());
+    }
+    if(rows::action(lt(LtOpenModsFolder),"","Add, remove or rename mods there.",true))plat::open_folder(plat::data_root()+"/mods");
+    if(rows::action(lt(LtRefresh),"","Read mods, declarations and custom order again.",true))g->mods=list_mods();
     rows::end();
 }
 
@@ -1435,7 +1467,15 @@ void run() {
     if(lobby_tour) open_lan();
     // Isolated native QA only: show the real profile manager and quit after 120 UI frames.
     const bool profile_tour=std::getenv("NX_PROFILE_MANAGER_TOUR")!=nullptr;
-    if(profile_tour)open_profiles();
+    const auto* virtual_only=std::getenv("NX_TEST_VIRTUAL_ONLY");
+    const auto* test_root=std::getenv("NX_DATA_ROOT");
+    const bool save_test_allowed=profile_tour&&virtual_only&&std::strcmp(virtual_only,"1")==0&&test_root&&*test_root;
+    const bool backup_tour=save_test_allowed&&std::getenv("NX_TEST_BACKUP_ONCE");
+    const bool restore_tour=save_test_allowed&&std::getenv("NX_TEST_RESTORE_ONCE");
+    if(profile_tour){
+        if(restore_tour){const auto backups=list_save_backups(profiles::storage_root(u8(plat::data_root())));if(backups.empty())plat::exit_process(1);start_profile_restore(backups.front());}
+        else if(backup_tour)start_profile_backup();else open_profiles();
+    }
     // Repro hook: exercise the real asynchronous launcher-to-game path without
     // desktop input. Normal launches configure these fields in the native popup.
     if(const auto* mode=std::getenv("NX_LAN_LOBBY_AUTOSTART")) {
@@ -1488,7 +1528,8 @@ void run() {
         }
         if (!nvn::present_ui_frame()) plat::sleep_ns(16'000'000);
         frames++;
-        if((lobby_tour || profile_tour) && frames>=120) plat::exit_process(0);
+        if((lobby_tour || profile_tour) && frames>=120 && (!(backup_tour||restore_tour)||!profile_save_busy())) plat::exit_process(0);
+        if((backup_tour||restore_tour)&&frames>=1200)plat::exit_process(1);
         if (g->quit) {
             log("launcher: quit");
             plat::exit_process(0);

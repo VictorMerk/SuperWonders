@@ -14,6 +14,7 @@
 #include "nvn_tiling.h"
 #include "texture_cache.h"
 #include "nvn_pipeline_async.h"
+#include "texture_upload_bounds.h"
 #include "platform.h"
 
 namespace nx::nvn {
@@ -69,13 +70,9 @@ void widen_r11g11b10(const uint8_t* src, uint8_t* dst, uint64_t texels) {
 }
 
 // Bytes from `base` to the end of what vkCmdCopyBufferToImage reads for `r`, at `bytes` per bw x bh block.
-uint64_t copy_end(const VkBufferImageCopy& r, uint64_t base, uint32_t bw, uint32_t bh, uint32_t bytes) {
-    uint64_t row_blocks = ((r.bufferRowLength ? r.bufferRowLength : r.imageExtent.width) + bw - 1) / bw;
-    uint64_t image_rows = ((r.bufferImageHeight ? r.bufferImageHeight : r.imageExtent.height) + bh - 1) / bh;
-    uint64_t w = (r.imageExtent.width + bw - 1) / bw, h = (r.imageExtent.height + bh - 1) / bh;
-    uint64_t slices = uint64_t(r.imageExtent.depth) * r.imageSubresource.layerCount;
-    if (!w || !h || !slices) return r.bufferOffset - base;
-    return r.bufferOffset - base + ((slices - 1) * image_rows + (h - 1)) * row_blocks * bytes + w * bytes;
+std::optional<uint64_t> copy_end(const VkBufferImageCopy& r, uint64_t base, uint32_t bw, uint32_t bh, uint32_t bytes) {
+    return texture_copy_end({r.bufferOffset,r.imageExtent.width,r.imageExtent.height,r.imageExtent.depth,
+        r.imageSubresource.layerCount,r.bufferRowLength,r.bufferImageHeight,bw,bh,bytes},base);
 }
 
 // The copies read at most `staged` bytes from `base`, counted at the host format's size. A copy past it reads other
@@ -85,8 +82,13 @@ bool copies_fit(const Texture& t, const VkBufferImageCopy* r, uint32_t n, uint64
                 uint32_t bh, uint32_t bytes) {
     static const bool off = std::getenv("NX_NO_UPLOAD_GUARD") != nullptr;
     uint64_t need = 0;
-    for (uint32_t k = 0; k < n; k++) need = std::max(need, copy_end(r[k], base, bw, bh, bytes));
-    if (off || need <= staged) return true;
+    bool valid=true;
+    for (uint32_t k = 0; k < n; k++) {
+        const auto end=copy_end(r[k],base,bw,bh,bytes);
+        if(!end) { valid=false;need=UINT64_MAX;break; }
+        need=std::max(need,*end);
+    }
+    if (off || (valid && need <= staged)) return true;
     static std::set<uint32_t> logged;  // once per format
     if (logged.insert(t.format).second)
         log("nvn/vk: upload short: texture %ux%u format %#x reads %llu bytes, %llu staged: cleared instead", t.width,
@@ -110,10 +112,10 @@ std::vector<LinearLevel> rgba_levels(const std::vector<LinearLevel>& levels, uin
 // Whether the untiled blocks hold what the decoder reads of level `l`, which can exceed layer_size when the level's
 // block counts disagree with it. Logged when not: the level is left black.
 bool astc_level_fits(const LinearLevel& l, uint32_t layers, uint32_t bw, uint32_t bh, uint64_t untiled) {
-    const uint64_t need = uint64_t((l.width + bw - 1) / bw) * ((l.height + bh - 1) / bh) * 16 * layers;
-    if (l.offset + std::max(need, l.layer_size * layers) <= untiled) return true;
+    const auto need=astc_level_bytes(l.width,l.height,layers,bw,bh,l.layer_size);
+    if (need && texture_span_fits(l.offset,*need,untiled)) return true;
     log("nvn/vk: ASTC level %ux%u x%u: %llu bytes needed, %llu untiled: left black", l.width, l.height, layers,
-        (unsigned long long)need, (unsigned long long)(untiled - l.offset));
+        (unsigned long long)need.value_or(UINT64_MAX), (unsigned long long)(l.offset<=untiled ? untiled-l.offset : 0));
     return false;
 }
 
@@ -542,10 +544,20 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
     std::vector<VkBufferImageCopy> copies;
     uint32_t layers = img.view_type == VK_IMAGE_VIEW_TYPE_3D ? std::max(1u, t.depth) : img.layers;
     if (img.alpha_from_r && t.stride) {  // R8 pitch-linear -> RGBA8 (255, 255, 255, R), level 0
+        // Validate before reading: clamping the row count alone does not keep a
+        // row wider than its pitch inside the source allocation.
+        const auto source_end = texture_copy_end({0,img.width,img.height,1,layers,t.stride,0,1,1,1},0);
+        if (!source_end || *source_end > t.storage_size) {
+            log("nvn/vk: R8 pitch-linear source is short: texture %ux%u stride %u size %llu; cleared",
+                img.width,img.height,t.stride,(unsigned long long)t.storage_size);
+            return clear_image(cb,img);
+        }
         const uint8_t* src = reinterpret_cast<const uint8_t*>(t.memory);
-        uint64_t rows = uint64_t(img.height) * layers;
-        if (uint64_t(t.stride) * rows > t.storage_size) rows = t.storage_size / t.stride;
-        Upload u = upload_alloc(rows * img.width * 4, 16);
+        const uint64_t rows = uint64_t(img.height) * layers;
+        uint64_t staged=0;
+        if (!upload_bounds::multiply(rows,img.width,staged) || !upload_bounds::multiply(staged,4,staged))
+            return clear_image(cb,img);
+        Upload u = upload_alloc(staged, 16);
         for (uint64_t y = 0; y < rows; y++) {
             const uint8_t* s = src + y * t.stride;
             uint32_t* d = reinterpret_cast<uint32_t*>(u.ptr + y * img.width * 4);
@@ -554,7 +566,7 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
         VkBufferImageCopy r{};
         r.bufferOffset = u.offset;
         r.imageSubresource = {img.aspect, 0, 0, img.layers};
-        r.imageExtent = {img.width, uint32_t(std::min<uint64_t>(rows, img.height)), 1};
+        r.imageExtent = {img.width, img.height, 1};
         transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
         p_vkCmdCopyBufferToImage(cb, u.buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         return;
@@ -585,9 +597,21 @@ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img) {
             std::memset(u.ptr, 0, staged);
             for (uint64_t y = 0; y < have; y++) widen_r11g11b10(src + y * t.stride, u.ptr + y * img.width * 8, texels);
         } else {
-            staged = uint64_t(t.stride) * rows * layers;
-            u = upload(reinterpret_cast<const void*>(t.memory), staged, 16);
+            // copies_fit checks the GPU staging buffer after this read. The
+            // guest source must be checked separately, before upload copies it.
             r.bufferRowLength = t.stride / bytes * bw;
+            const auto required=texture_copy_end({0,img.width,img.height,1,img.layers,r.bufferRowLength,0,bw,bh,host_bytes},0);
+            if (t.stride % bytes || uint64_t(t.stride)<upload_bounds::blocks(img.width,bw)*bytes || !required ||
+                *required>t.storage_size || !upload_bounds::multiply(rows,layers,staged) ||
+                !upload_bounds::multiply(staged,t.stride,staged)) {
+                log("nvn/vk: pitch-linear source is short: texture %ux%u stride %u size %llu; cleared",
+                    img.width,img.height,t.stride,(unsigned long long)t.storage_size);
+                return clear_image(cb,img);
+            }
+            // The final row does not need trailing pitch padding. Copy only
+            // bytes actually provided; the Vulkan copy's required span fits.
+            staged=std::min(staged,t.storage_size);
+            u = upload(reinterpret_cast<const void*>(t.memory), staged, 16);
         }
         r.bufferOffset = u.offset;
         if (!copies_fit(t, &r, 1, u.offset, staged, bw, bh, host_bytes)) return clear_image(cb, img);

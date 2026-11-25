@@ -71,7 +71,7 @@ int controller_binding(const Settings& s, size_t action);
 // Assign one physical button, swapping conflicts without changing unrelated actions.
 bool assign_controller_button(Settings& settings, size_t action, int physical);
 
-enum class GraphicsProfile { Performance, Balanced, Quality };
+enum class GraphicsProfile { Performance, Balanced, Quality, LowLatency, SmoothMotion, BatterySaver };
 enum RestartChange : uint32_t {
     RestartResolution = 1 << 0, RestartTextures = 1 << 1, RestartFiltering = 1 << 2,
     RestartShaders = 1 << 3, RestartLanguage = 1 << 4, RestartPrompts = 1 << 5,
@@ -81,6 +81,7 @@ enum RestartChange : uint32_t {
 uint32_t restart_changes(const Settings& active, const Settings& requested);
 // Change graphics options together, preserving display size, controls, audio, language and user data.
 void apply_graphics_profile(Settings& s, GraphicsProfile profile);
+void restore_graphics_options(Settings& current,const Settings& previous);
 
 // Reads `path` over `s` (missing or invalid keys keep their value). False when there is no file.
 bool load_settings(const std::string& path, Settings& s);

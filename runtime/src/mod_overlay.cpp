@@ -2,6 +2,9 @@
 #include "host_path.h"
 #include <algorithm>
 #include <stdexcept>
+#include <fstream>
+#include <unordered_set>
+#include <chrono>
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -31,6 +34,65 @@ bool title_matches(const fs::path& relative) {
     }
     return true;
 }
+}
+std::string logical_name(std::string_view name){if(name.starts_with('-'))name.remove_prefix(1);return std::string(name);}
+namespace {
+void valid_order_name(const std::string& name){
+    if(name.empty()||name=="."||name==".."||name.size()>1024||name.find_first_of("/\\:\r\n")!=name.npos||name.find('\0')!=name.npos)
+        throw std::runtime_error("Invalid custom mod-order entry");
+}
+std::vector<std::string> read_order(const fs::path& folder,const std::function<void()>& checkpoint){
+    const auto path=host_path(folder/"load-order.txt");if(!fs::exists(path))return {};
+    if(fs::file_size(path)>65536)throw std::runtime_error("Custom mod order exceeds 64 KiB");
+    std::ifstream in(path,std::ios::binary);if(!in)throw std::runtime_error("Could not read custom mod order");
+    std::vector<std::string> names;std::unordered_set<std::string> unique;std::string name;
+    while(std::getline(in,name)){
+        if(checkpoint)checkpoint();if(name.ends_with('\r'))name.pop_back();if(name.empty())continue;
+        valid_order_name(name);if(!unique.insert(name).second||names.size()>=256)throw std::runtime_error("Duplicate or excessive custom mod-order entries");names.push_back(name);
+    }
+    if(!in.eof())throw std::runtime_error("Could not finish reading custom mod order");return names;
+}
+}
+void apply_order(std::vector<Root>& roots,const fs::path& folder,const std::function<void()>& checkpoint){
+    const auto names=read_order(folder,checkpoint);std::unordered_map<std::string,size_t> rank;
+    for(size_t i=0;i<names.size();++i)rank.emplace(names[i],i);
+    const auto position=[&](const Root& root){const auto it=rank.find(logical_name(root.name));return it==rank.end()?names.size():it->second;};
+    std::stable_sort(roots.begin(),roots.end(),[&](const auto&a,const auto&b){return position(a)<position(b);});
+}
+void save_order(const fs::path& folder,const std::vector<std::string>& names){
+    if(names.size()>256)throw std::runtime_error("Custom mod order supports up to 256 entries");
+    std::unordered_set<std::string> unique;size_t bytes=0;
+    for(const auto&name:names){valid_order_name(name);if(!unique.insert(name).second)throw std::runtime_error("Duplicate mod names prevent changing load order");bytes+=name.size()+1;}
+    if(bytes>65536)throw std::runtime_error("Custom mod order exceeds 64 KiB");
+    fs::create_directories(host_path(folder));const auto target=host_path(folder/"load-order.txt");
+    auto temporary=target;temporary+=".tmp-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    try{
+        {std::ofstream out(temporary,std::ios::binary);if(!out)throw std::runtime_error("Could not create custom mod order");for(const auto&name:names)out<<name<<'\n';out.flush();if(!out)throw std::runtime_error("Could not write custom mod order");}
+#if defined(_WIN32)
+        if(!MoveFileExW(temporary.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("Could not replace custom mod order");
+#else
+        fs::rename(temporary,target);
+#endif
+    }catch(...){std::error_code ec;fs::remove(temporary,ec);throw;}
+}
+bool set_all_enabled(const fs::path& folder,bool on,std::string& error,const std::function<void()>& checkpoint){
+    error.clear();std::vector<std::pair<fs::path,fs::path>> moves;size_t done=0;
+    try{
+        size_t count=0;for(const auto&entry:fs::directory_iterator(host_path(folder))){
+            if(++count>4096)throw std::runtime_error("Too many entries in mods folder");if(!entry.is_directory())continue;
+            const auto name=text(entry.path().filename()),logical=logical_name(name);
+            if(logical.starts_with("00-uw-"))continue; // aspect-controlled built-ins retain their selection semantics
+            if((!name.starts_with('-'))==on)continue;
+            const auto target=host_path(folder/fs::u8path(on?logical:"-"+logical));
+            if(fs::exists(target))throw std::runtime_error("A duplicate enabled/disabled mod blocks this change; no mods changed");
+            moves.push_back({entry.path(),target});
+        }
+        std::sort(moves.begin(),moves.end());
+        for(const auto&move:moves){if(checkpoint)checkpoint();fs::rename(move.first,move.second);++done;}return true;
+    }catch(const std::exception&e){
+        bool rolled_back=true;while(done){--done;std::error_code ec;fs::rename(moves[done].second,moves[done].first,ec);rolled_back&=!ec;}
+        error=rolled_back?e.what():"Could not finish rolling back mod names; inspect the mods folder before playing";return false;
+    }
 }
 bool linked(const fs::directory_entry& entry) {
     std::error_code ec;
@@ -88,6 +150,7 @@ std::vector<Root> selected(const fs::path& folder,std::string_view aspect,const 
         if(entry.is_directory() && enabled(name,aspect)) result.push_back({entry.path(),{},name});
     }
     std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){return a.folder<b.folder;});
+    apply_order(result,folder,checkpoint);
     for(auto& root:result) root.romfs=find_romfs(root.folder,checkpoint);
     return result;
 }

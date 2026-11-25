@@ -73,6 +73,7 @@ VkSemaphore g_acquired = VK_NULL_HANDLE, g_rendered = VK_NULL_HANDLE;
 VkBool32 g_depth_clip_control = VK_FALSE;
 bool g_gpl = false, g_cache_control = false;  // vk_gpl(), vk_pipeline_cache_control()
 VkPhysicalDeviceFeatures g_features{};  // the core features enabled (vk_features())
+bool g_mirror_clamp = false;
 VkDescriptorPool g_descriptors = VK_NULL_HANDLE;
 
 // The per-submit upload buffer (nvn_vk.h): one host-visible buffer, bump-allocated, reset at every submit.
@@ -272,6 +273,7 @@ bool init() {
     VkBool32 mirror_clamp = f12.samplerMirrorClampToEdge, draw_params = f11.shaderDrawParameters;
     f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, f12.pNext};
     f12.samplerMirrorClampToEdge = mirror_clamp;
+    g_mirror_clamp = mirror_clamp != VK_FALSE;
     f11 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, f11.pNext};
     f11.shaderDrawParameters = draw_params;
     log("nvn/vk: samplerMirrorClampToEdge %u, shaderDrawParameters %u", mirror_clamp, draw_params);
@@ -511,6 +513,7 @@ bool vk_depth_clip_control() { return g_depth_clip_control; }
 bool vk_gpl() { return g_gpl; }
 bool vk_pipeline_cache_control() { return g_cache_control; }
 const VkPhysicalDeviceFeatures& vk_features() { return g_features; }
+bool vk_mirror_clamp() { return g_mirror_clamp; }
 
 uint32_t memory_type(uint32_t bits, VkMemoryPropertyFlags want) {
     for (uint32_t k = 0; k < g_memory.memoryTypeCount; k++)
@@ -998,6 +1001,15 @@ bool pipeline_recipe_probe() {
     return true;
 }
 
+bool sampler_probe() {
+    std::lock_guard lock(g_gpu);
+    return init() && sampler_state_probe();
+}
+bool image_view_probe() {
+    std::lock_guard lock(g_gpu);
+    return init() && sampled_view_state_probe();
+}
+
 bool pipeline_draw_probe() {
     std::lock_guard lock(g_gpu);
     if (!init()) return false;
@@ -1276,8 +1288,80 @@ bool counter_clear_probe() {
         log("counter/clear GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");
         ok = pass && ok;
     }
+    // Interleaved colour/depth clears must preserve both values when deferred
+    // clears switch targets. Exercise the real clear replay and read all depth
+    // texels after each alternating value, rather than checking only API success.
+    constexpr uint64_t depth_id = 0x7fff00000600ull;
+    auto& depth_texture = make<Texture>(depth_id);
+    depth_texture.target=1; depth_texture.format=0x33; depth_texture.flags=8;
+    depth_texture.width=depth_texture.height=16;
+    depth_texture.depth=depth_texture.levels=depth_texture.samples=1;
+    auto* depth_image=image_of(depth_id);
+    if (!depth_image || depth_image->format!=VK_FORMAT_D32_SFLOAT) ok=false;
+    else for(unsigned round=0;round<16;++round) {
+        if(!begin(true)){ok=false;break;}
+        draw_begin_submit();
+        Targets depth_targets; depth_targets.depth=depth_id;
+        Cmd depth_clear{Cmd::ClearDepthStencil};depth_clear.mask=1;
+        const float expected=(round&1) ? .75f : .25f;
+        depth_clear.f[0]=expected;
+        draw_clear(g_cb,depth_targets,depth_clear);
+        Targets colour_targets;colour_targets.color_count=1;colour_targets.colors[0]=texture_id;
+        Cmd colour_clear{Cmd::ClearColor};colour_clear.mask=15;colour_clear.f[round&1]=1;colour_clear.f[3]=1;
+        draw_clear(g_cb,colour_targets,colour_clear);
+        draw_end_rendering(g_cb);
+        transition(g_cb,*depth_image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,1};copy.imageExtent={16,16,1};
+        p_vkCmdCopyImageToBuffer(g_cb,depth_image->image,depth_image->layout,buffer,1,&copy);
+        VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+        p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+        if(async_gpu())frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);
+        else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+        bool pass=true;
+        for(unsigned at=0;at<16*16;++at){float value;std::memcpy(&value,mapped+at*sizeof(float),sizeof value);pass=pass&&value==expected;}
+        log("depth/colour clear GPU probe round %u: %s",round,pass ? "PASS" : "FAIL");
+        ok=pass&&ok;
+    }
+    // NVN pitch padding after the last row is not part of the source span.
+    // Check the actual upload, including the final row of alpha-expanded R8.
+    for(unsigned variant=0;variant<2;++variant) {
+        const uint32_t bpp=variant ? 4 : 1,stride=variant ? 80 : 32;
+        std::vector<uint8_t> source(15*stride+16*bpp);
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<16;++x) {
+            auto* pixel=source.data()+y*stride+x*bpp;
+            if(variant){pixel[0]=20+x;pixel[1]=40+y;pixel[2]=90;pixel[3]=255;}
+            else pixel[0]=uint8_t(32+y*7+x);
+        }
+        const uint64_t upload_id=0x7fff00000700ull+variant*0x100;
+        auto& upload_texture=make<Texture>(upload_id);
+        upload_texture.target=1;upload_texture.format=variant ? 0x25 : 1;
+        upload_texture.width=upload_texture.height=16;upload_texture.stride=stride;
+        upload_texture.depth=upload_texture.levels=upload_texture.samples=1;
+        upload_texture.memory=reinterpret_cast<uintptr_t>(source.data());upload_texture.storage_size=source.size();
+        if(!variant)upload_texture.pool_swizzle=0x02010101u;
+        bool pass=begin(true);
+        if(pass) {
+            draw_begin_submit();auto* uploaded=ensure_contents(g_cb,upload_id);
+            pass=uploaded && uploaded->format==VK_FORMAT_R8G8B8A8_UNORM;
+            if(pass){
+                transition(g_cb,*uploaded,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={16,16,1};
+                p_vkCmdCopyImageToBuffer(g_cb,uploaded->image,uploaded->layout,buffer,1,&copy);
+                VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+                p_vkCmdPipelineBarrier(g_cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+            }
+            if(async_gpu())frame_submit(VK_NULL_HANDLE,VK_NULL_HANDLE,{},true);else end_and_wait(VK_NULL_HANDLE,VK_NULL_HANDLE);
+            if(pass)for(unsigned y=0;y<16;++y)for(unsigned x=0;x<16;++x){
+                const uint8_t expected[4]={uint8_t(variant ? 20+x : 255),uint8_t(variant ? 40+y : 255),uint8_t(variant ? 90 : 255),uint8_t(variant ? 255 : 32+y*7+x)};
+                pass=std::memcmp(mapped+(y*16+x)*4,expected,4)==0 && pass;
+            }
+        }
+        log("pitched upload GPU probe case %u: %s",variant,pass ? "PASS" : "FAIL");ok=pass&&ok;destroy(upload_id);
+    }
     p_vkDeviceWaitIdle(g_device);
     p_vkUnmapMemory(g_device,memory); p_vkDestroyBuffer(g_device,buffer,nullptr); p_vkFreeMemory(g_device,memory,nullptr);
+    destroy(depth_id);
     pool_unregister(&pool); pool_unregister(&alias);
     destroy(texture_id); destroy(small_id); destroy(pool_id); destroy(alias_id); drain_objects();
     return ok;

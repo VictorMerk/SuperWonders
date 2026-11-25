@@ -58,6 +58,27 @@ int main() {
     write(nx::host_path(deep/"deep.bin"));
     Overlay deep_index(selected(root,"16:9"));
     check(deep_index.fallback_roots()>0,"excessively deep overlays use filesystem fallback");
+    save_order(root,{"02-second","01-first"});
+    Overlay reordered(selected(root,"16:9"));
+    hit=reordered.resolve("Model/shared.bin");
+    check(hit&&hit->generic_string().find("02-second")!=std::string::npos,"custom order is used by runtime lookup");
+    // Recreate the first winner removed by the earlier fallback test.
+    write(root/"01-first/romfs/Model/shared.bin");save_order(root,{"01-first","02-second"});
+    check(Overlay(selected(root,"16:9")).resolve("Model/shared.bin")->generic_string().find("01-first")!=std::string::npos,"custom priorities preserve first-mod-wins semantics");
+    std::string order_error;
+    check(set_all_enabled(root,false,order_error)&&!fs::exists(root/"01-first")&&fs::exists(root/"-01-first"),"ordinary mods can be disabled together");
+    check(fs::exists(root/"00-uw-map-hud-32-9"),"bulk selection preserves aspect-controlled folders");
+    check(set_all_enabled(root,true,order_error)&&fs::exists(root/"01-first"),"ordinary mods can be enabled together without renaming their logical order");
+    fs::create_directories(root/"-01-first/romfs");
+    check(!set_all_enabled(root,false,order_error)&&fs::exists(root/"02-second")&&fs::exists(root/"01-first"),"duplicate folder preflight prevents partial bulk changes");
+    fs::remove_all(root/"-01-first");
+    int move_checks=0;
+    check(!set_all_enabled(root,false,order_error,[&]{if(++move_checks==2)throw std::runtime_error("Interrupted before a later rename");})&&
+          move_checks==2&&fs::exists(root/"01-first")&&fs::exists(root/"02-second"),
+          "interruption after an earlier rename rolls the transaction back");
+
+    bool bad_order=false;try{save_order(root,{"../escape"});}catch(const std::exception&){bad_order=true;}
+    check(bad_order,"custom order cannot name a parent path");save_order(root,{});
     auto long_root=root;
     for(int i=0;i<5;++i) long_root/=std::string(55,'a'+i);
     const auto long_file=nx::host_path(long_root/"mod/romfs/long.bin");
@@ -65,6 +86,6 @@ int main() {
     Overlay long_paths(selected(long_root));
     check(long_paths.resolve("long.bin").has_value(),"long Windows paths retain mod overrides");
     check(root.parent_path()==fs::temp_directory_path()&&root.filename().string().starts_with("wonder-overlay-test-"),"own cleanup root");
-    fs::remove_all(root);
+    fs::remove_all(nx::host_path(root));
     std::cout<<"mod overlay tests passed\n";
 }

@@ -14,6 +14,7 @@
 #include <nx/runtime.h>
 
 #include "overlay/option_rows.h"
+#include "overlay/controller_diagram.h"
 #include "overlay/overlay_internal.h"
 #include "overlay/overlay_ui.h"
 #include "nextendo_client.h"
@@ -1528,12 +1529,24 @@ void controls(MenuContext& c, const Labels& l) {
         physical[i] = face_labels[i].c_str();
         physical[12 + i] = kInputDirections[lang][i];
     }
+    static int diagram_action = 0;
+    const char* diagram_actions[kControlCount];
+    for (size_t action = 0; action < kControlCount; ++action)
+        diagram_actions[action] = action >= 12 ? kInputDirections[lang][action - 12] : kActions[action];
+    rows::dropdown("Action to remap", &diagram_action, diagram_actions, int(kControlCount),
+                   "Select an action, then click a button on the controller.");
+    const auto diagram_index = size_t(diagram_action);
+    const int diagram_button = controller_diagram(s.button_icons == 3, physical,
+        controller_binding_for_slot(s, size_t(edit_slot), diagram_index));
     for (size_t a = 0; a < kControlCount; ++a) {
         int phys = controller_binding_for_slot(s, size_t(edit_slot), a);
         const int def = default_controller_binding(a, slot_preset);
         char id[128];
         std::snprintf(id, sizeof id, "%s###pad%zu", a >= 12 ? kInputDirections[lang][a - 12] : kActions[a], a);
-        if (rows::choice(id, &phys, physical, int(kControlCount), def, translated_desc(desc::pad, lang))) {
+        const bool chose = rows::choice(id, &phys, physical, int(kControlCount), def, translated_desc(desc::pad, lang));
+        const bool clicked = a == diagram_index && diagram_button >= 0 && phys != diagram_button;
+        if (clicked) phys = diagram_button;
+        if (chose || clicked) {
             if (edit_slot == 0) {
                 s.controller_bindings[a] = phys;
                 s.controller_custom_mask |= 1u << a;

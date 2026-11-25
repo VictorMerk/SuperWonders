@@ -15,6 +15,15 @@ def row(**changes):
 
 
 class Comparison(unittest.TestCase):
+    def test_peer_work_retains_unknowns_and_separates_waits(self):
+        result = trace.compare({7: row(local_work_ns="0"), 8: row(local_work_ns="20000000")},
+                               {7: row(local_work_ns="30000000"), 8: row(local_work_ns="40000000")})
+        self.assertEqual(result["local_frame_work_ms"][0], {"samples": 1, "mean": 20, "p95": 20, "peak": 20})
+        self.assertEqual(result["local_frame_work_ms"][1]["mean"], 35)
+        self.assertEqual(result["exchange_wait_ms"][0]["mean"], 38)
+        legacy = trace.compare({7: row()}, {7: row()})
+        self.assertIsNone(legacy["local_frame_work_ms"][0]["mean"])
+
     def test_missing_probe_never_claims_position_coverage(self):
         result = trace.compare({7: row()}, {7: row()})
         self.assertEqual(result["valid_position_pairs"], 0)
@@ -43,6 +52,10 @@ class Comparison(unittest.TestCase):
     def test_different_input_lead_is_not_silently_aligned(self):
         result = trace.compare({7: row(input_lead="0")}, {7: row(input_lead="1")})
         self.assertIn("input_lead", result["first_difference"]["fields"])
+
+    def test_different_simulation_rate_is_a_difference(self):
+        result = trace.compare({7: row(simulation_rate="30")}, {7: row(simulation_rate="60")})
+        self.assertIn("simulation_rate", result["first_difference"]["fields"])
 
 
 if __name__ == "__main__":

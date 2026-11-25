@@ -328,9 +328,13 @@ def is_junction(p):
 
 def make_link(src, dest):
     if WIN:  # a directory junction: no administrator rights or developer mode needed, unlike a symbolic link
-        r = subprocess.run(["cmd", "/c", "mklink", "/J", dest, src], capture_output=True, text=True)
-        if r.returncode:
-            raise SystemExit(f"error: couldn't link {dest} to {src}: {r.stdout}{r.stderr}")
+        # cmd.exe interprets metacharacters and %variables% in filesystem names.
+        # CPython's native junction helper passes both paths directly to Windows.
+        import _winapi
+        try:
+            _winapi.CreateJunction(os.path.abspath(src), os.path.abspath(dest))
+        except OSError as error:
+            raise SystemExit(f"error: couldn't link {dest} to {src}: {error}") from error
     else:
         os.symlink(src, dest)
 

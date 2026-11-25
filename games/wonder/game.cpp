@@ -279,10 +279,11 @@ static void init_frame_step() {
         log("wonder: real-time frame step page was not reserved; retaining the game's original frame timing");
         return;
     }
-    store_frame_step(1.0f / 60.0f);
+    const auto rate=lan::active()?lan::simulation_rate():60;
+    store_frame_step(1.0f / float(rate));
     update_wide_aspect();
     plat::overlay_game_speed(100.0);
-    log("wonder: real-time frame step initialized at 16.67 ms");
+    log("wonder: real-time frame step initialized at %.2f ms",1000.0/double(rate));
 }
 
 // Gather evidence about Wonder's own virtual-screen globals before implementing Hor+.
@@ -344,11 +345,15 @@ void game::first_frame() {}
 
 void game::frame_presented(uint64_t now_ns, int present_interval) {
     if (lan::active()) {
-        store_frame_step(1.0f/60.0f);
+        const auto rate=lan::simulation_rate();
+        store_frame_step(1.0f/float(rate));
         static uint64_t from = 0, frames = 0;
-        if (!from) from = now_ns;
-        if (++frames >= 60 && now_ns > from) {
-            plat::overlay_game_speed(double(frames)*1e9/60.0/double(now_ns-from)*100.0);
+        if (!from) { from=now_ns; frames=0; return; }
+        if (++frames >= rate && now_ns > from) {
+            const double speed=double(frames)*1e9/double(rate)/double(now_ns-from)*100.0;
+            plat::overlay_game_speed(speed);
+            static unsigned reports=0;
+            if (++reports%10==0) log("wonder: LAN target %u Hz, observed game speed %.1f%%",unsigned(rate),speed);
             from = now_ns; frames = 0;
         }
         return;

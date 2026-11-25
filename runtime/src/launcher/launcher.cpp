@@ -73,6 +73,8 @@ std::string read_line(const fs::path& p, const char* key) {  // "key value" line
 // ---- launcher.ini: what the player picked (in the data root) ----
 struct Config {
     std::string exefs, romfs;
+    int lan_rate = 60;
+    bool lan_pipeline = true;
     int romfs_copy = 1;  // 1 copy the RomFS into the data root (the default, as Savage Wind does), 0 use it in place
 };
 
@@ -90,6 +92,8 @@ Config load_config() {
         if (k == "exefs") c.exefs = v;
         else if (k == "romfs") c.romfs = v;
         else if (k == "romfs_copy") c.romfs_copy = v != "0";
+        else if (k == "lan_rate") c.lan_rate = v == "30" ? 30 : 60;
+        else if (k == "lan_pipeline") c.lan_pipeline = v != "0";
     }
     return c;
 }
@@ -97,6 +101,7 @@ Config load_config() {
 void save_config(const Config& c) {
     plat::make_dirs(plat::data_root());
     std::ofstream f(config_path(), std::ios::trunc);
+    f << "lan_rate=" << c.lan_rate << "\nlan_pipeline=" << c.lan_pipeline << "\n";
     f << "exefs=" << c.exefs << "\nromfs=" << c.romfs << "\nromfs_copy=" << c.romfs_copy << "\n";
 }
 
@@ -450,9 +455,9 @@ struct State {
     bool config_mode = false;
     bool cache_job = false;
     bool lan_open = false, lan_request_open = false;
-    int lan_mode = 0, lan_port = 27846, lan_players = 2;
+    int lan_mode = 0, lan_port = 27846, lan_players = 2, lan_rate = 60;
     char lan_address[64] = "", lan_code[65] = "";
-    bool lan_pipeline = false;
+    bool lan_pipeline = true;
     std::vector<std::string> lan_addresses;
     std::string lan_error;
     Job job;
@@ -646,8 +651,7 @@ void draw_lan(float w,float h,float k) {
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::theme().accent),"Native co-op  |  Experimental");
     ImGui::TextWrapped("Profile: %s",profiles::active(u8(plat::data_root())).name.c_str());
     ImGui::TextWrapped("1. Choose Host or Join.  2. Enter the shared room details.  3. Choose the same player count in Wonder.");
-    ImGui::TextWrapped("Each PC runs Wonder and controls its own co-op character. Use the same game build and mods on every PC.");
-    ImGui::TextWrapped("Synchronization is still being tested. A detected position mismatch stops the session.");
+    ImGui::TextWrapped("Each PC runs Wonder. Use the same build and mods. Synchronization is still being tested; a detected position mismatch stops the session.");
     ImGui::Separator();
     ImGui::BeginDisabled(waiting || state.phase==lan::LobbyPhase::Ready);
     ImGui::RadioButton("Host a room",&g->lan_mode,0); ImGui::SameLine();
@@ -664,20 +668,30 @@ void draw_lan(float w,float h,float k) {
     ImGui::SetNextItemWidth(270*k); ImGui::InputInt("Port",&g->lan_port);
     g->lan_port=std::clamp(g->lan_port,1,65535);
     ImGui::SetNextItemWidth(std::min(420*k,ImGui::GetContentRegionAvail().x*.62f)); ImGui::InputText("Pairing code",g->lan_code,sizeof g->lan_code);
-    if(g->lan_mode==0 && ImGui::Button("Copy pairing code")) ImGui::SetClipboardText(g->lan_code);
-    ImGui::TextWrapped("Share the address, port and exact pairing code with the other players privately.");
-    ImGui::Checkbox("Overlap LAN networking (experimental)",&g->lan_pipeline);
-    ImGui::TextWrapped("Buffers one extra input frame to overlap networking with gameplay. All PCs must select the same mode. This is not zero-latency input.");
+    if(g->lan_mode==0) {
+        ImGui::SameLine();
+        if(ImGui::Button("Copy code")) ImGui::SetClipboardText(g->lan_code);
+        const char* rates[]={"60 Hz","30 Hz (slower PCs)"};
+        int rate=g->lan_rate==30?1:0;
+        ImGui::SetNextItemWidth(270*k);
+        if(ImGui::Combo("Simulation target",&rate,rates,2)) g->lan_rate=rate?30:60;
+        ImGui::Checkbox("Overlap LAN networking",&g->lan_pipeline);
+        ImGui::TextWrapped("Overlap buffers one extra input frame. 30 Hz reduces the simulation target for slower PCs. Both can change responsiveness; neither guarantees FPS.");
+    } else ImGui::TextWrapped("The host's simulation target and input-buffer mode apply automatically.");
+    ImGui::TextWrapped("Share the address, port and exact pairing code privately.");
     ImGui::Separator();
-    ImGui::TextWrapped("Host progress is saved normally. Joining uses a separate session copy of the host's save and preserves your own save.");
-    ImGui::TextWrapped("The game starts when all players connect. Each PC uses its primary gamepad or keyboard. Choose the matching player count in Wonder.");
+    ImGui::TextWrapped("Joining uses a separate copy of the host's save. Each PC uses its primary controller or keyboard. Choose the matching player count in Wonder.");
     const bool valid=std::strlen(g->lan_code)>=4 && (g->lan_mode==0 || g->lan_address[0]);
     if(!valid) ImGui::BeginDisabled();
     if(ImGui::Button(g->lan_mode==0?"Open room":"Connect",{220*k,0})) {
         g->lan_error.clear();
+        if(g->lan_mode==0) {
+            g->config.lan_rate=g->lan_rate; g->config.lan_pipeline=g->lan_pipeline;
+            save_config(g->config);
+        }
         if(g->lan_mode==0 && !backup_before_play())g->lan_error="Could not back up this profile. Open Profiles & saves to check the save folder before hosting.";
         else lan::start_lobby({g->lan_mode==0,g->lan_mode==0?"0.0.0.0":g->lan_address,g->lan_code,
-            uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
+            uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline,uint8_t(g->lan_rate)});
     }
     if(!valid) ImGui::EndDisabled();
     ImGui::EndDisabled();
@@ -1370,6 +1384,7 @@ void run() {
     g = &state;
     g->kit = find_kit();
     g->config = load_config();
+    g->lan_rate = g->config.lan_rate; g->lan_pipeline = g->config.lan_pipeline;
     // A portable layout can keep its own extracted folders next to the launcher.
     // Only the explicit layout is considered automatically; no background drive scan.
     if (g->config.exefs.empty() && g->config.romfs.empty()) {
@@ -1427,9 +1442,10 @@ void run() {
         if(!address) address=g->lan_mode?"127.0.0.1":"0.0.0.0";
         std::snprintf(g->lan_address,sizeof g->lan_address,"%s",address);
         if(const auto* pipeline=std::getenv("NX_LAN_PIPELINE")) g->lan_pipeline=std::strcmp(pipeline,"1")==0;
+        if(const auto* rate=std::getenv("NX_LAN_RATE")) g->lan_rate=std::strcmp(rate,"30")==0?30:60;
         if(const auto* port=std::getenv("NX_LAN_PORT")) g->lan_port=std::clamp(std::atoi(port),1,65535);
         if(const auto* players=std::getenv("NX_LAN_PLAYERS")) g->lan_players=std::clamp(std::atoi(players),2,4);
-        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline});
+        lan::start_lobby({g->lan_mode==0,g->lan_address,g->lan_code,uint16_t(g->lan_port),uint8_t(g->lan_players),g->lan_pipeline,uint8_t(g->lan_rate)});
     }
     const bool resize_tour=std::getenv("NX_QOL_RESIZE_TOUR")!=nullptr;
     uint64_t frames = 0;

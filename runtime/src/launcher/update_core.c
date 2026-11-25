@@ -184,6 +184,9 @@ static void read_asset(J *j, UcRelease *r, const char *suffix) {
     }
     char sig_suffix[64];
     snprintf(sig_suffix, sizeof sig_suffix, "%s.sig", suffix);
+    // Asset names are remote input and become local download paths before verification.
+    // Releases contain a single basename, never a path or a Windows device/stream.
+    if (!uc_path_safe(name) || strchr(name, '/')) return;
     if (ends_with(name, suffix)) {
         snprintf(r->zip_name, sizeof r->zip_name, "%s", name);
         snprintf(r->zip_url, sizeof r->zip_url, "%s", url);

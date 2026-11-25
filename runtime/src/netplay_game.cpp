@@ -37,6 +37,8 @@ constinit std::atomic<TickSeedFilter> tick_seed_filter{nullptr};
 std::mutex input_lock;
 FrameInputs inputs;
 LockstepTiming lockstep_timing;
+std::array<LockstepTiming,kPlayers> peer_work;
+FrameWorkClock frame_work_clock;
 fs::path& isolated_user = *new fs::path;
 uint64_t current_epoch = 0, current_seed = 0;
 uint32_t role = 0, count = 0;
@@ -47,6 +49,7 @@ using ExchangePipeline=OneAhead<TraceEntry,RecordedExchange>;
 ExchangePipeline* exchange_pipeline=nullptr;
 uint64_t scheduled_tick=1;
 std::atomic<bool> use_pipeline{false};
+std::atomic<uint32_t> current_rate{60};
 bool pipeline_enabled() { return use_pipeline.load(); }
 
 void dump_trace() noexcept {
@@ -54,7 +57,7 @@ void dump_trace() noexcept {
     try {
         const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
         std::ofstream out(data/"lan-input-trace.csv",std::ios::binary|std::ios::trunc);
-        input_trace.write(out,role,current_seed,pipeline_enabled()?1:0);
+        input_trace.write(out,role,current_seed,pipeline_enabled()?1:0,current_rate.load());
         if (!out) log("lan: could not save the diagnostic input trace");
     } catch (...) { log("lan: could not save the diagnostic input trace"); }
 }
@@ -111,10 +114,8 @@ void hash_tree(UcSha256& hash, const fs::path& root, uint64_t limit) {
 Fingerprint fingerprint(const fs::path& data) {
     UcSha256 hash; uc_sha256_init(&hash);
     {
-        constexpr char revision[] = "Wonder lockstep development 1; " NX_VERSION_STRING;
+        constexpr char revision[] = "Wonder lockstep development 2; " NX_VERSION_STRING;
         uc_sha256_update(&hash,revision,sizeof revision);
-        const uint8_t input_lead=pipeline_enabled()?1:0;
-        uc_sha256_update(&hash,&input_lead,sizeof input_lead);
         hash_file(hash,data/"analysis"/"main.bin"); hash_file(hash,data/"analysis"/"sdk.bin");
         hash_file(hash,data/"game"/"build-id.txt");
         hash_tree(hash,data/"mods",1ull<<30);
@@ -173,12 +174,12 @@ void isolate_client_save(const fs::path& data) {
     const auto self=fs::read_symlink("/proc/self/exe").string();
     if(fork()==0) { execl(self.c_str(),self.c_str(),"--config","--lan-ended",nullptr); _exit(127); }
 #endif
-    plat::exit_process(0);
+    plat::exit_process(2);
 }
 RecordedExchange perform_exchange(TraceEntry entry) {
     const auto started=plat::monotonic_ns();
     FrameInputs agreed;
-    try { agreed=session.load()->exchange(entry.local,0,entry.state); }
+    try { agreed=session.load()->exchange(entry.local,0,entry.state,entry.local_work_ns); }
     catch (...) {
         entry.wait_ns=plat::monotonic_ns()-started;
         input_trace.push(entry);
@@ -187,7 +188,7 @@ RecordedExchange perform_exchange(TraceEntry entry) {
     entry.tick=agreed.tick; entry.agreed=agreed; entry.committed=true;
     entry.wait_ns=plat::monotonic_ns()-started;
     input_trace.push(entry);
-    return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid};
+    return {agreed,entry.sampled_ns,entry.partial_hash,entry.state.valid && session.load()->position_probe_ready()};
 }
 void exchange() {
     TraceEntry entry;
@@ -196,6 +197,7 @@ void exchange() {
     entry.tick=scheduled_tick++; entry.frame=g_frame.load();
     entry.state=play::netplay_player_state(); entry.partial_hash=play::netplay_state_hash();
     const auto started=plat::monotonic_ns();
+    entry.local_work_ns=std::min(frame_work_clock.elapsed(started),kMaxFrameWorkNs);
     std::optional<RecordedExchange> completed;
     try {
         if (exchange_pipeline) completed=exchange_pipeline->submit(entry);
@@ -204,9 +206,13 @@ void exchange() {
         running=false;
         end_session(e.what());
     }
-    lockstep_timing.record(plat::monotonic_ns()-started);
-    if (!completed) return;  // explicit additional neutral frame for the one-frame lead
+    const auto finished=plat::monotonic_ns();
+    lockstep_timing.record(finished-started);
+    frame_work_clock.finish(finished);  // subsequent input polling/logging belongs to local work, not the LAN barrier
+    if (!completed) return;  // explicit neutral lead-in
     inputs=completed->inputs;
+    for(size_t player=0;player<count;++player)
+        if(inputs.frame_work_ns[player]) peer_work[player].record(inputs.frame_work_ns[player]);
     ft::input_sample_at(g_frame,completed->sampled_ns);
     if (inputs.tick % 600 == 0) {
         log("lan: synchronized input tick %llu, local player %u of %u, partial player-state hash %llx",
@@ -215,21 +221,43 @@ void exchange() {
         log("lan: input barrier %.2f ms smoothed, %.2f ms peak, %llu waits over 50 ms (not network RTT)",
             stats.smoothed_ms,stats.peak_ms,(unsigned long long)stats.waits_over_50_ms);
         if (!completed->position_valid)
-            log("lan: partial position guard unavailable; character choices and world state are not verified");
+            log("lan: player probe has no agreed baseline; this scene, character choices and world state are not verified");
+        for(uint32_t player=0;player<count;++player) {
+            const auto stats=peer_work[player].snapshot();
+            if(stats.ticks) log("lan: PC %u frame outside LAN wait %.2f ms smoothed, %.2f ms peak (includes pacing/render/scheduling)",
+                player+1,stats.smoothed_ms,stats.peak_ms);
+        }
     }
 }
 }
 namespace {
 void connect_game(const LobbyRequest& request) {
     if (std::string(game::kInfo.id)!="wonder") throw std::runtime_error("Native LAN currently supports Wonder only");
-    use_pipeline=request.pipeline || value("NX_LAN_PIPELINE")=="1";
     const auto data=fs::path(reinterpret_cast<const char8_t*>(plat::data_root().c_str()));
     isolated_user.clear();
     SessionOptions options;
     options.key=pairing_key(request.code);
     options.address=request.address; options.port=request.port; options.players=request.players;
+    options.input_lead=(request.pipeline || value("NX_LAN_PIPELINE")=="1")?1:0;
+    options.frame_rate=request.frame_rate;
+    if (request.host) {
+        const auto rate=value("NX_LAN_RATE");
+        if (!rate.empty()) {
+            if (rate!="30" && rate!="60") throw std::runtime_error("The LAN simulation target must be 30 or 60 Hz");
+            options.frame_rate=rate=="30"?30:60;
+        }
+    }
     if(!options.port && !request.host) throw std::runtime_error("The LAN port must be between 1 and 65535");
+    options.probe_warmup=4;  // The discovery probe has no verified actor identity.
     options.timeout=std::chrono::minutes(3);
+    if(request.host && value("NX_TEST_VIRTUAL_ONLY")=="1") {
+        const auto test_seed=value("NX_LAN_TEST_SEED");
+        if(!test_seed.empty()) {
+            size_t consumed=0;
+            options.seed=std::stoull(test_seed,&consumed);
+            if(consumed!=test_seed.size() || !options.seed) throw std::runtime_error("Invalid LAN test seed");
+        }
+    }
     options.idle=[] { return !lobby().cancel.load(); };
     status(LobbyPhase::Preparing,"Checking the game build and mods...");
     options.build=fingerprint(data);
@@ -259,11 +287,20 @@ void connect_game(const LobbyRequest& request) {
         connection->join(options);
     }
     role=connection->role(); count=connection->players(); current_epoch=connection->epoch(); current_seed=connection->seed();
+    current_rate=connection->frame_rate(); use_pipeline=connection->input_lead()!=0;
+    log("lan: host timing adopted: %u Hz, %u buffered input frames",unsigned(current_rate.load()),unsigned(connection->input_lead()));
+    log("lan: session seed %llu, epoch %llu, protocol %u",(unsigned long long)current_seed,(unsigned long long)current_epoch,unsigned(kProtocol));
     lockstep_timing.reset();
+    for(auto& timing:peer_work) timing.reset();
+    frame_work_clock.reset();
     // Every peer starts with a neutral frame. The UI's confirmation button is not
     // sampled on this background thread and cannot leak into the game's input.
     inputs=connection->exchange({});
     input_trace.reset(); trace_started=true;
+    // Retain room metadata even if startup fails before the first game frame.
+    // This is an agreed neutral input, not a sampled physical controller input.
+    TraceEntry initial; initial.tick=inputs.tick; initial.agreed=inputs; initial.committed=true;
+    input_trace.push(initial);
     scheduled_tick=inputs.tick+1;
     if (pipeline_enabled()) {
         exchange_pipeline=new ExchangePipeline(perform_exchange,[] { if(auto* connection=session.load()) connection->stop(); });
@@ -330,7 +367,17 @@ void next_frame() { if(active()) { std::lock_guard guard(input_lock); exchange()
 uint64_t seed() { return current_seed; }
 uint64_t epoch() { return current_epoch; }
 uint32_t local_player() { return role; }
+uint32_t simulation_rate() { return current_rate.load(); }
+bool player_probe_ready() {
+    const auto* connection=session.load();
+    return active() && connection && connection->position_probe_ready();
+}
 TimingSnapshot timing() { return lockstep_timing.snapshot(); }
+PeerFrameTiming peer_timing(uint32_t player) {
+    if(player>=kPlayers || !active()) return {};
+    const auto value=peer_work[player].snapshot();
+    return {value.ticks,value.last_ms,value.smoothed_ms,value.peak_ms};
+}
 void flush_diagnostics() noexcept {
     stopping=true; running=false;
     std::lock_guard guard(connection_lock);

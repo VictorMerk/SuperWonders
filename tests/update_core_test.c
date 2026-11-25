@@ -76,6 +76,23 @@ static void pick(void) {
     CHECK(unsig == 1);
 
     CHECK(uc_pick_release("[]", "0.5.0-alpha.5", "-windows.zip", true, &r, NULL) == UC_PICK_CURRENT);
+    static const char *const unsafe_assets[] = {
+        "../escape-windows.zip", "/escape-windows.zip", "folder/escape-windows.zip",
+        "C:/escape-windows.zip", "escape:stream-windows.zip", "folder\\escape-windows.zip"
+    };
+    for (size_t i = 0; i < sizeof unsafe_assets / sizeof *unsafe_assets; ++i) {
+        char json[2048];
+        // Escape backslashes for JSON; all other names above need no escaping.
+        char name[512]; size_t n = 0;
+        for (const char *s = unsafe_assets[i]; *s; ++s) {
+            if (*s == '\\') name[n++] = '\\';
+            name[n++] = *s;
+        }
+        name[n] = 0;
+        snprintf(json, sizeof json, "[{\"tag_name\":\"v1.0.0\",\"assets\":[{\"name\":\"%s\","
+            "\"browser_download_url\":\"https://github.com/test/asset\",\"size\":10,\"digest\":\"sha256:" H64 "\"}]}]", name);
+        CHECK(uc_pick_release(json, "0.5.0", "-windows.zip", false, &r, NULL) == UC_PICK_CURRENT);
+    }
     CHECK(uc_pick_release("", "0.5.0-alpha.5", "-windows.zip", true, &r, NULL) == UC_PICK_BAD_JSON);
     CHECK(uc_pick_release("<html>Rate limited</html>", "0.5.0-alpha.5", "-windows.zip", true, &r, NULL) == UC_PICK_BAD_JSON);
     CHECK(uc_pick_release("{\"message\":\"Not Found\"}", "0.5.0-alpha.5", "-windows.zip", true, &r, NULL) == UC_PICK_BAD_JSON);

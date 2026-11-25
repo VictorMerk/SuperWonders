@@ -310,7 +310,7 @@ int frame_cap_setting() {
     return forced ? forced : g_frame_cap.load(std::memory_order_relaxed);
 }
 int frame_cap() {
-    if (lan::active()) return 60;
+    if (lan::active()) return int(lan::simulation_rate());
     int cap = frame_cap_setting();
     for (int hold : {g_cap_hold.load(std::memory_order_relaxed), g_scene_cap_hold.load(std::memory_order_relaxed)})
         if (hold && hold < cap) cap = hold;
@@ -328,7 +328,7 @@ void frame_time_probe(CPU& c) {
     static const char* max_env = std::getenv("NX_MAX_INTERVAL");
     static uint32_t game_max = 0;  // the game's own maximum (fw[0x24c]), restored when the governor lets go
     if (!game_max) game_max = ld<uint32_t>(c.x[19] + 0x24c);
-    uint32_t max = lan::active() ? 1 : max_env && std::atoi(max_env) >= 1 ? uint32_t(std::atoi(max_env)) : governor_max(plat::monotonic_ns());
+    uint32_t max = lan::active() ? 60/lan::simulation_rate() : max_env && std::atoi(max_env) >= 1 ? uint32_t(std::atoi(max_env)) : governor_max(plat::monotonic_ns());
     if (!max && !max_env && game_max) st<uint32_t>(c.x[19] + 0x24c, game_max);
     if (max >= 1) {
         st<uint32_t>(c.x[19] + 0x24c, max);
@@ -391,7 +391,7 @@ void WindowSetPresentInterval(CPU& c) {
         static int logged = 0;
         if (w->interval != int(c.x[1]) && logged++ < 50)
             log("nvn: window present interval %d -> %d (frame %llu)", w->interval, int(c.x[1]), (unsigned long long)g_frame.load());
-        w->interval = int(c.x[1]);
+        w->interval = lan::active() ? int(60/lan::simulation_rate()) : int(c.x[1]);
     }
 }
 
@@ -403,6 +403,16 @@ void WindowSetPresentInterval(CPU& c) {
 // A late frame does not wait for the next vsync. NX_NO_FRAME_LIMIT=1, or fast-forward held: unpaced when the selected
 // cap is 30/60. The explicit 90/120/144 caps use a monotonic host deadline instead of the 60 Hz VI timer.
 void pace_present(int interval) {
+    // Host-negotiated simulation timing takes precedence over local caps,
+    // fast-forward and diagnostic switches. Separate PCs must not quantize
+    // their shared simulation against two independent monitor vsync clocks.
+    static lan::FramePacer lan_pacer;
+    if (lan::active()) {
+        const auto wait=lan_pacer.wait_ns(plat::monotonic_ns(),lan::simulation_rate());
+        if (wait) plat::sleep_ns(int64_t(wait));
+        return;
+    }
+    lan_pacer.reset();
     static const bool off = std::getenv("NX_NO_FRAME_LIMIT") != nullptr;
     static const int env_fps = [] {
         const char* value = std::getenv("NX_FPS_LIMIT");

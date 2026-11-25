@@ -12,7 +12,8 @@
 //   - downloads it and checks it against the SHA-256 GitHub publishes for it (required), and against its .sig when a
 //     release key is set: the repository owner's public key, in update.ini (pubkey=) or built in
 //     (SUPERWONDERS_UPDATE_PUBKEY). ECDSA P-256, X then Y in hex: tools/sign_update.py --public. With a key, a release
-//     without a .sig, or with one that doesn't check out, is never installed; without one, the SHA-256 alone.
+//     without a .sig, or with one that doesn't check out, is never installed. Production updates require a key;
+//     only the explicitly selected loopback test server may use checksum-only fixtures.
 //     docs/RELEASES.md says how an owner makes the key and signs releases.
 //   - unpacks it to update/staging with the system's tar, and checks every file against the release's file list
 //     (superwonders-manifest.txt: size, SHA-256, a safe relative path)
@@ -225,6 +226,7 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
     if (!WinHttpCrackUrl(w.c_str(), 0, 0, &uc)) return why = "bad address " + url, false;
     HINTERNET s = WinHttpOpen(L"SuperWonders-Update", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                               WINHTTP_NO_PROXY_BYPASS, 0);
+    if (s) WinHttpSetTimeouts(s, 10000, 15000, 30000, 30000);
     HINTERNET c = s ? WinHttpConnect(s, host, uc.nPort, 0) : nullptr;
     const bool tls = uc.nScheme == INTERNET_SCHEME_HTTPS;
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -244,7 +246,19 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
         if (!out) ok = false, why = "can't write " + str(*to);
     }
     uint64_t got = 0;
-    for (DWORD n = 0; ok && WinHttpQueryDataAvailable(r, &n) && n;) {
+    const uint64_t limit = to && expect ? expect : 8ull * 1024 * 1024;
+    while (ok) {
+        DWORD n = 0;
+        if (!WinHttpQueryDataAvailable(r, &n)) {
+            ok = false, why = "couldn't read the download";
+            break;
+        }
+        if (!n) break;
+        if (got > limit || n > limit - got) {
+            ok = false, why = "the response exceeds its size limit";
+            break;
+        }
+        n = std::min<DWORD>(n, 64 * 1024);
         std::string chunk(n, '\0');
         DWORD read = 0;
         if (!WinHttpReadData(r, chunk.data(), n, &read)) {
@@ -252,10 +266,20 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
             break;
         }
         chunk.resize(read);
+        if (!read) break;
         got += read;
         if (to) out.write(chunk.data(), std::streamsize(chunk.size()));
         else body->append(chunk);
+        if (to && !out) {
+            ok = false, why = "couldn't write the download";
+            break;
+        }
         if (progress && expect) *progress = float(double(got) / double(expect));
+    }
+    if (ok && to && expect && got != expect) ok = false, why = "the download was incomplete";
+    if (to && out.is_open()) {
+        out.flush();
+        if (ok && !out) ok = false, why = "couldn't save the download";
     }
     for (HINTERNET h : {r, c, s})
         if (h) WinHttpCloseHandle(h);
@@ -333,7 +357,9 @@ bool http_get(const std::string& url, std::string* body, const fs::path* to, std
             usleep(100000);
         }
     });
-    const int code = run_wait({"curl", "-fsSL", "--proto", "=https,http", "--max-time", "1800", "-H",
+    const int code = run_wait({"curl", "-fsSL", "--proto", loopback(api_base()) ? "=https,http" : "=https",
+                               "--proto-redir", "=https", "--max-filesize", std::to_string(to && expect ? expect : 8ull * 1024 * 1024),
+                               "--max-time", "1800", "-H",
                                "Accept: application/vnd.github+json", "-A", "SuperWonders-Update", "-o", str(out), url});
     done = true;
     watch.join();
@@ -416,15 +442,17 @@ void tidy_at_start() {
 void check_now() {
     const std::string r = repo();
     if (r.empty()) return set(St::Off, "no release repository is set for this build (update.ini)");
+    bool bad_key = false;
+    const bool need_sig = !pubkey(&bad_key).empty();
+    if (bad_key) return set(St::Failed, "update.ini's pubkey isn't a release key (128 hex digits): no updates until it's fixed");
+    if (!need_sig && !loopback(api_base()))
+        return set(St::Off, "Automatic updates require a trusted release signing key (pubkey in update.ini). Use a verified manual release until a key is configured.");
     set(St::Checking, "checking " + r);
     std::string json, why;
     const std::string url = api_base() + "/repos/" + r + "/releases?per_page=30";
     if (!http_get(url, &json, nullptr, nullptr, 0, why)) return set(St::Failed, "couldn't check for updates: " + why);
     UcRelease rel{};
     int skipped = 0;
-    bool bad_key = false;
-    const bool need_sig = !pubkey(&bad_key).empty();
-    if (bad_key) return set(St::Failed, "update.ini's pubkey isn't a release key (128 hex digits): no updates until it's fixed");
     switch (uc_pick_release(json.c_str(), current_version().c_str(), suffix(), need_sig, &rel, &skipped)) {
         case UC_PICK_BAD_JSON: return set(St::Failed, "the answer wasn't GitHub's list of releases");
         case UC_PICK_CURRENT:
@@ -456,6 +484,10 @@ bool fail(const std::string& why) {
 }
 
 bool apply_now() {
+    bool bad_key = false;
+    const std::string trusted_key = pubkey(&bad_key);
+    if (bad_key || (trusted_key.empty() && !loopback(api_base())))
+        return fail("A trusted release signing key is required before installing updates.");
     const auto phase=lan::lobby_status().phase;
     if(lan::active() || phase==lan::LobbyPhase::Preparing || phase==lan::LobbyPhase::Waiting || phase==lan::LobbyPhase::Ready)
         return fail("Close your LAN room before installing an update.");
@@ -485,7 +517,7 @@ bool apply_now() {
             while (!done) g.progress = progress, plat::sleep_ns(100'000'000);
         });
         UpdateProblem p{};
-        const std::string key = pubkey();
+        const std::string& key = trusted_key;
         const bool ok = appimage_install(str(work()).c_str(), &rel, key.empty() ? nullptr : key.c_str(), &progress, &p);
         done = true;
         follow.join();
@@ -510,7 +542,7 @@ bool apply_now() {
     char hex[65];
     if (!sha256_hex(archive, hex) || std::strcmp(hex, rel.digest) != 0)
         return fail("the download doesn't match its checksum: nothing was changed");
-    if (const std::string key = pubkey(); !key.empty()) {
+    if (const std::string& key = trusted_key; !key.empty()) {
         std::string sig;
         const fs::path sig_file = work() / "release.sig";
         uint8_t pub[64], s[64], h[32];
@@ -681,8 +713,7 @@ void page_updates(float k) {
     switch (st) {
         case St::Off:
             rows::disable_next();
-            rows::action("Updates", "Not set up", "This build has no release repository set (update.ini next to the "
-                                                  "program), so it doesn't check for updates.",
+            rows::action("Updates", "Not set up", msg.empty() ? "Configure a trusted release signing key and repository to enable updates." : msg.c_str(),
                          true);
             break;
         case St::Managed: {
@@ -703,7 +734,7 @@ void page_updates(float k) {
                                   "over this copy and restarts. Your saves, settings, mods and the game set up from your "
                                   "files stay as they are; the game code is built again only if the new version needs it.";
             if (rows::action("Update now", v.c_str(), d.c_str(), true, true)) start(true);
-            if (rel.page_url[0] && rows::action("What's new", "", "The release's notes, in your browser.", true))
+            if (rel.page_url[0] && allowed_url(rel.page_url) && rows::action("What's new", "", "The release's notes, in your browser.", true))
                 plat::open_folder(rel.page_url);
             break;
         }

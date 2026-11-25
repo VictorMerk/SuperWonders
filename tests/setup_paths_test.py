@@ -18,6 +18,22 @@ from tools.maxwell import extract_romfs_shaders as shaders
 
 
 class SetupPaths(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction API")
+    def test_junction_treats_shell_metacharacters_and_environment_names_literally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source&echo %TEMP% [files]"
+            target = root / "target&echo %TEMP% [files]"
+            source.mkdir()
+            (source / "fixture.txt").write_text("literal", encoding="utf-8")
+            with mock.patch.object(setup_game.subprocess, "run", side_effect=AssertionError("must not invoke a shell")):
+                setup_game.make_link(str(source), str(target))
+            try:
+                self.assertEqual((target / "fixture.txt").read_text(encoding="utf-8"), "literal")
+            finally:
+                setup_game.remove_link(str(target))
+            self.assertTrue((source / "fixture.txt").is_file())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="wonder-path-test-")
         self.addCleanup(self.temp.cleanup)

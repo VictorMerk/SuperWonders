@@ -23,3 +23,5 @@
 | [Ryujinx / Ryubing shader translator](https://github.com/Leuconoe/Ryubing) | Pinned Ryubing commit `a82350bb774f70fcbd41c9987bf67a3775409963` | MIT | Used to build the standalone shader translator. Its source is a maintainer-side packaging input and is not included in the user builder ZIP; license text is under `tools/portable/licenses/Ryujinx-MIT-LICENSE.txt`. |
 
 The portable toolchain archive URLs, pinned versions, and SHA-256 hashes are recorded in the builder's release-preparation script. The builder release contains tools and recompilation source only; `private/` and all extracted game files are excluded.
+
+The NUP reader follows the documented layout in [mkw-recomp](https://github.com/adriadam10/mkw-recomp/tree/dd9297545beb9d2c90170eea93a01030961bf7cf). MIT attribution is included under third_party.

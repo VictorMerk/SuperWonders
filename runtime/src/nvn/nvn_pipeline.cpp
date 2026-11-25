@@ -1117,7 +1117,7 @@ VkPipeline graphics_pipeline(const PipelineKey& draw_key, const ProgramLayout& l
     std::memcpy(&state_key, &key, sizeof key);
     state_key.vs = state_key.fs = nullptr;
     std::memcpy(k.b + 32, &state_key, sizeof state_key);
-    // A stage that gained an integer texture record has another module (nvn_spirv_int_textures.cpp).
+    // Distinct integer binding maps need distinct pipelines, even at the same observation count.
     const uint64_t variants[2] = {int_texture_variant_id(key.vs), int_texture_variant_id(key.fs)};
     std::memcpy(k.b + 32 + sizeof state_key, variants, sizeof variants);
     if (last && std::memcmp(k.b, last->first.b, sizeof k.b) == 0) return current(last->second);

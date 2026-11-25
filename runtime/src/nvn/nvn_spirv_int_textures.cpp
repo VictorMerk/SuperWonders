@@ -38,6 +38,8 @@ struct Records {
     std::mutex lock;
     std::map<const ShaderInfo*, std::map<uint32_t, uint32_t>> kinds;  // shader -> binding -> kind
     std::map<const ShaderInfo*, uint32_t> generation;
+    std::map<const ShaderInfo*, std::pair<uint32_t, uint64_t>> unique_variant;
+    uint64_t next_unique = uint64_t{1} << 63;
 };
 Records& records() {
     static Records r;
@@ -106,7 +108,18 @@ uint64_t int_texture_variant_id(const ShaderInfo* s) {
     const auto it = r.kinds.find(s);
     if (it == r.kinds.end() || it->second.empty()) return 0;
     static typed_pipeline::SemanticTokens tokens;
-    return tokens.intern(it->second);
+    try {
+        return tokens.intern(it->second);
+    } catch (const std::length_error&) {
+        // A full semantic table can still render; use a unique observation ID.
+        auto& [generation, identity] = r.unique_variant[s];
+        const auto current = int_texture_generation(s);
+        if (!identity || generation != current) {
+            generation = current;
+            identity = r.next_unique++;
+        }
+        return identity;
+    }
 }
 
 std::string int_texture_key(const ShaderInfo* s) {

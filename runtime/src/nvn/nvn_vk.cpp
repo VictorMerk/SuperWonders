@@ -719,8 +719,9 @@ std::shared_ptr<const DeferredValues> g_deferred;  // the submit being replayed 
 const DeferredValues* current_deferred() { return g_deferred.get(); }
 
 void gpu_submit(const std::vector<std::shared_ptr<CmdList>>& lists, std::shared_ptr<const DeferredValues> deferred) {
-    g_deferred = std::move(deferred);
     std::lock_guard lk(g_gpu);
+    // Publish replay inputs only while the GPU replay lock is held.
+    g_deferred = std::move(deferred);
     uint64_t t_in = plat::monotonic_ns();
     const FrameTimes f_in = frame_times();
     uint64_t lists_epoch = 0;

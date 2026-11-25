@@ -401,6 +401,7 @@ void worker_wait(uint64_t serial);
 uint64_t worker_last();
 void worker_finish();
 // guest NVNtexture* of a window texture; crop: the part shown (x, y, w, h; w 0: all), scaled to the window.
+bool run_framegen_probe();
 void gpu_present(uint64_t texture, const int32_t* crop = nullptr);
 uint64_t pace_present_now();
 int frame_cap();

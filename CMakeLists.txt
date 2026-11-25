@@ -297,6 +297,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_pipeline.cpp
     runtime/src/nvn/nvn_dummy.cpp
     runtime/src/nvn/nvn_fsr.cpp
+    runtime/src/nvn/nvn_framegen.cpp
     runtime/src/nvn/nvn_fxaa.cpp
     runtime/src/nvn/nvn_compare_twin.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp

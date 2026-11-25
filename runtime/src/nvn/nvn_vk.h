@@ -359,4 +359,15 @@ uint64_t written_bind_count();   // nvn_written.cpp: written_bind calls so far (
 void trace_nan_write_back(const uint8_t* from, const uint8_t* to, uint64_t size);  // nvn_draw_trace.cpp
 }
 
+struct FramegenFrames {
+    GpuImage* images[8]{};
+    uint32_t count = 0;
+};
+void set_framegen(bool enabled, int multiplier = 2);
+bool framegen_enabled();
+bool framegen_record(VkCommandBuffer cb, GpuImage& source, const int32_t* crop, FramegenFrames& result);
+void framegen_release(bool destroy_pipelines = false);
+bool framegen_probe_record(VkCommandBuffer cb, uint32_t variant);
+bool framegen_probe_check();
+
 }  // namespace nx::nvn

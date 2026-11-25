@@ -6,6 +6,7 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <random>
 #include <string>
 
@@ -57,6 +58,17 @@ int main() {
     auto first_backup = backup;
     assert(p::copy_save(root, loaded.users[0], loaded.users[1], backup, error));
     assert(backup != first_backup && fs::exists(first_backup / "old.sav"));
+    fs::path snapshot, previous;
+    assert(p::snapshot_save(root, loaded.users[1], snapshot, error));
+    assert(fs::exists(snapshot / "game_data.sav"));
+    assert(!p::restore_save(root, loaded.users[0], snapshot, previous, error));
+    { std::ofstream f(dst / "post-backup.sav"); f << "new"; }
+    assert(p::restore_save(root, loaded.users[1], snapshot, previous, error));
+    assert(fs::exists(previous / "post-backup.sav"));
+    assert(!fs::exists(dst / "post-backup.sav"));
+    const auto backups = p::save_backups(root, loaded.users[1]);
+    assert(std::find(backups.begin(), backups.end(), snapshot) != backups.end());
+    assert(std::find(backups.begin(), backups.end(), first_backup) != backups.end());
 #ifndef _WIN32
     fs::create_symlink("/tmp", src / "link");
     assert(!p::copy_save(root, loaded.users[0], loaded.users[1], backup, error));

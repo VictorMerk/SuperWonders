@@ -304,6 +304,7 @@ set(NX_RUNTIME_SOURCES
     runtime/src/nvn/nvn_compare_twin.cpp
     runtime/src/nvn/nvn_pipeline_cache.cpp
     runtime/src/nvn/nvn_upload.cpp
+    runtime/src/nvn/texture_cache.cpp
     runtime/src/nvn/nvn_astc.cpp
     runtime/src/nvn/nvn_spirv_patch.cpp
     runtime/src/nvn/nvn_spirv_int_textures.cpp

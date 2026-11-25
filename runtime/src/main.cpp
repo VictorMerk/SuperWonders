@@ -150,6 +150,7 @@ void boot() {
     discord::init("1573462667874537472");  // override via NX_DISCORD_APP_ID
     nextendo::init(plat::data_root());
     memory_init();
+    if (std::getenv("NX_FRAMEGEN_PROBE")) plat::exit_process(nvn::run_framegen_probe() ? 0 : 1);
 #if NX_GAME_LIBRARY
     // The start screen, when the game isn't set up or with --config: after the guest memory is reserved (so nothing it
     // allocates lands there), before the kernel and its watchdog start (the game hasn't, and isn't hung).

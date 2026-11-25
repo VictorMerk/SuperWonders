@@ -926,6 +926,25 @@ uint64_t gpu_vram_bytes() {
     return total;
 }
 
+bool run_framegen_probe() {
+    std::lock_guard lock(g_gpu);
+    if (!init()) return false;
+    bool ok = true;
+    for (uint32_t variant = 0; variant < 24 && ok; ++variant) {
+        if (!async_gpu()) g_upload_used = 0;
+        if (!begin()) {
+            ok = false;
+            break;
+        }
+        const bool recorded = framegen_probe_record(g_cb, variant);
+        if (async_gpu()) frame_submit(VK_NULL_HANDLE, VK_NULL_HANDLE, {}, true);
+        else end_and_wait(VK_NULL_HANDLE, VK_NULL_HANDLE);
+        ok = recorded && framegen_probe_check();
+    }
+    framegen_release(true);
+    return ok;
+}
+
 void gpu_present(uint64_t texture, const int32_t* crop) {
     thread_local bool prio_set = false;
     if (!prio_set) plat::set_thread_high_priority(), prio_set = true;
